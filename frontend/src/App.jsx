@@ -1,0 +1,516 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import useStream from './hooks/useStream'
+import InputPanel from './components/InputPanel'
+import ControlPanel from './components/ControlPanel'
+import AgentStatus from './components/AgentStatus'
+import PipelineInsights from './components/PipelineInsights'
+import NotesOutput from './components/NotesOutput'
+import QuizPanel from './components/QuizPanel'
+import FlashcardPanel from './components/FlashcardPanel'
+import HistoryPanel from './components/HistoryPanel'
+import ChatPanel from './components/ChatPanel'
+import Icon from './components/Icons'
+
+const HISTORY_KEY = 'agentic-notes-history'
+const SETTINGS_KEY = 'agentic-notes-settings'
+const INPUT_KEY = 'agentic-notes-input'
+const THEME_KEY = 'theme'
+
+const INITIAL_STEPS = [
+  { step: 'plan', message: '', status: 'pending' },
+  { step: 'write', message: '', status: 'pending' },
+  { step: 'critique', message: '', status: 'pending' },
+  { step: 'revise', message: '', status: 'pending' },
+  { step: 'quiz', message: '', status: 'pending' },
+  { step: 'flashcards', message: '', status: 'pending' },
+]
+
+const TABS = [
+  { id: 'notes', label: 'Notes' },
+  { id: 'quiz', label: 'Quiz' },
+  { id: 'flashcards', label: 'Flashcards' },
+  { id: 'chat', label: 'Chat' },
+  { id: 'history', label: 'History' },
+]
+
+const DEFAULT_SETTINGS = {
+  mode: 'exam',
+  tone: 'academic',
+  length: 'medium',
+  format: 'bullet',
+  model: '',
+  instructions: '',
+}
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? JSON.parse(raw) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+export default function App() {
+  const { stream, isStreaming, cancel } = useStream()
+
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
+
+  // Persisted settings + input
+  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) }))
+  const { mode, tone, length, format, model, instructions } = settings
+  const setSetting = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }))
+
+  const [inputText, setInputText] = useState(() => localStorage.getItem(INPUT_KEY) || '')
+
+  const [models, setModels] = useState([])
+
+  const [agentSteps, setAgentSteps] = useState(INITIAL_STEPS)
+  const [plan, setPlan] = useState(null)
+  const [notes, setNotes] = useState('')
+  const [notesBefore, setNotesBefore] = useState(null)
+  const [critique, setCritique] = useState(null)
+  const [quiz, setQuiz] = useState('')
+  const [flashcards, setFlashcards] = useState('')
+
+  const [history, setHistory] = useState(() => loadJSON(HISTORY_KEY, []))
+  const [activeTab, setActiveTab] = useState('notes')
+  const [provider, setProvider] = useState(null)
+  const [toast, setToast] = useState(null)
+  const [error, setError] = useState(null)
+
+  const [rewriting, setRewriting] = useState(null)
+  const [quizRegen, setQuizRegen] = useState(false)
+  const [cardsRegen, setCardsRegen] = useState(false)
+
+  const bufferRef = useRef('') // accumulates streamed note deltas
+  const titleRef = useRef('') // AI-generated session title
+
+  // ----- Persist settings + input -----------------------------------------
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+  }, [settings])
+
+  useEffect(() => {
+    localStorage.setItem(INPUT_KEY, inputText)
+  }, [inputText])
+
+  // ----- Dark mode ---------------------------------------------------------
+  useEffect(() => {
+    const root = document.documentElement
+    if (darkMode) {
+      root.classList.add('dark')
+      localStorage.setItem(THEME_KEY, 'dark')
+    } else {
+      root.classList.remove('dark')
+      localStorage.setItem(THEME_KEY, 'light')
+    }
+  }, [darkMode])
+
+  // ----- Health + models ---------------------------------------------------
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((d) => setProvider(d.provider))
+      .catch(() => setProvider(null))
+
+    fetch('/api/models')
+      .then((r) => r.json())
+      .then((d) => {
+        setModels(d.models || [])
+        setSettings((s) => (s.model ? s : { ...s, model: d.default || '' }))
+      })
+      .catch(() => setModels([]))
+  }, [])
+
+  const showToast = (msg) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 2000)
+  }
+
+  // ----- Step helpers ------------------------------------------------------
+  const setStep = useCallback((stepName, status, message) => {
+    setAgentSteps((prev) =>
+      prev.map((s) => (s.step === stepName ? { ...s, status, message: message ?? s.message } : s))
+    )
+  }, [])
+
+  const markActive = useCallback((stepName, message) => {
+    setAgentSteps((prev) => {
+      const idx = prev.findIndex((s) => s.step === stepName)
+      return prev.map((s, i) => {
+        if (i < idx && s.status !== 'done') return { ...s, status: 'done' }
+        if (s.step === stepName) return { ...s, status: 'active', message: message ?? s.message }
+        return s
+      })
+    })
+  }, [])
+
+  // ----- History -----------------------------------------------------------
+  const saveToHistory = useCallback(
+    (finalNotes, finalQuiz, finalCards) => {
+      if (!finalNotes) return
+      const session = {
+        id: Date.now().toString(),
+        date: new Date().toISOString(),
+        mode,
+        title: titleRef.current || '',
+        tags: [],
+        notes_preview: finalNotes.slice(0, 100),
+        notes: finalNotes,
+        quiz: finalQuiz,
+        flashcards: finalCards,
+      }
+      setHistory((prev) => {
+        const next = [session, ...prev].slice(0, 20)
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
+      showToast('Saved to history ✓')
+    },
+    [mode]
+  )
+
+  const updateSession = (id, fields) => {
+    setHistory((prev) => {
+      const next = prev.map((s) => (s.id === id ? { ...s, ...fields } : s))
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const loadSession = (s) => {
+    setNotes(s.notes || '')
+    setQuiz(s.quiz || '')
+    setFlashcards(s.flashcards || '')
+    setNotesBefore(null)
+    setCritique(null)
+    setPlan(null)
+    setActiveTab('notes')
+  }
+
+  const deleteSession = (id) => {
+    setHistory((prev) => {
+      const next = prev.filter((s) => s.id !== id)
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  // ----- Generate ----------------------------------------------------------
+  const handleGenerate = useCallback(() => {
+    if (!inputText.trim() || isStreaming) return
+
+    setNotes('')
+    setNotesBefore(null)
+    setQuiz('')
+    setFlashcards('')
+    setCritique(null)
+    setPlan(null)
+    setError(null)
+    setActiveTab('notes')
+    bufferRef.current = ''
+    titleRef.current = ''
+
+    setAgentSteps(INITIAL_STEPS.map((s) => ({ ...s })))
+
+    let latestQuiz = ''
+    let latestCards = ''
+
+    stream(
+      { text: inputText, mode, tone, length, format, model, instructions },
+      {
+        onStatus: (step, message) => {
+          if (step === 'revise' && /no revision/i.test(message)) {
+            setStep('revise', 'done', message)
+          } else {
+            markActive(step, message)
+          }
+        },
+        onPlanDone: (data) => {
+          setPlan(data)
+          setStep('plan', 'done')
+        },
+        onNotesDelta: (step, delta) => {
+          bufferRef.current += delta
+          setNotes(bufferRef.current)
+          if (step === 'write') setStep('write', 'active')
+          if (step === 'revise') setStep('revise', 'active')
+        },
+        onNotesDone: () => {
+          setNotes(bufferRef.current)
+          setStep('write', 'done')
+        },
+        onReviseStart: () => {
+          setNotesBefore(bufferRef.current) // snapshot pre-revision notes
+          bufferRef.current = ''
+          setNotes('')
+        },
+        onNotesRevised: (text) => {
+          bufferRef.current = text
+          setNotes(text)
+          setStep('revise', 'done')
+        },
+        onCritiqueDone: (data, message) => {
+          setCritique(data)
+          setStep('critique', 'done', message)
+        },
+        onTitleDone: (t) => {
+          titleRef.current = t
+        },
+        onQuizDone: (text) => {
+          latestQuiz = text
+          setQuiz(text)
+          setStep('quiz', 'done')
+        },
+        onFlashcardsDone: (text) => {
+          latestCards = text
+          setFlashcards(text)
+          setStep('flashcards', 'done')
+        },
+        onDone: () => {
+          setAgentSteps((prev) =>
+            prev.map((s) => (s.status === 'pending' || s.status === 'active' ? { ...s, status: 'done' } : s))
+          )
+          saveToHistory(bufferRef.current, latestQuiz, latestCards)
+        },
+        onError: (message) => {
+          setError(message)
+          setAgentSteps((prev) => prev.map((s) => (s.status === 'active' ? { ...s, status: 'error' } : s)))
+        },
+      }
+    )
+  }, [inputText, isStreaming, mode, tone, length, format, model, instructions, stream, setStep, markActive, saveToHistory])
+
+  // ----- Ctrl/Cmd+Enter to generate ---------------------------------------
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        handleGenerate()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleGenerate])
+
+  // ----- Section regeneration ----------------------------------------------
+  const regenQuiz = async () => {
+    if (!notes) return
+    setQuizRegen(true)
+    try {
+      const res = await fetch('/api/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes, model }),
+      })
+      const data = await res.json()
+      if (data.quiz) setQuiz(data.quiz)
+    } catch {
+      /* ignore */
+    } finally {
+      setQuizRegen(false)
+    }
+  }
+
+  const regenFlashcards = async () => {
+    if (!notes) return
+    setCardsRegen(true)
+    try {
+      const res = await fetch('/api/flashcards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes, model }),
+      })
+      const data = await res.json()
+      if (data.flashcards) setFlashcards(data.flashcards)
+    } catch {
+      /* ignore */
+    } finally {
+      setCardsRegen(false)
+    }
+  }
+
+  const rewriteNotes = async (direction) => {
+    if (!notes) return
+    setRewriting(direction)
+    try {
+      const res = await fetch('/api/rewrite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes, direction, mode, tone, format, model }),
+      })
+      const data = await res.json()
+      if (data.notes) {
+        setNotesBefore(notes) // enable diff vs the previous version
+        setNotes(data.notes)
+        showToast(`Notes made ${direction} ✓`)
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setRewriting(null)
+    }
+  }
+
+  const providerBadge =
+    provider === 'groq'
+      ? { label: 'Groq', cls: 'bg-orange-50 text-orange-600 ring-1 ring-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:ring-orange-800/50' }
+      : provider === 'ollama'
+        ? { label: 'Ollama', cls: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:ring-violet-800/50' }
+        : { label: '…', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300' }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
+      {/* Header */}
+      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+              <Icon.Book className="h-5 w-5" />
+            </span>
+            <div className="leading-tight">
+              <h1 className="text-base font-extrabold tracking-tight sm:text-lg">Agentic Notes</h1>
+              <p className="hidden text-xs text-slate-400 sm:block">Multi-agent study generator</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${providerBadge.cls}`}>
+              <Icon.Zap className="h-3 w-3" />
+              {providerBadge.label}
+            </span>
+            <button
+              onClick={() => setDarkMode((d) => !d)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+              title="Toggle dark mode"
+              aria-label="Toggle dark mode"
+            >
+              {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main */}
+      <main className="mx-auto max-w-7xl px-4 py-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+          {/* Left column */}
+          <div className="space-y-6 lg:col-span-2">
+            <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} />
+            <ControlPanel
+              mode={mode}
+              setMode={setSetting('mode')}
+              tone={tone}
+              setTone={setSetting('tone')}
+              length={length}
+              setLength={setSetting('length')}
+              format={format}
+              setFormat={setSetting('format')}
+              model={model}
+              setModel={setSetting('model')}
+              models={models}
+              instructions={instructions}
+              setInstructions={setSetting('instructions')}
+              onGenerate={handleGenerate}
+              isStreaming={isStreaming}
+              canGenerate={!!inputText.trim()}
+            />
+            <p className="text-center text-xs text-slate-400">
+              Tip: press{' '}
+              <kbd className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">
+                Ctrl
+              </kbd>{' '}
+              +{' '}
+              <kbd className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">
+                Enter
+              </kbd>{' '}
+              to generate
+            </p>
+            {isStreaming && (
+              <button
+                onClick={cancel}
+                className="w-full rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/60 dark:hover:bg-red-900/20"
+              >
+                Cancel generation
+              </button>
+            )}
+          </div>
+
+          {/* Right column */}
+          <div className="space-y-6 lg:col-span-3">
+            <AgentStatus steps={agentSteps} critique={critique} />
+            <PipelineInsights plan={plan} critique={critique} />
+
+            {error && (
+              <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-300">
+                {error}
+              </div>
+            )}
+
+            {/* Tab bar */}
+            <div className="scroll-area flex w-full gap-1 overflow-x-auto rounded-xl border border-slate-200/70 bg-white p-1 dark:border-slate-800 dark:bg-slate-900/50">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  className={`flex-1 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-200 ${
+                    activeTab === t.id
+                      ? 'bg-brand-600 text-white shadow-soft'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                  }`}
+                >
+                  {t.label}
+                  {t.id === 'history' && history.length > 0 && (
+                    <span className="ml-1 text-xs opacity-70">({history.length})</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab content */}
+            <div className="animate-fade-in" key={activeTab}>
+              {activeTab === 'notes' && (
+                <NotesOutput
+                  notes={notes}
+                  setNotes={setNotes}
+                  quiz={quiz}
+                  flashcards={flashcards}
+                  notesBefore={notesBefore}
+                  onRewrite={rewriteNotes}
+                  rewriting={rewriting}
+                />
+              )}
+              {activeTab === 'quiz' && (
+                <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
+              )}
+              {activeTab === 'flashcards' && (
+                <FlashcardPanel
+                  flashcards={flashcards}
+                  onRegenerate={notes ? regenFlashcards : null}
+                  regenerating={cardsRegen}
+                />
+              )}
+              {activeTab === 'chat' && <ChatPanel notes={notes} model={model} />}
+              {activeTab === 'history' && (
+                <HistoryPanel
+                  history={history}
+                  onLoad={loadSession}
+                  onDelete={deleteSession}
+                  onUpdate={updateSession}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-slide-up items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lift dark:bg-white dark:text-slate-900">
+          <Icon.Check className="h-4 w-4 text-green-400 dark:text-green-600" />
+          {toast.replace(' ✓', '')}
+        </div>
+      )}
+    </div>
+  )
+}

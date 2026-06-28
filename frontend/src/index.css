@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  /* Consistent, accessible focus ring */
+  :focus-visible {
+    outline: 2px solid theme('colors.brand.500');
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* Surface card */
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card
+      dark:border-slate-700/60 dark:bg-slate-800/80;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
+      text-sm font-semibold transition-all duration-200 cursor-pointer
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white shadow-soft hover:bg-brand-700
+      hover:shadow-lift active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn border border-slate-200 text-slate-600 hover:bg-slate-100
+      hover:text-slate-900 dark:border-slate-700 dark:text-slate-300
+      dark:hover:bg-slate-700/70 dark:hover:text-white;
+  }
+
+  /* Small pill chip */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  /* Form field */
+  .field {
+    @apply w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm
+      text-slate-800 outline-none transition-colors placeholder:text-slate-400
+      focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10
+      disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900/60
+      dark:text-slate-100;
+  }
+}
+
+/* Flashcard flip */
+.flip-card {
+  perspective: 1200px;
+}
+.flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+.flip-card-inner.flipped {
+  transform: rotateY(180deg);
+}
+.flip-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.flip-face-back {
+  transform: rotateY(180deg);
+}
+
+/* Scrollbar polish */
+.scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 999px;
+}
+.scroll-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
