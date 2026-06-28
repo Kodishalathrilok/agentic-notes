@@ -22,7 +22,8 @@ COPY backend/ ./
 # Drop the built SPA where FastAPI serves it (backend/static -> /app/static)
 COPY --from=frontend /app/frontend/dist ./static
 
-ENV PORT=8000 DEV=0
+# PORT is provided by the host (Render/Railway/Fly); don't hardcode it.
+ENV DEV=0
 EXPOSE 8000
 
 # Single uvicorn worker keeps SSE/streaming connections simple and reliable.
