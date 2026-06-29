@@ -50,8 +50,12 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
       const s = window.getSelection()
       const text = s && s.toString().trim()
       if (text && text.length > 1 && s.anchorNode && el.contains(s.anchorNode)) {
-        const r = s.getRangeAt(0).getBoundingClientRect()
-        setSel({ text, rect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right } })
+        // Use the LAST line fragment so the anchor is at the end of the
+        // selection (getBoundingClientRect spans the full width on multi-line).
+        const range = s.getRangeAt(0)
+        const rects = range.getClientRects()
+        const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect()
+        setSel({ text, end: { top: last.top, bottom: last.bottom, right: last.right } })
       } else if (!open) {
         setSel(null)
       }
@@ -140,14 +144,13 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
 
   if (!sel) return null
 
-  const r = sel.rect
-  const midY = (r.top + r.bottom) / 2
+  const e = sel.end
 
-  // Prefer opening to the RIGHT of the selection; fall back to the left; clamp.
-  const fitsRight = r.right + 8 + POP_W <= window.innerWidth - 8
-  let left = fitsRight ? r.right + 8 : r.left - POP_W - 8
+  // Open to the RIGHT of where the selection ends; fall back to the left; clamp.
+  const fitsRight = e.right + 8 + POP_W <= window.innerWidth - 8
+  let left = fitsRight ? e.right + 8 : e.right - POP_W - 8
   left = Math.min(Math.max(8, left), window.innerWidth - POP_W - 8)
-  const top = Math.max(8, Math.min(r.top, window.innerHeight - 80))
+  const top = Math.max(8, Math.min(e.bottom + 6, window.innerHeight - 80))
   const maxHeight = window.innerHeight - top - 16
 
   return (
@@ -156,12 +159,13 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
         <button
           style={{
             position: 'fixed',
-            top: midY,
-            left: Math.min(r.right + 8, window.innerWidth - 92),
-            transform: 'translateY(-50%)',
+            // sit just ABOVE the end of the selection, at its right edge
+            top: Math.max(28, e.top - 4),
+            left: Math.min(e.right + 4, window.innerWidth - 92),
+            transform: 'translateY(-100%)',
             zIndex: 50,
           }}
-          onMouseDown={(e) => e.preventDefault()} // keep selection
+          onMouseDown={(ev) => ev.preventDefault()} // keep selection
           onClick={() => setOpen(true)}
           className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white shadow-lift dark:bg-white dark:text-slate-900"
         >
