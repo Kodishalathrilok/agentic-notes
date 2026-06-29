@@ -27,8 +27,8 @@ _WORD = re.compile(r"[a-z0-9]+")
 
 
 def _safe_err(exc) -> str:
-    """Strip the API key out of error messages before logging."""
-    return str(exc).split("?key=")[0]
+    """Strip the API key out of error messages before logging (handles ?key= and &key=)."""
+    return re.split(r"[?&]key=", str(exc))[0]
 
 
 def active_embedding_backend() -> str:

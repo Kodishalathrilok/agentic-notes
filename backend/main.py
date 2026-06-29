@@ -38,8 +38,8 @@ from models import (
     OLLAMA_URL,
     GROQ_API_KEY,
     GROQ_PLACEHOLDER,
-    AVAILABLE_GROQ_MODELS,
-    DEFAULT_GROQ_MODEL,
+    available_models,
+    default_model,
 )
 
 load_dotenv()
@@ -148,11 +148,11 @@ async def eval_report():
 
 @app.get("/api/models")
 async def list_models():
-    """Available models for the UI picker (Groq only; Ollama uses its env model)."""
+    """Available models for the UI picker, across configured providers."""
     return {
         "provider": get_active_provider(),
-        "models": AVAILABLE_GROQ_MODELS,
-        "default": DEFAULT_GROQ_MODEL,
+        "models": available_models(),
+        "default": default_model(),
     }
 
 

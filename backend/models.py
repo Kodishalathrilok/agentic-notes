@@ -1,19 +1,27 @@
 """
-Model router: Groq (primary, cloud) with Ollama (local) fallback.
+Model router: a provider-agnostic LLM layer with automatic failover.
+
+Providers (failover order starts from the chosen model's provider):
+  - groq   : fast Llama/Gemma inference (best streaming speed)
+  - gemini : Google Gemini (large context, generous free tier, multimodal)
+  - ollama : local fallback (offline)
+
+If the chosen provider is rate-limited or down, the next available provider is
+used automatically — so a Groq rate limit no longer dead-ends a request.
 
 Public API:
-    call_model(prompt, max_tokens, model)        -> str
-    call_model_stream(prompt, max_tokens, model) -> generator[str]  (text deltas)
-    safe_json(text)                              -> dict
-    get_active_provider()                        -> "groq" | "ollama"
-    resolve_model(model)                         -> str
-    AVAILABLE_GROQ_MODELS                         -> list[dict]
+    call_model(prompt, max_tokens, model, temperature, json_mode) -> str
+    call_model_stream(prompt, max_tokens, model, temperature)     -> generator[str]
+    safe_json(text)        -> dict
+    get_active_provider()  -> "groq" | "gemini" | "ollama"
+    available_models()     -> list[dict]
+    default_model()        -> str
+    resolve_model(model)   -> str
 """
 
 import os
 import re
 import json
-import time
 
 import requests
 from dotenv import load_dotenv
@@ -21,40 +29,103 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Provider configuration
 # ---------------------------------------------------------------------------
 
+# Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_PLACEHOLDER = "your_groq_api_key_here"
-
-# Default Groq model (override with GROQ_MODEL in .env). The older
-# llama-3.1-70b-versatile was decommissioned on Groq.
 DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-
-# Curated list surfaced to the UI model picker.
 AVAILABLE_GROQ_MODELS = [
-    {"id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B — best quality"},
-    {"id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B — fastest"},
-    {"id": "gemma2-9b-it", "label": "Gemma2 9B — balanced"},
+    {"id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B · Groq (fast & strong)", "provider": "groq"},
+    {"id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B · Groq (fastest)", "provider": "groq"},
+    {"id": "gemma2-9b-it", "label": "Gemma2 9B · Groq", "provider": "groq"},
 ]
 
+# Gemini
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+AVAILABLE_GEMINI_MODELS = [
+    {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash · Google (1M context)", "provider": "gemini"},
+    {"id": "gemini-2.0-flash-lite", "label": "Gemini 2.0 Flash-Lite · Google (cheapest)", "provider": "gemini"},
+]
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+# Ollama
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip()
-
-# Rate-limit retry policy
-_MAX_RETRIES = 3
-_BACKOFF_BASE = 2  # seconds: 2, 4, 8
 
 _groq_client = None
 
 
 class RateLimitError(RuntimeError):
-    """Raised when Groq is rate-limited and no fallback succeeded."""
+    """Kept for compatibility; failover now handles rate limits transparently."""
 
+
+def _safe(exc) -> str:
+    """Strip API keys out of error text before logging (handles ?key= and &key=)."""
+    return re.split(r"[?&]key=", str(exc))[0]
+
+
+# ---------------------------------------------------------------------------
+# Availability / routing
+# ---------------------------------------------------------------------------
 
 def _groq_available() -> bool:
     return bool(GROQ_API_KEY) and GROQ_API_KEY != GROQ_PLACEHOLDER
 
+
+def _gemini_available() -> bool:
+    return bool(GEMINI_API_KEY)
+
+
+def _provider_ready(prov: str) -> bool:
+    return {
+        "groq": _groq_available(),
+        "gemini": _gemini_available(),
+        "ollama": True,
+    }.get(prov, False)
+
+
+def _provider_for(model_id: str) -> str:
+    return "gemini" if (model_id or "").startswith("gemini") else "groq"
+
+
+def _failover_chain(primary: str):
+    return [primary] + [p for p in ("groq", "gemini", "ollama") if p != primary]
+
+
+def available_models():
+    models = []
+    if _groq_available():
+        models += AVAILABLE_GROQ_MODELS
+    if _gemini_available():
+        models += AVAILABLE_GEMINI_MODELS
+    return models or AVAILABLE_GROQ_MODELS
+
+
+def default_model() -> str:
+    av = available_models()
+    return av[0]["id"] if av else DEFAULT_GROQ_MODEL
+
+
+def resolve_model(model):
+    if model and model.strip():
+        return model.strip()
+    return default_model()
+
+
+def get_active_provider() -> str:
+    if _groq_available():
+        return "groq"
+    if _gemini_available():
+        return "gemini"
+    return "ollama"
+
+
+# ---------------------------------------------------------------------------
+# Groq
+# ---------------------------------------------------------------------------
 
 def _get_groq_client():
     global _groq_client
@@ -65,27 +136,11 @@ def _get_groq_client():
     return _groq_client
 
 
-def resolve_model(model: str | None) -> str:
-    """Pick a valid Groq model id, falling back to the default."""
-    if model and model.strip():
-        return model.strip()
-    return DEFAULT_GROQ_MODEL
+def _groq_model(model):
+    return model if (model and not model.startswith("gemini")) else DEFAULT_GROQ_MODEL
 
 
-def get_active_provider() -> str:
-    return "groq" if _groq_available() else "ollama"
-
-
-def _is_rate_limit(exc: Exception) -> bool:
-    name = exc.__class__.__name__
-    return "RateLimit" in name or "429" in str(exc)
-
-
-# ---------------------------------------------------------------------------
-# Non-streaming calls
-# ---------------------------------------------------------------------------
-
-def _groq_messages(prompt: str):
+def _groq_messages(prompt):
     return [
         {
             "role": "system",
@@ -96,10 +151,10 @@ def _groq_messages(prompt: str):
     ]
 
 
-def _call_groq(prompt: str, max_tokens: int, model: str, temperature: float = 0.4, json_mode: bool = False) -> str:
+def _call_groq(prompt, max_tokens, model, temperature, json_mode):
     client = _get_groq_client()
     kwargs = dict(
-        model=model,
+        model=_groq_model(model),
         messages=_groq_messages(prompt),
         max_tokens=max_tokens,
         temperature=temperature,
@@ -110,63 +165,10 @@ def _call_groq(prompt: str, max_tokens: int, model: str, temperature: float = 0.
     return (completion.choices[0].message.content or "").strip()
 
 
-def _call_ollama(prompt: str, max_tokens: int, temperature: float = 0.4, json_mode: bool = False) -> str:
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-    }
-    if json_mode:
-        payload["format"] = "json"
-    resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=300)
-    resp.raise_for_status()
-    return (resp.json().get("response") or "").strip()
-
-
-def call_model(
-    prompt: str,
-    max_tokens: int = 1024,
-    model: str | None = None,
-    temperature: float = 0.4,
-    json_mode: bool = False,
-) -> str:
-    """Try Groq (with rate-limit retries) then fall back to Ollama."""
-    target = resolve_model(model)
-
-    if _groq_available():
-        for attempt in range(_MAX_RETRIES):
-            try:
-                return _call_groq(prompt, max_tokens, target, temperature, json_mode)
-            except Exception as exc:  # noqa: BLE001
-                if _is_rate_limit(exc) and attempt < _MAX_RETRIES - 1:
-                    time.sleep(_BACKOFF_BASE * (2 ** attempt))
-                    continue
-                print(f"[models] Groq call failed ({exc}); trying Ollama.")
-                break
-
-    try:
-        return _call_ollama(prompt, max_tokens, temperature, json_mode)
-    except Exception as exc:  # noqa: BLE001
-        if _groq_available():
-            raise RateLimitError(
-                "Groq is rate-limited or unavailable and no local Ollama "
-                "fallback responded. Please wait a moment and try again."
-            ) from exc
-        raise RuntimeError(
-            "No model backend available. Set a valid GROQ_API_KEY in .env or "
-            f"start Ollama (pull `{OLLAMA_MODEL}`). Last error: {exc}"
-        ) from exc
-
-
-# ---------------------------------------------------------------------------
-# Streaming calls
-# ---------------------------------------------------------------------------
-
-def _stream_groq(prompt: str, max_tokens: int, model: str, temperature: float = 0.4):
+def _stream_groq(prompt, max_tokens, model, temperature):
     client = _get_groq_client()
     stream = client.chat.completions.create(
-        model=model,
+        model=_groq_model(model),
         messages=_groq_messages(prompt),
         max_tokens=max_tokens,
         temperature=temperature,
@@ -181,7 +183,79 @@ def _stream_groq(prompt: str, max_tokens: int, model: str, temperature: float = 
             yield delta
 
 
-def _stream_ollama(prompt: str, max_tokens: int, temperature: float = 0.4):
+# ---------------------------------------------------------------------------
+# Gemini (REST)
+# ---------------------------------------------------------------------------
+
+def _gemini_model(model):
+    return model if (model and model.startswith("gemini")) else DEFAULT_GEMINI_MODEL
+
+
+def _gemini_body(prompt, max_tokens, temperature, json_mode):
+    gen = {"temperature": temperature, "maxOutputTokens": max_tokens}
+    if json_mode:
+        gen["responseMimeType"] = "application/json"
+    return {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": gen}
+
+
+def _gemini_text(data) -> str:
+    cand = (data.get("candidates") or [{}])[0]
+    parts = (cand.get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts)
+
+
+def _call_gemini(prompt, max_tokens, model, temperature, json_mode):
+    gm = _gemini_model(model)
+    url = f"{_GEMINI_BASE}/models/{gm}:generateContent?key={GEMINI_API_KEY}"
+    resp = requests.post(url, json=_gemini_body(prompt, max_tokens, temperature, json_mode), timeout=120)
+    resp.raise_for_status()
+    return _gemini_text(resp.json()).strip()
+
+
+def _stream_gemini(prompt, max_tokens, model, temperature):
+    gm = _gemini_model(model)
+    url = f"{_GEMINI_BASE}/models/{gm}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
+    with requests.post(
+        url, json=_gemini_body(prompt, max_tokens, temperature, False), stream=True, timeout=300
+    ) as resp:
+        resp.raise_for_status()
+        for raw in resp.iter_lines():
+            if not raw:
+                continue
+            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except Exception:  # noqa: BLE001
+                continue
+            text = _gemini_text(data)
+            if text:
+                yield text
+
+
+# ---------------------------------------------------------------------------
+# Ollama
+# ---------------------------------------------------------------------------
+
+def _call_ollama(prompt, max_tokens, temperature, json_mode):
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+    }
+    if json_mode:
+        payload["format"] = "json"
+    resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=300)
+    resp.raise_for_status()
+    return (resp.json().get("response") or "").strip()
+
+
+def _stream_ollama(prompt, max_tokens, temperature):
     with requests.post(
         f"{OLLAMA_URL}/api/generate",
         json={
@@ -206,38 +280,66 @@ def _stream_ollama(prompt: str, max_tokens: int, temperature: float = 0.4):
                 yield piece
 
 
-def call_model_stream(prompt: str, max_tokens: int = 1400, model: str | None = None, temperature: float = 0.4):
-    """
-    Yield text deltas. Tries Groq first; if Groq fails *before* producing any
-    output, falls back to Ollama. (A mid-stream failure simply stops.)
-    """
-    target = resolve_model(model)
+# ---------------------------------------------------------------------------
+# Dispatch + public API
+# ---------------------------------------------------------------------------
 
-    if _groq_available():
+def _dispatch(prov, prompt, max_tokens, model, temperature, json_mode):
+    if prov == "groq":
+        return _call_groq(prompt, max_tokens, model, temperature, json_mode)
+    if prov == "gemini":
+        return _call_gemini(prompt, max_tokens, model, temperature, json_mode)
+    return _call_ollama(prompt, max_tokens, temperature, json_mode)
+
+
+def _dispatch_stream(prov, prompt, max_tokens, model, temperature):
+    if prov == "groq":
+        yield from _stream_groq(prompt, max_tokens, model, temperature)
+    elif prov == "gemini":
+        yield from _stream_gemini(prompt, max_tokens, model, temperature)
+    else:
+        yield from _stream_ollama(prompt, max_tokens, temperature)
+
+
+def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+    """Call the chosen provider, failing over to the next available one on error."""
+    target = resolve_model(model)
+    last = None
+    for prov in _failover_chain(_provider_for(target)):
+        if not _provider_ready(prov):
+            continue
+        try:
+            return _dispatch(prov, prompt, max_tokens, target, temperature, json_mode)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            print(f"[models] {prov} call failed ({_safe(exc)}); trying next provider.")
+    raise RuntimeError(
+        f"All model providers failed. Last error: {_safe(last) if last else 'none available'}"
+    )
+
+
+def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+    """Stream from the chosen provider; fail over if it errors before any output."""
+    target = resolve_model(model)
+    last = None
+    for prov in _failover_chain(_provider_for(target)):
+        if not _provider_ready(prov):
+            continue
         yielded = False
         try:
-            for delta in _stream_groq(prompt, max_tokens, target, temperature):
+            for delta in _dispatch_stream(prov, prompt, max_tokens, target, temperature):
                 yielded = True
                 yield delta
             return
         except Exception as exc:  # noqa: BLE001
+            last = exc
             if yielded:
-                print(f"[models] Groq stream interrupted ({exc}).")
+                print(f"[models] {prov} stream interrupted ({_safe(exc)}).")
                 return
-            print(f"[models] Groq stream failed ({exc}); trying Ollama.")
-
-    try:
-        for delta in _stream_ollama(prompt, max_tokens, temperature):
-            yield delta
-    except Exception as exc:  # noqa: BLE001
-        if _groq_available():
-            raise RateLimitError(
-                "Groq is rate-limited or unavailable and Ollama did not respond."
-            ) from exc
-        raise RuntimeError(
-            "No model backend available for streaming. "
-            f"Last error: {exc}"
-        ) from exc
+            print(f"[models] {prov} stream failed ({_safe(exc)}); trying next provider.")
+    raise RuntimeError(
+        f"All streaming providers failed. Last error: {_safe(last) if last else 'none available'}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +350,6 @@ def safe_json(text: str) -> dict:
     """Best-effort extraction of a JSON object from messy model output."""
     if not text:
         return {}
-
     text = text.strip()
 
     try:
@@ -274,5 +375,4 @@ def safe_json(text: str) -> dict:
                 return json.loads(cleaned)
             except Exception:
                 pass
-
     return {}
