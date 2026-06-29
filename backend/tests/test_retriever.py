@@ -16,7 +16,7 @@ def test_chunking_produces_multiple_chunks():
 
 
 def test_retrieve_returns_relevant_chunk():
-    r = Retriever(SOURCE)
+    r = Retriever(SOURCE, backend="tfidf")
     results = r.retrieve("binary search time complexity", k=3)
     assert len(results) >= 1
     joined = " ".join(c["text"].lower() for c in results)
@@ -25,18 +25,18 @@ def test_retrieve_returns_relevant_chunk():
 
 
 def test_retrieve_ids_are_in_document_order():
-    r = Retriever(SOURCE)
+    r = Retriever(SOURCE, backend="tfidf")
     results = r.retrieve("photosynthesis", k=4)
     ids = [c["id"] for c in results]
     assert ids == sorted(ids)
 
 
 def test_empty_source_is_safe():
-    r = Retriever("")
+    r = Retriever("", backend="tfidf")
     assert r.retrieve("anything") == []
     assert r.sample() == ""
 
 
 def test_sample_returns_text():
-    r = Retriever(SOURCE)
+    r = Retriever(SOURCE, backend="tfidf")
     assert len(r.sample(200)) > 0

@@ -31,6 +31,7 @@ from agent import (
     chat_about_notes_stream,
 )
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
+from retriever import active_embedding_backend
 from models import (
     get_active_provider,
     OLLAMA_URL,
@@ -120,6 +121,7 @@ async def health():
         "provider": get_active_provider(),
         "groq_configured": _groq_configured(),
         "ollama_url": OLLAMA_URL,
+        "embeddings": active_embedding_backend(),
     }
 
 
