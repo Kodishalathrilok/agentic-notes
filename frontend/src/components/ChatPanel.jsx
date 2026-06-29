@@ -1,6 +1,41 @@
 import { useState, useRef, useEffect } from 'react'
 import Icon from './Icons'
 
+// Inline **bold** rendering.
+function renderInline(text, key) {
+  return text.split(/(\*\*.+?\*\*)/g).map((part, i) => {
+    const m = part.match(/^\*\*(.+?)\*\*$/)
+    return m ? (
+      <strong key={`${key}-${i}`} className="font-semibold">
+        {m[1]}
+      </strong>
+    ) : (
+      <span key={`${key}-${i}`}>{part}</span>
+    )
+  })
+}
+
+// Lightweight markdown for chat replies: bold, bullets, numbered, paragraphs.
+function renderMarkdown(text) {
+  return text.split('\n').map((line, idx) => {
+    const t = line.trim()
+    if (!t) return <div key={idx} className="h-1.5" />
+    const bullet = t.match(/^[*\-+]\s+(.*)$/)
+    if (bullet) {
+      return (
+        <div key={idx} className="flex gap-2">
+          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-current opacity-50" />
+          <span>{renderInline(bullet[1], idx)}</span>
+        </div>
+      )
+    }
+    if (/^\d+[.)]\s+/.test(t)) {
+      return <div key={idx}>{renderInline(t, idx)}</div>
+    }
+    return <p key={idx}>{renderInline(t, idx)}</p>
+  })
+}
+
 export default function ChatPanel({ notes, model }) {
   const [messages, setMessages] = useState([]) // { role: 'user'|'assistant', content }
   const [input, setInput] = useState('')
@@ -88,13 +123,21 @@ export default function ChatPanel({ notes, model }) {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm ${
+              className={`max-w-[85%] space-y-0.5 rounded-2xl px-4 py-2 text-sm leading-relaxed ${
                 m.role === 'user'
                   ? 'bg-brand-600 text-white'
                   : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-100'
               }`}
             >
-              {m.content || (busy ? '…' : '')}
+              {m.role === 'assistant' ? (
+                m.content ? (
+                  renderMarkdown(m.content)
+                ) : (
+                  <span>{busy ? '…' : ''}</span>
+                )
+              ) : (
+                <span className="whitespace-pre-wrap">{m.content}</span>
+              )}
             </div>
           </div>
         ))}
