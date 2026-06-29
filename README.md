@@ -20,6 +20,9 @@ harness scores faithfulness, coverage, and quiz accuracy).
 ## Features
 
 - Multi-agent pipeline with a self-critique → revise loop
+- **Retrieval-augmented (RAG):** the source is chunked and indexed (TF-IDF), and
+  each agent works from the most relevant passages instead of a truncated dump
+- **Citations:** every note point links to the source passage it came from
 - Real-time streaming agent status (Plan / Write / Critique / Revise / Quiz / Flashcards)
 - Three input modes: paste text, upload a PDF, or record audio
 - Interactive quiz (click to answer, scoring) and flip-card flashcards

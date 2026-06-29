@@ -1,23 +1,37 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from './Icons'
 
-// Render inline **bold** spans within a line.
-function renderInline(text, keyPrefix) {
-  const parts = text.split(/(\*\*.+?\*\*)/g)
+// Render inline **bold** spans and [n] citation pills within a line.
+function renderInline(text, keyPrefix, onCite) {
+  const parts = text.split(/(\*\*.+?\*\*|\[\d+\])/g)
   return parts.map((part, i) => {
-    const m = part.match(/^\*\*(.+?)\*\*$/)
-    if (m) {
+    const bold = part.match(/^\*\*(.+?)\*\*$/)
+    if (bold) {
       return (
         <strong key={`${keyPrefix}-${i}`} className="font-semibold text-slate-900 dark:text-white">
-          {m[1]}
+          {bold[1]}
         </strong>
+      )
+    }
+    const cite = part.match(/^\[(\d+)\]$/)
+    if (cite && onCite) {
+      const n = Number(cite[1])
+      return (
+        <button
+          key={`${keyPrefix}-${i}`}
+          onClick={() => onCite(n)}
+          className="mx-0.5 inline-flex translate-y-[-1px] items-center rounded-md bg-brand-100 px-1.5 text-[10px] font-bold text-brand-700 align-super hover:bg-brand-200 dark:bg-brand-900/40 dark:text-brand-300"
+          title={`Jump to source ${n}`}
+        >
+          {n}
+        </button>
       )
     }
     return <span key={`${keyPrefix}-${i}`}>{part}</span>
   })
 }
 
-function renderNotes(notes) {
+function renderNotes(notes, onCite) {
   const lines = notes.split('\n')
   const out = []
 
@@ -70,7 +84,7 @@ function renderNotes(notes) {
       out.push(
         <div key={idx} className="flex gap-2 py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
           <span className="mt-1.5 h-1.5 w-1.5 rotate-45 shrink-0 bg-brand-500" />
-          <span>{renderInline(trimmed.slice(1).trim(), idx)}</span>
+          <span>{renderInline(trimmed.slice(1).trim(), idx, onCite)}</span>
         </div>
       )
       return
@@ -80,7 +94,7 @@ function renderNotes(notes) {
       out.push(
         <div key={idx} className="ml-6 flex gap-2 py-0.5 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
           <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />
-          <span>{renderInline(trimmed.slice(1).trim(), idx)}</span>
+          <span>{renderInline(trimmed.slice(1).trim(), idx, onCite)}</span>
         </div>
       )
       return
@@ -89,7 +103,7 @@ function renderNotes(notes) {
     if (/^\d+[.)]/.test(trimmed)) {
       out.push(
         <div key={idx} className="py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-          {renderInline(trimmed, idx)}
+          {renderInline(trimmed, idx, onCite)}
         </div>
       )
       return
@@ -97,7 +111,7 @@ function renderNotes(notes) {
 
     out.push(
       <p key={idx} className="py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-        {renderInline(trimmed, idx)}
+        {renderInline(trimmed, idx, onCite)}
       </p>
     )
   })
@@ -169,13 +183,26 @@ export default function NotesOutput({
   notesBefore,
   onRewrite,
   rewriting,
+  sources = [],
 }) {
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(null)
   const [editing, setEditing] = useState(false)
   const [showDiff, setShowDiff] = useState(false)
   const [speaking, setSpeaking] = useState(false)
+  const [showSources, setShowSources] = useState(false)
+  const [highlight, setHighlight] = useState(null)
   const containerRef = useRef(null)
+
+  // Citation [n] clicked -> open the Sources panel and scroll to passage n.
+  const handleCite = (n) => {
+    setShowSources(true)
+    setHighlight(n)
+    setTimeout(() => {
+      document.getElementById(`src-${n}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+    setTimeout(() => setHighlight(null), 2500)
+  }
 
   // Render LaTeX math with KaTeX whenever the notes view updates.
   useEffect(() => {
@@ -334,7 +361,34 @@ export default function NotesOutput({
           ref={containerRef}
           className="scroll-area max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"
         >
-          {renderNotes(notes)}
+          {renderNotes(notes, sources.length ? handleCite : null)}
+        </div>
+      )}
+
+      {/* Citations / sources */}
+      {sources.length > 0 && !editing && !diff && (
+        <div className="mt-3">
+          <button onClick={() => setShowSources((s) => !s)} className={btn}>
+            {showSources ? 'Hide sources' : `Sources (${sources.length})`}
+          </button>
+          {showSources && (
+            <div className="scroll-area mt-2 max-h-[40vh] space-y-2 overflow-y-auto">
+              {sources.map((s) => (
+                <div
+                  id={`src-${s.id}`}
+                  key={s.id}
+                  className={`rounded-lg border p-3 text-xs leading-relaxed transition-colors ${
+                    highlight === s.id
+                      ? 'border-brand-400 bg-brand-50 dark:border-brand-600 dark:bg-brand-900/20'
+                      : 'border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  <span className="mr-2 font-bold text-brand-600 dark:text-brand-400">[{s.id}]</span>
+                  <span className="text-slate-600 dark:text-slate-300">{s.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

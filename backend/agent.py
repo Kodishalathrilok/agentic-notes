@@ -10,10 +10,23 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
 """
 
 from models import call_model, call_model_stream, safe_json
+from retriever import Retriever
 
 # Quality thresholds for the self-improvement loop
 REVISE_THRESHOLD = 8  # revise until score reaches this (1-10)
 MAX_REVISION_ROUNDS = 2  # cap revision passes to bound latency
+
+
+def _format_context(chunks) -> str:
+    """Render retrieved chunks as numbered passages the agent can cite."""
+    return "\n\n".join(f"[{c['id']}] {c['text']}" for c in chunks)
+
+
+_CITE_RULE = (
+    "Support each point with a citation to the passage number(s) it came from, "
+    "in square brackets right after the point, e.g. [1] or [2][5]. Only cite "
+    "numbers that appear in the CONTEXT. Do not invent citations."
+)
 
 # ---------------------------------------------------------------------------
 # Tuning tables
@@ -130,7 +143,7 @@ SOURCE:
 # Agent: Write (prompt builder + streaming)
 # ---------------------------------------------------------------------------
 
-def _write_prompt(text, mode, tone, length, fmt, plan, instructions="") -> str:
+def _write_prompt(context, mode, tone, length, fmt, plan, instructions="") -> str:
     outline = plan.get("outline", [])
     checklist = plan.get("checklist", [])
     outline_str = "\n".join(f"- {o}" for o in outline) if outline else "- (derive a sensible outline)"
@@ -138,7 +151,7 @@ def _write_prompt(text, mode, tone, length, fmt, plan, instructions="") -> str:
 
     return f"""You are the WRITING agent in a notes-generation pipeline.
 
-Write high-quality study notes from the SOURCE material.
+Write high-quality study notes grounded in the CONTEXT passages below.
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
@@ -151,24 +164,25 @@ Make sure you cover these points:
 {checklist_str}
 
 {_format_instructions(fmt)}
+{_CITE_RULE}
 {_instr_block(instructions)}
 Write ONLY the notes themselves — no preamble, no closing remarks.
 
-SOURCE:
-\"\"\"{text[:40000]}\"\"\""""
+CONTEXT (numbered passages — cite these):
+{context[:40000]}"""
 
 
-def write_notes(text, mode, tone, length, fmt, plan, model=None, instructions="") -> str:
+def write_notes(context, mode, tone, length, fmt, plan, model=None, instructions="") -> str:
     return call_model(
-        _write_prompt(text, mode, tone, length, fmt, plan, instructions),
+        _write_prompt(context, mode, tone, length, fmt, plan, instructions),
         max_tokens=_max_tokens(length),
         model=model,
     )
 
 
-def write_notes_stream(text, mode, tone, length, fmt, plan, model=None, instructions=""):
+def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instructions=""):
     yield from call_model_stream(
-        _write_prompt(text, mode, tone, length, fmt, plan, instructions),
+        _write_prompt(context, mode, tone, length, fmt, plan, instructions),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.5,
@@ -265,7 +279,7 @@ NOTES:
 # Agent: Revise (prompt builder + streaming)
 # ---------------------------------------------------------------------------
 
-def _revise_prompt(notes, critique, mode, plan, fmt, source="", instructions="") -> str:
+def _revise_prompt(notes, critique, mode, plan, fmt, context="", instructions="") -> str:
     issues = critique.get("issues", [])
     missing = critique.get("missing_topics", [])
     unsupported = critique.get("unsupported_claims", [])
@@ -273,45 +287,49 @@ def _revise_prompt(notes, critique, mode, plan, fmt, source="", instructions="")
     missing_str = "\n".join(f"- {m}" for m in missing) if missing else "- (none)"
     unsupported_str = "\n".join(f"- {u}" for u in unsupported) if unsupported else "- (none)"
 
-    source_block = f'\n\nSOURCE (the ONLY source of truth — do not add anything not grounded here):\n"""{source[:12000]}"""' if source else ""
+    context_block = (
+        f"\n\nCONTEXT (numbered passages — the ONLY source of truth; cite by number):\n{context[:40000]}"
+        if context
+        else ""
+    )
 
     return f"""You are the REVISION agent in a notes-generation pipeline.
 
 Improve the NOTES below. Keep the same study mode ("{mode}") and formatting.
 
-REMOVE or CORRECT these unsupported/fabricated claims (they are NOT in the source):
+REMOVE or CORRECT these unsupported/fabricated claims (NOT in the context):
 {unsupported_str}
 
-ADD these missing topics (they ARE in the source):
+ADD these missing topics (they ARE in the context):
 {missing_str}
 
 Also fix these quality issues:
 {issues_str}
 
-Rules: every claim in your output must be grounded in the SOURCE. Do not invent
-facts. Preserve everything that was already correct.
+Rules: every claim must be grounded in the CONTEXT. Do not invent facts. Keep
+existing correct content. {_CITE_RULE}
 
 {_format_instructions(fmt)}
 {_instr_block(instructions)}
 Return ONLY the full, revised notes — no commentary.
-{source_block}
+{context_block}
 
 CURRENT NOTES:
 \"\"\"{notes[:7000]}\"\"\""""
 
 
-def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", source="", length="medium") -> str:
+def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium") -> str:
     return call_model(
-        _revise_prompt(notes, critique, mode, plan, fmt, source, instructions),
+        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.4,
     )
 
 
-def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", source="", length="medium"):
+def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium"):
     yield from call_model_stream(
-        _revise_prompt(notes, critique, mode, plan, fmt, source, instructions),
+        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.4,
@@ -489,18 +507,30 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
       done, error
     """
     try:
-        # 1-2. Plan
+        # 0. Build the retrieval index over the source (RAG)
+        retriever = Retriever(text)
+
+        # 1-2. Plan (sees a breadth sample across the whole document)
         yield _emit("status", "plan", "Planning outline...")
-        plan = plan_outline(text, mode, tone, length, model=model, instructions=instructions)
+        plan = plan_outline(
+            retriever.sample(16000), mode, tone, length, model=model, instructions=instructions
+        )
         yield _emit("plan_done", "plan", "", plan)
 
         active_fmt = fmt or plan.get("suggested_format", "bullet")
 
-        # 3-4. Write (streamed)
+        # Retrieve the most relevant passages for writing, and expose them as
+        # citable sources to the UI.
+        query = " ".join(plan.get("outline", []) + plan.get("checklist", []) + [mode])
+        chunks = retriever.retrieve(query, k=8)
+        context = _format_context(chunks)
+        yield _emit("sources", "write", "", chunks)
+
+        # 3-4. Write (streamed, grounded in retrieved context with citations)
         yield _emit("status", "write", "Writing notes...")
         parts = []
         for delta in write_notes_stream(
-            text, mode, tone, length, active_fmt, plan, model=model, instructions=instructions
+            context, mode, tone, length, active_fmt, plan, model=model, instructions=instructions
         ):
             parts.append(delta)
             yield _emit("notes_delta", "write", delta)
@@ -532,7 +562,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             parts = []
             for delta in revise_notes_stream(
                 notes, critique, mode, plan, active_fmt, model=model,
-                instructions=instructions, source=text, length=length,
+                instructions=instructions, context=context, length=length,
             ):
                 parts.append(delta)
                 yield _emit("notes_delta", "revise", delta)

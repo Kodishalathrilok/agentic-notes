@@ -71,6 +71,7 @@ export default function App() {
   const [plan, setPlan] = useState(null)
   const [notes, setNotes] = useState('')
   const [notesBefore, setNotesBefore] = useState(null)
+  const [sources, setSources] = useState([])
   const [critique, setCritique] = useState(null)
   const [quiz, setQuiz] = useState('')
   const [flashcards, setFlashcards] = useState('')
@@ -150,7 +151,7 @@ export default function App() {
 
   // ----- History -----------------------------------------------------------
   const saveToHistory = useCallback(
-    (finalNotes, finalQuiz, finalCards) => {
+    (finalNotes, finalQuiz, finalCards, finalSources) => {
       if (!finalNotes) return
       const session = {
         id: Date.now().toString(),
@@ -162,6 +163,7 @@ export default function App() {
         notes: finalNotes,
         quiz: finalQuiz,
         flashcards: finalCards,
+        sources: finalSources || [],
       }
       setHistory((prev) => {
         const next = [session, ...prev].slice(0, 20)
@@ -185,6 +187,7 @@ export default function App() {
     setNotes(s.notes || '')
     setQuiz(s.quiz || '')
     setFlashcards(s.flashcards || '')
+    setSources(s.sources || [])
     setNotesBefore(null)
     setCritique(null)
     setPlan(null)
@@ -205,6 +208,7 @@ export default function App() {
 
     setNotes('')
     setNotesBefore(null)
+    setSources([])
     setQuiz('')
     setFlashcards('')
     setCritique(null)
@@ -218,6 +222,7 @@ export default function App() {
 
     let latestQuiz = ''
     let latestCards = ''
+    let latestSources = []
 
     stream(
       { text: inputText, mode, tone, length, format, model, instructions },
@@ -232,6 +237,10 @@ export default function App() {
         onPlanDone: (data) => {
           setPlan(data)
           setStep('plan', 'done')
+        },
+        onSources: (data) => {
+          latestSources = data || []
+          setSources(latestSources)
         },
         onNotesDelta: (step, delta) => {
           bufferRef.current += delta
@@ -274,7 +283,7 @@ export default function App() {
           setAgentSteps((prev) =>
             prev.map((s) => (s.status === 'pending' || s.status === 'active' ? { ...s, status: 'done' } : s))
           )
-          saveToHistory(bufferRef.current, latestQuiz, latestCards)
+          saveToHistory(bufferRef.current, latestQuiz, latestCards, latestSources)
         },
         onError: (message) => {
           setError(message)
@@ -488,6 +497,7 @@ export default function App() {
                   notesBefore={notesBefore}
                   onRewrite={rewriteNotes}
                   rewriting={rewriting}
+                  sources={sources}
                 />
               )}
               {activeTab === 'quiz' && (

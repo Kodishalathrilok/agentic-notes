@@ -27,6 +27,7 @@ export default function useStream() {
     const {
       onStatus,
       onPlanDone,
+      onSources,
       onNotesDelta,
       onNotesDone,
       onReviseStart,
@@ -52,6 +53,9 @@ export default function useStream() {
           break
         case 'plan_done':
           onPlanDone && onPlanDone(event.data)
+          break
+        case 'sources':
+          onSources && onSources(event.data)
           break
         case 'notes_delta':
           onNotesDelta && onNotesDelta(event.step, event.content)
