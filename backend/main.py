@@ -123,6 +123,19 @@ async def health():
     }
 
 
+@app.get("/api/eval-report")
+async def eval_report():
+    """Serve the latest eval report (eval/report.json) for the dashboard."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "report.json")
+    if not os.path.isfile(path):
+        return {"available": False}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return {"available": True, "report": json.load(f)}
+    except Exception:  # noqa: BLE001
+        return {"available": False}
+
+
 @app.get("/api/models")
 async def list_models():
     """Available models for the UI picker (Groq only; Ollama uses its env model)."""

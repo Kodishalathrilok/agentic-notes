@@ -65,7 +65,7 @@ const STACK = [
   'Docker',
 ]
 
-function Nav({ onLaunch, darkMode, setDarkMode }) {
+function Nav({ onLaunch, onEval, darkMode, setDarkMode }) {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -76,6 +76,12 @@ function Nav({ onLaunch, darkMode, setDarkMode }) {
           <span className="text-base font-extrabold tracking-tight">Agentic Notes</span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={onEval}
+            className="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 sm:inline-flex dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+          >
+            Eval
+          </button>
           <a
             href={GITHUB_URL}
             target="_blank"
@@ -101,10 +107,10 @@ function Nav({ onLaunch, darkMode, setDarkMode }) {
   )
 }
 
-export default function Landing({ onLaunch, darkMode, setDarkMode }) {
+export default function Landing({ onLaunch, onEval, darkMode, setDarkMode }) {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <Nav onLaunch={onLaunch} darkMode={darkMode} setDarkMode={setDarkMode} />
+      <Nav onLaunch={onLaunch} onEval={onEval} darkMode={darkMode} setDarkMode={setDarkMode} />
 
       {/* Hero */}
       <section className="relative overflow-hidden">

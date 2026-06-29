@@ -11,6 +11,7 @@ import HistoryPanel from './components/HistoryPanel'
 import ChatPanel from './components/ChatPanel'
 import Icon from './components/Icons'
 import Landing from './components/Landing'
+import EvalDashboard from './components/EvalDashboard'
 
 const HISTORY_KEY = 'agentic-notes-history'
 const SETTINGS_KEY = 'agentic-notes-settings'
@@ -57,6 +58,7 @@ export default function App() {
 
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
   const [showLanding, setShowLanding] = useState(true)
+  const [showEval, setShowEval] = useState(false)
 
   // Persisted settings + input
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) }))
@@ -371,8 +373,22 @@ export default function App() {
         ? { label: 'Ollama', cls: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:ring-violet-800/50' }
         : { label: '…', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300' }
 
+  if (showEval) {
+    return <EvalDashboard onBack={() => setShowEval(false)} darkMode={darkMode} setDarkMode={setDarkMode} />
+  }
+
   if (showLanding) {
-    return <Landing onLaunch={() => setShowLanding(false)} darkMode={darkMode} setDarkMode={setDarkMode} />
+    return (
+      <Landing
+        onLaunch={() => setShowLanding(false)}
+        onEval={() => {
+          setShowLanding(false)
+          setShowEval(true)
+        }}
+        darkMode={darkMode}
+        setDarkMode={setDarkMode}
+      />
+    )
   }
 
   return (
@@ -394,6 +410,12 @@ export default function App() {
             </div>
           </button>
           <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setShowEval(true)}
+              className="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 sm:inline-flex dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+            >
+              Eval
+            </button>
             <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${providerBadge.cls}`}>
               <Icon.Zap className="h-3 w-3" />
               {providerBadge.label}

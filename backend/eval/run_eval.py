@@ -112,6 +112,12 @@ def main():
     ap.add_argument("--model", default="", help="Groq model id override")
     ap.add_argument("--judge-model", default="", help="model for the judge (defaults to --model)")
     ap.add_argument("--delay", type=float, default=0.0, help="seconds to pause between runs (avoids rate limits)")
+    ap.add_argument(
+        "--check-faithfulness",
+        type=float,
+        default=0.0,
+        help="exit non-zero if the full pipeline's mean faithfulness is below this (CI gate)",
+    )
     args = ap.parse_args()
 
     model = args.model or None
@@ -226,6 +232,17 @@ def main():
         json.dump(report, f, indent=2)
     _write_markdown(os.path.join(HERE, "report.md"), report, variants)
     print(f"Wrote {os.path.join('eval', 'report.json')} and eval/report.md")
+
+    # CI gate: fail the build if faithfulness regressed below the threshold.
+    if args.check_faithfulness:
+        if "full" not in summary or not any_data:
+            print(f"\nFAIL: no eval data to check against threshold {args.check_faithfulness}.")
+            sys.exit(1)
+        score = summary["full"]["faithfulness"]["mean"]
+        if score < args.check_faithfulness:
+            print(f"\nFAIL: full faithfulness {score:.2f} < threshold {args.check_faithfulness}")
+            sys.exit(1)
+        print(f"\nPASS: full faithfulness {score:.2f} >= threshold {args.check_faithfulness}")
 
 
 def _write_markdown(path, report, variants):

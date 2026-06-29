@@ -128,6 +128,21 @@ fixtures in `eval/fixtures.py`, prints a comparison table, and writes
 `eval/report.md` + `eval/report.json`. Add your own test inputs by appending to
 `FIXTURES`. Note: this makes real model calls and uses API quota.
 
+**Dashboard:** the in-app **Eval** page (top-right link) reads `eval/report.json`
+and visualizes baseline-vs-full scores, the faithfulness lift, and per-variant
+stats.
+
+**CI gate:** the `Eval (faithfulness gate)` GitHub Actions workflow re-runs the
+eval (manually or weekly) and **fails the build if faithfulness drops below a
+threshold**:
+
+```bash
+python -m eval.run_eval --variant full --check-faithfulness 7.0
+```
+
+It needs a `GROQ_API_KEY` repository **secret** (Settings → Secrets and variables
+→ Actions). It's scheduled/manual — not on every push — to control API cost.
+
 ## Deployment
 
 The app deploys as a **single service** (FastAPI serves both the API and the
