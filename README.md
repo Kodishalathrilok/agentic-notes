@@ -1,8 +1,14 @@
 # 📚 Agentic AI Notes Generator
 
+[![CI](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml)
+
 A full-stack multi-agent AI notes generator. Feed it text, a PDF, or audio and
 it runs a pipeline of AI agents — **Plan → Write → Critique → Revise → Quiz →
 Flashcards** — streaming each step to the UI in real time over SSE.
+
+The pipeline is **self-correcting** (a grounded critique re-checks every claim
+against the source and triggers revision) and **measured** (an LLM-judge eval
+harness scores faithfulness, coverage, and quiz accuracy).
 
 ## Tech Stack
 

@@ -10,6 +10,7 @@ import FlashcardPanel from './components/FlashcardPanel'
 import HistoryPanel from './components/HistoryPanel'
 import ChatPanel from './components/ChatPanel'
 import Icon from './components/Icons'
+import Landing from './components/Landing'
 
 const HISTORY_KEY = 'agentic-notes-history'
 const SETTINGS_KEY = 'agentic-notes-settings'
@@ -55,6 +56,7 @@ export default function App() {
   const { stream, isStreaming, cancel } = useStream()
 
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
+  const [showLanding, setShowLanding] = useState(true)
 
   // Persisted settings + input
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) }))
@@ -360,12 +362,20 @@ export default function App() {
         ? { label: 'Ollama', cls: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:ring-violet-800/50' }
         : { label: '…', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300' }
 
+  if (showLanding) {
+    return <Landing onLaunch={() => setShowLanding(false)} darkMode={darkMode} setDarkMode={setDarkMode} />
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-3">
-          <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowLanding(true)}
+            className="flex items-center gap-3 text-left"
+            title="Back to home"
+          >
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
@@ -373,7 +383,7 @@ export default function App() {
               <h1 className="text-base font-extrabold tracking-tight sm:text-lg">Agentic Notes</h1>
               <p className="hidden text-xs text-slate-400 sm:block">Multi-agent study generator</p>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-2.5">
             <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${providerBadge.cls}`}>
               <Icon.Zap className="h-3 w-3" />
