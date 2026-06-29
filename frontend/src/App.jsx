@@ -8,7 +8,6 @@ import NotesOutput from './components/NotesOutput'
 import QuizPanel from './components/QuizPanel'
 import FlashcardPanel from './components/FlashcardPanel'
 import HistoryPanel from './components/HistoryPanel'
-import ChatPanel from './components/ChatPanel'
 import Icon from './components/Icons'
 import Landing from './components/Landing'
 import EvalDashboard from './components/EvalDashboard'
@@ -31,7 +30,6 @@ const TABS = [
   { id: 'notes', label: 'Notes' },
   { id: 'quiz', label: 'Quiz' },
   { id: 'flashcards', label: 'Flashcards' },
-  { id: 'chat', label: 'Chat' },
   { id: 'history', label: 'History' },
 ]
 
@@ -351,6 +349,22 @@ export default function App() {
     }
   }
 
+  const editSelection = async (selection, instruction) => {
+    if (!notes || !selection) return
+    const res = await fetch('/api/edit-selection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes, selection, instruction, model }),
+    })
+    const data = await res.json()
+    if (data.notes) {
+      setNotesBefore(notes) // enable the diff view
+      setNotes(data.notes)
+      showToast('Notes updated ✓')
+    }
+    return data.notes
+  }
+
   const rewriteNotes = async (direction) => {
     if (!notes) return
     setRewriting(direction)
@@ -535,6 +549,7 @@ export default function App() {
                   onRewrite={rewriteNotes}
                   rewriting={rewriting}
                   sources={sources}
+                  onEditSelection={editSelection}
                 />
               )}
               {activeTab === 'quiz' && (
@@ -547,7 +562,6 @@ export default function App() {
                   regenerating={cardsRegen}
                 />
               )}
-              {activeTab === 'chat' && <ChatPanel notes={notes} model={model} />}
               {activeTab === 'history' && (
                 <HistoryPanel
                   history={history}

@@ -364,6 +364,26 @@ NOTES:
 
 
 # ---------------------------------------------------------------------------
+# Inline edit: apply an instruction to a selected passage
+# ---------------------------------------------------------------------------
+
+def edit_selection(notes, selection, instruction, model=None) -> str:
+    prompt = f"""You are editing study notes. Apply the INSTRUCTION ONLY to the
+SELECTED passage; leave the rest of the notes unchanged. Preserve the existing
+formatting and any [n] citations. Return the COMPLETE updated notes only — no
+commentary.
+
+INSTRUCTION: {instruction or "improve this passage"}
+
+SELECTED PASSAGE:
+\"\"\"{selection[:2000]}\"\"\"
+
+FULL NOTES:
+\"\"\"{notes[:14000]}\"\"\""""
+    return call_model(prompt, max_tokens=2800, model=model, temperature=0.4)
+
+
+# ---------------------------------------------------------------------------
 # Agent: Title (auto-name a session)
 # ---------------------------------------------------------------------------
 

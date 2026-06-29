@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from './Icons'
+import InlineAssistant from './InlineAssistant'
 
 // Render inline **bold** spans and [n] citation pills within a line.
 function renderInline(text, keyPrefix, onCite) {
@@ -184,6 +185,7 @@ export default function NotesOutput({
   onRewrite,
   rewriting,
   sources = [],
+  onEditSelection,
 }) {
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(null)
@@ -357,12 +359,18 @@ export default function NotesOutput({
           ))}
         </div>
       ) : (
-        <div
-          ref={containerRef}
-          className="scroll-area max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"
-        >
-          {renderNotes(notes, sources.length ? handleCite : null)}
-        </div>
+        <>
+          <div
+            ref={containerRef}
+            className="scroll-area max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"
+          >
+            {renderNotes(notes, sources.length ? handleCite : null)}
+          </div>
+          <p className="mt-1.5 text-center text-xs text-slate-400">
+            Tip: select any text in your notes to explain or rewrite it with AI.
+          </p>
+          <InlineAssistant containerRef={containerRef} notes={notes} onEditSelection={onEditSelection} />
+        </>
       )}
 
       {/* Citations / sources */}

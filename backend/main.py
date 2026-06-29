@@ -29,6 +29,7 @@ from agent import (
     generate_flashcards,
     rewrite_notes,
     chat_about_notes_stream,
+    edit_selection,
 )
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
 from retriever import active_embedding_backend
@@ -88,6 +89,13 @@ class ChatRequest(BaseModel):
 
 class UrlRequest(BaseModel):
     url: str = Field(default="")
+
+
+class EditSelectionRequest(BaseModel):
+    notes: str = Field(default="")
+    selection: str = Field(default="")
+    instruction: str = Field(default="")
+    model: str = Field(default="")
 
 
 class ExportRequest(BaseModel):
@@ -281,6 +289,19 @@ async def regen_flashcards(req: RegenRequest):
     loop = asyncio.get_event_loop()
     cards = await loop.run_in_executor(None, lambda: generate_flashcards(notes, 8, req.model))
     return {"flashcards": cards}
+
+
+@app.post("/api/edit-selection")
+async def edit_selection_endpoint(req: EditSelectionRequest):
+    notes = (req.notes or "").strip()
+    selection = (req.selection or "").strip()
+    if not notes or not selection:
+        raise HTTPException(status_code=422, detail="`notes` and `selection` are required.")
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, lambda: edit_selection(notes, selection, req.instruction, req.model)
+    )
+    return {"notes": result}
 
 
 @app.post("/api/rewrite")
