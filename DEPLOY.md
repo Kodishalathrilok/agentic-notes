@@ -62,6 +62,32 @@ Fly also supports a persistent **volume** later if you ever add SQLite.
 
 ---
 
+## Option D — Hugging Face Spaces (free, NO credit card)
+
+The README's YAML front-matter (`sdk: docker`, `app_port: 8000`) makes the repo a
+Docker Space. Streaming works, and no payment info is required.
+
+1. Create a free account at <https://huggingface.co/join>.
+2. Create a Space at <https://huggingface.co/new-space>:
+   - **Name:** `agentic-notes`
+   - **SDK:** **Docker** (blank template)
+   - **Hardware:** CPU basic (free) · **Visibility:** Public
+3. In the Space → **Settings → Variables and secrets**, add secrets:
+   - `GROQ_API_KEY` (required)
+   - `GEMINI_API_KEY` (optional — enables neural embeddings)
+4. Create a **write** access token at <https://huggingface.co/settings/tokens>.
+5. From the repo root, add the Space as a remote and push (use your HF username
+   and the token as the password when prompted):
+
+   ```bash
+   git remote add hf https://huggingface.co/spaces/<HF_USERNAME>/agentic-notes
+   git push hf main --force
+   ```
+
+The Space builds the Dockerfile and goes live at
+`https://<HF_USERNAME>-agentic-notes.hf.space`. Free Spaces sleep when idle and
+wake on the next request.
+
 ## Test the production build locally (optional)
 
 From the repo root (`agentic-notes/`):

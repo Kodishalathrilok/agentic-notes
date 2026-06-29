@@ -1,3 +1,13 @@
+---
+title: Agentic AI Notes Generator
+emoji: 📚
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # 📚 Agentic AI Notes Generator
 
 [![CI](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml)
