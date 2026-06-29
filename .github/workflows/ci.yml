@@ -39,3 +39,23 @@ jobs:
         run: npm install
       - name: Build
         run: npm run build
+
+  deploy:
+    name: Deploy to Hugging Face
+    needs: [backend, frontend] # only deploy if tests + build pass
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for the force-push
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN secret not set — skipping deploy."
+            echo "Add it: repo Settings -> Secrets and variables -> Actions -> HF_TOKEN"
+            exit 0
+          fi
+          git push "https://Thrilokkk:$HF_TOKEN@huggingface.co/spaces/Thrilokkk/agentic-notes" HEAD:main --force
