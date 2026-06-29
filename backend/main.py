@@ -40,6 +40,8 @@ from models import (
     GROQ_PLACEHOLDER,
     available_models,
     default_model,
+    gemini_available,
+    extract_text_from_image,
 )
 
 load_dotenv()
@@ -239,6 +241,33 @@ async def extract_pdf(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 # Audio transcription (Groq Whisper)
 # ---------------------------------------------------------------------------
+
+@app.post("/api/extract-image")
+async def extract_image(file: UploadFile = File(...)):
+    """OCR a photo of study material (textbook page, slides, handwriting) via Gemini vision."""
+    if not gemini_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Image text extraction requires a GEMINI_API_KEY. Set it in backend/.env.",
+        )
+
+    raw = await file.read()
+    mime = file.content_type or "image/jpeg"
+    loop = asyncio.get_event_loop()
+    try:
+        text = await loop.run_in_executor(None, lambda: extract_text_from_image(raw, mime))
+    except Exception:  # noqa: BLE001 - message kept generic so the API key never leaks
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't read text from the image (the vision API may be rate-limited). "
+            "Please try again in a moment.",
+        )
+
+    text = (text or "").strip()[:MAX_TEXT_CHARS]
+    if len(text) < 5:
+        raise HTTPException(status_code=422, detail="No readable text found in this image.")
+    return {"text": text, "chars": len(text)}
+
 
 @app.post("/api/transcribe")
 async def transcribe(file: UploadFile = File(...)):

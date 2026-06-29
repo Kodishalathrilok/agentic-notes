@@ -3,6 +3,7 @@ import { useState, useRef } from 'react'
 const TABS = [
   { id: 'text', label: 'Text' },
   { id: 'pdf', label: 'PDF' },
+  { id: 'image', label: 'Image' },
   { id: 'url', label: 'URL' },
   { id: 'audio', label: 'Audio' },
 ]
@@ -18,6 +19,36 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
   const [pdfError, setPdfError] = useState(null)
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef(null)
+
+  // Image (OCR)
+  const [imgLoading, setImgLoading] = useState(false)
+  const [imgError, setImgError] = useState(null)
+  const [imgInfo, setImgInfo] = useState(null)
+  const [imgDragging, setImgDragging] = useState(false)
+  const imgInputRef = useRef(null)
+
+  const handleImageFile = async (file) => {
+    if (!file) return
+    setImgError(null)
+    setImgInfo(null)
+    setImgLoading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch('/api/extract-image', { method: 'POST', body: form })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || `Extraction failed (${res.status})`)
+      }
+      const data = await res.json()
+      setInputText(data.text.slice(0, MAX_CHARS))
+      setImgInfo({ name: file.name, chars: data.chars })
+    } catch (err) {
+      setImgError(err.message)
+    } finally {
+      setImgLoading(false)
+    }
+  }
 
   // URL
   const [url, setUrl] = useState('')
@@ -225,6 +256,60 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
               {pdfError}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Image (OCR via Gemini vision) */}
+      {tab === 'image' && (
+        <div>
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setImgDragging(true)
+            }}
+            onDragLeave={() => setImgDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setImgDragging(false)
+              handleImageFile(e.dataTransfer.files?.[0])
+            }}
+            onClick={() => imgInputRef.current?.click()}
+            className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
+              imgDragging
+                ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20'
+                : 'border-slate-300 hover:border-brand-400 dark:border-slate-600'
+            }`}
+          >
+            <svg className="mb-2 h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16l5-5 4 4 3-3 6 6" />
+              <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
+            </svg>
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {imgLoading ? 'Reading text from image…' : 'Drop a photo of notes/textbook, or click to upload'}
+            </p>
+            <input
+              ref={imgInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleImageFile(e.target.files?.[0])}
+            />
+          </div>
+
+          {imgInfo && (
+            <div className="mt-3 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/20 dark:text-green-300">
+              ✓ <span className="font-medium">{imgInfo.name}</span> — {imgInfo.chars.toLocaleString()} chars extracted
+            </div>
+          )}
+          {imgError && (
+            <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-300">
+              {imgError}
+            </div>
+          )}
+          <p className="mt-2 text-xs text-slate-400">
+            Snap a textbook page, slide, or handwritten notes — Gemini vision extracts the text.
+          </p>
         </div>
       )}
 

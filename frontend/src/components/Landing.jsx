@@ -30,7 +30,7 @@ const FEATURES = [
   {
     icon: Icon.Book,
     title: 'Multimodal input',
-    body: 'Paste text, upload a PDF, drop a web link or YouTube URL (transcript), or record audio — all become study notes.',
+    body: 'Paste text, upload a PDF, snap a photo of a page (vision OCR), drop a web link or YouTube URL, or record audio — all become study notes.',
   },
   {
     icon: Icon.Star,

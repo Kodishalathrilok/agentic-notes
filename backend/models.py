@@ -238,6 +238,43 @@ def _stream_gemini(prompt, max_tokens, model, temperature):
 
 
 # ---------------------------------------------------------------------------
+# Gemini vision — OCR / image-to-text
+# ---------------------------------------------------------------------------
+
+def gemini_available() -> bool:
+    return _gemini_available()
+
+
+def extract_text_from_image(image_bytes: bytes, mime_type: str = "image/jpeg", model=None) -> str:
+    """Transcribe study text from an image using Gemini vision."""
+    import base64
+
+    gm = _gemini_model(model)  # gemini-2.0-flash is vision-capable
+    url = f"{_GEMINI_BASE}/models/{gm}:generateContent?key={GEMINI_API_KEY}"
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    prompt = (
+        "Transcribe ALL text from this image of study material (textbook page, "
+        "lecture slide, handwritten notes, or diagram labels). Output only the "
+        "transcribed text, preserving structure: headings, bullet points, numbered "
+        "lists, and equations written as plain text. Do not add commentary."
+    )
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": mime_type, "data": b64}},
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 4096},
+    }
+    resp = requests.post(url, json=body, timeout=120)
+    resp.raise_for_status()
+    return _gemini_text(resp.json()).strip()
+
+
+# ---------------------------------------------------------------------------
 # Ollama
 # ---------------------------------------------------------------------------
 
