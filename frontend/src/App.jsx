@@ -83,6 +83,7 @@ export default function App() {
   const [provider, setProvider] = useState(null)
   const [toast, setToast] = useState(null)
   const [error, setError] = useState(null)
+  const [blocked, setBlocked] = useState(null)
 
   const [rewriting, setRewriting] = useState(null)
   const [quizRegen, setQuizRegen] = useState(false)
@@ -216,6 +217,7 @@ export default function App() {
     setCritique(null)
     setPlan(null)
     setError(null)
+    setBlocked(null)
     setActiveTab('notes')
     bufferRef.current = ''
     titleRef.current = ''
@@ -230,11 +232,16 @@ export default function App() {
       { text: inputText, mode, tone, length, format, model, instructions },
       {
         onStatus: (step, message) => {
+          if (step === 'gate') return // pre-pipeline gatekeeper, no visible step
           if (step === 'revise' && /no revision/i.test(message)) {
             setStep('revise', 'done', message)
           } else {
             markActive(step, message)
           }
+        },
+        onBlocked: (message, data) => {
+          setBlocked({ message, subject: data?.subject })
+          setAgentSteps(INITIAL_STEPS.map((s) => ({ ...s })))
         },
         onPlanDone: (data) => {
           setPlan(data)
@@ -485,6 +492,14 @@ export default function App() {
             {error && (
               <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-300">
                 {error}
+              </div>
+            )}
+
+            {blocked && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
+                🎓 <span className="font-semibold">This tool is for academic study material only.</span>{' '}
+                {blocked.message} Try a study topic or source — e.g. Biology, History, Computer
+                Science, or Economics.
               </div>
             )}
 

@@ -26,6 +26,7 @@ export default function useStream() {
   const stream = useCallback(async (payload, callbacks = {}) => {
     const {
       onStatus,
+      onBlocked,
       onPlanDone,
       onSources,
       onNotesDelta,
@@ -50,6 +51,9 @@ export default function useStream() {
       switch (event.type) {
         case 'status':
           onStatus && onStatus(event.step, event.content)
+          break
+        case 'blocked':
+          onBlocked && onBlocked(event.content, event.data)
           break
         case 'plan_done':
           onPlanDone && onPlanDone(event.data)

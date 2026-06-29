@@ -490,6 +490,39 @@ Tutor:"""
 
 
 # ---------------------------------------------------------------------------
+# Gatekeeper: accept only academic / study material
+# ---------------------------------------------------------------------------
+
+def classify_academic(text, model=None) -> dict:
+    prompt = f"""You are a strict gatekeeper for an ACADEMIC study-notes generator.
+Decide whether the SOURCE is genuine academic / study material — a school,
+college, or exam subject such as the sciences, mathematics, computer science,
+engineering, medicine, the humanities, history, social sciences, economics, law,
+or languages.
+
+REJECT material that is primarily: celebrity or entertainment trivia, gossip,
+sports results, product marketing/advertising, personal or casual content, or
+anything not intended for serious study.
+
+Respond with ONLY a JSON object:
+{{"academic": true|false, "subject": "<subject or 'n/a'>", "reason": "<one short sentence>"}}
+
+SOURCE:
+\"\"\"{text[:4000]}\"\"\""""
+
+    data = safe_json(call_model(prompt, max_tokens=200, model=model, temperature=0.0, json_mode=True))
+
+    # Permissive on parse failure — don't block legitimate content over a glitch.
+    if "academic" not in data:
+        return {"academic": True, "subject": "n/a", "reason": ""}
+    return {
+        "academic": bool(data.get("academic", True)),
+        "subject": data.get("subject", "n/a") or "n/a",
+        "reason": data.get("reason", "") or "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -507,7 +540,19 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
       done, error
     """
     try:
-        # 0. Build the retrieval index over the source (RAG)
+        # 0. Academic gatekeeper — this tool only handles study material.
+        yield _emit("status", "gate", "Checking topic…")
+        gate = classify_academic(text, model=model)
+        if not gate.get("academic", True):
+            yield _emit(
+                "blocked",
+                "blocked",
+                gate.get("reason") or "This doesn't look like academic study material.",
+                gate,
+            )
+            return
+
+        # Build the retrieval index over the source (RAG)
         retriever = Retriever(text)
 
         # 1-2. Plan (sees a breadth sample across the whole document)

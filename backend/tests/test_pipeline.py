@@ -47,6 +47,21 @@ def test_pipeline_event_sequence(monkeypatch):
     assert "".join(deltas) == "Some notes."
 
 
+def test_pipeline_blocks_non_academic(monkeypatch):
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        if "gatekeeper" in prompt.lower():
+            return '{"academic": false, "subject": "n/a", "reason": "celebrity topic"}'
+        return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
+
+    monkeypatch.setattr(agent, "call_model", model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+
+    events = list(agent.run_agent("Tom Cruise", "exam", "academic", "medium", "bullet"))
+    types = [e["type"] for e in events]
+    assert "blocked" in types
+    assert "plan_done" not in types  # stopped before generating
+
+
 def test_pipeline_triggers_revision_when_needed(monkeypatch):
     calls = {"critique": 0}
 
