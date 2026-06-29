@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import Icon from './Icons'
 
 // --- tiny markdown renderer for the answer (bold + bullets) ---
@@ -153,7 +154,10 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
   const top = Math.max(8, Math.min(e.bottom + 6, window.innerHeight - 80))
   const maxHeight = window.innerHeight - top - 16
 
-  return (
+  // Portal to <body> so position:fixed is relative to the viewport (the notes
+  // tab has a transform from its fade-in animation, which would otherwise become
+  // the containing block for fixed elements).
+  return createPortal(
     <>
       {!open && (
         <button
@@ -210,6 +214,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
           )}
         </div>
       )}
-    </>
+    </>,
+    document.body
   )
 }
