@@ -441,15 +441,22 @@ export default function App() {
 
   if (showLanding) {
     return (
-      <Landing
-        onLaunch={() => setShowLanding(false)}
-        onEval={() => {
-          setShowLanding(false)
-          setShowEval(true)
-        }}
-        darkMode={darkMode}
-        setDarkMode={setDarkMode}
-      />
+      <>
+        <Landing
+          onLaunch={() => setShowLanding(false)}
+          onEval={() => {
+            setShowLanding(false)
+            setShowEval(true)
+          }}
+          darkMode={darkMode}
+          setDarkMode={setDarkMode}
+          user={user}
+          supabaseEnabled={supabaseEnabled}
+          onSignIn={() => setAuthOpen(true)}
+          onSignOut={signOut}
+        />
+        {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
+      </>
     )
   }
 

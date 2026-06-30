@@ -65,7 +65,7 @@ const STACK = [
   'Docker',
 ]
 
-function Nav({ onLaunch, onEval, darkMode, setDarkMode }) {
+function Nav({ onLaunch, onEval, darkMode, setDarkMode, user, supabaseEnabled, onSignIn, onSignOut }) {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -90,6 +90,22 @@ function Nav({ onLaunch, onEval, darkMode, setDarkMode }) {
           >
             GitHub
           </a>
+          {supabaseEnabled &&
+            (user ? (
+              <button
+                onClick={onSignOut}
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+              >
+                Sign out
+              </button>
+            ) : (
+              <button
+                onClick={onSignIn}
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+              >
+                Sign in
+              </button>
+            ))}
           <button
             onClick={() => setDarkMode((d) => !d)}
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
@@ -107,10 +123,28 @@ function Nav({ onLaunch, onEval, darkMode, setDarkMode }) {
   )
 }
 
-export default function Landing({ onLaunch, onEval, darkMode, setDarkMode }) {
+export default function Landing({
+  onLaunch,
+  onEval,
+  darkMode,
+  setDarkMode,
+  user,
+  supabaseEnabled,
+  onSignIn,
+  onSignOut,
+}) {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <Nav onLaunch={onLaunch} onEval={onEval} darkMode={darkMode} setDarkMode={setDarkMode} />
+      <Nav
+        onLaunch={onLaunch}
+        onEval={onEval}
+        darkMode={darkMode}
+        setDarkMode={setDarkMode}
+        user={user}
+        supabaseEnabled={supabaseEnabled}
+        onSignIn={onSignIn}
+        onSignOut={onSignOut}
+      />
 
       {/* Hero */}
       <section className="relative overflow-hidden">
