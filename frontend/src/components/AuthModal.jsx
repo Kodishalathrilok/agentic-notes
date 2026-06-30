@@ -17,9 +17,13 @@ export default function AuthModal({ onClose }) {
     setNotice(null)
     try {
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({ email, password })
+        const { data, error } = await supabase.auth.signUp({ email, password })
         if (error) throw error
-        setNotice('Account created. If email confirmation is on, check your inbox — otherwise you can sign in now.')
+        if (data.session) {
+          onClose() // confirmation off -> signed in immediately
+        } else {
+          setNotice('Account created — check your email to confirm, then sign in.')
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
