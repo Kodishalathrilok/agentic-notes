@@ -72,9 +72,15 @@ Docker Space. Streaming works, and no payment info is required.
    - **Name:** `agentic-notes`
    - **SDK:** **Docker** (blank template)
    - **Hardware:** CPU basic (free) · **Visibility:** Public
-3. In the Space → **Settings → Variables and secrets**, add secrets:
+3. In the Space → **Settings → Variables and secrets**, add **secrets**:
    - `GROQ_API_KEY` (required)
-   - `GEMINI_API_KEY` (optional — enables neural embeddings)
+   - `GEMINI_API_KEY` (optional — embeddings, vision, LLM failover)
+
+   And, if using Supabase accounts, add these as **Variables** (public — the
+   anon key is safe; it's protected by row-level security). They must be
+   Variables, not Secrets, because Vite inlines them at *build* time:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
 4. Create a **write** access token at <https://huggingface.co/settings/tokens>.
 5. From the repo root, add the Space as a remote and push (use your HF username
    and the token as the password when prompted):

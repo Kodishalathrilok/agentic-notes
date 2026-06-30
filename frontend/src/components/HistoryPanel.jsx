@@ -38,7 +38,7 @@ function formatDate(ts) {
   }
 }
 
-function SessionCard({ session, onLoad, onDelete, onUpdate }) {
+function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [title, setTitle] = useState(session.title || '')
   const [tagInput, setTagInput] = useState('')
@@ -130,6 +130,14 @@ function SessionCard({ session, onLoad, onDelete, onUpdate }) {
         >
           Load
         </button>
+        {onShare && (
+          <button
+            onClick={() => onShare(session.id)}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            {session.is_public ? 'Copy link' : 'Share'}
+          </button>
+        )}
         <button
           onClick={() => onDelete(session.id)}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-slate-600 dark:hover:bg-red-900/20"
@@ -141,7 +149,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate }) {
   )
 }
 
-export default function HistoryPanel({ history, onLoad, onDelete, onUpdate }) {
+export default function HistoryPanel({ history, onLoad, onDelete, onUpdate, onShare, cloud }) {
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
@@ -190,6 +198,7 @@ export default function HistoryPanel({ history, onLoad, onDelete, onUpdate }) {
             onLoad={onLoad}
             onDelete={onDelete}
             onUpdate={onUpdate}
+            onShare={onShare}
           />
         ))
       )}

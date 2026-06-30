@@ -11,6 +11,10 @@ import HistoryPanel from './components/HistoryPanel'
 import Icon from './components/Icons'
 import Landing from './components/Landing'
 import EvalDashboard from './components/EvalDashboard'
+import AuthModal from './components/AuthModal'
+import SharedNote from './components/SharedNote'
+import useHistory from './hooks/useHistory'
+import { supabase, supabaseEnabled } from './lib/supabase'
 
 const HISTORY_KEY = 'agentic-notes-history'
 const SETTINGS_KEY = 'agentic-notes-settings'
@@ -76,7 +80,10 @@ export default function App() {
   const [quiz, setQuiz] = useState('')
   const [flashcards, setFlashcards] = useState('')
 
-  const [history, setHistory] = useState(() => loadJSON(HISTORY_KEY, []))
+  const [user, setUser] = useState(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [sharedView, setSharedView] = useState(null) // read-only shared session
+  const { history, cloud, addSession, updateSession, deleteSession, shareSession } = useHistory(user)
   const [activeTab, setActiveTab] = useState('notes')
   const [provider, setProvider] = useState(null)
   const [toast, setToast] = useState(null)
@@ -150,11 +157,38 @@ export default function App() {
     })
   }, [])
 
+  // ----- Auth (Supabase) ---------------------------------------------------
+  useEffect(() => {
+    if (!supabase) return
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setUser(session?.user ?? null))
+    return () => sub.subscription.unsubscribe()
+  }, [])
+
+  const signOut = async () => {
+    if (supabase) await supabase.auth.signOut()
+  }
+
+  // Load a shared (public) session if the URL has ?share=<id>.
+  useEffect(() => {
+    if (!supabase) return
+    const id = new URLSearchParams(window.location.search).get('share')
+    if (!id) return
+    supabase
+      .from('sessions')
+      .select('*')
+      .eq('id', id)
+      .single()
+      .then(({ data }) => {
+        if (data) setSharedView(data)
+      })
+  }, [])
+
   // ----- History -----------------------------------------------------------
   const saveToHistory = useCallback(
     (finalNotes, finalQuiz, finalCards, finalSources) => {
       if (!finalNotes) return
-      const session = {
+      addSession({
         id: Date.now().toString(),
         date: new Date().toISOString(),
         mode,
@@ -165,24 +199,11 @@ export default function App() {
         quiz: finalQuiz,
         flashcards: finalCards,
         sources: finalSources || [],
-      }
-      setHistory((prev) => {
-        const next = [session, ...prev].slice(0, 20)
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
-        return next
       })
       showToast('Saved to history ✓')
     },
-    [mode]
+    [mode, addSession]
   )
-
-  const updateSession = (id, fields) => {
-    setHistory((prev) => {
-      const next = prev.map((s) => (s.id === id ? { ...s, ...fields } : s))
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
-      return next
-    })
-  }
 
   const loadSession = (s) => {
     setNotes(s.notes || '')
@@ -195,12 +216,17 @@ export default function App() {
     setActiveTab('notes')
   }
 
-  const deleteSession = (id) => {
-    setHistory((prev) => {
-      const next = prev.filter((s) => s.id !== id)
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
-      return next
-    })
+  const shareLink = async (id) => {
+    const sid = await shareSession(id)
+    if (sid) {
+      const url = `${window.location.origin}/?share=${sid}`
+      try {
+        await navigator.clipboard.writeText(url)
+        showToast('Share link copied ✓')
+      } catch {
+        showToast('Link: ' + url)
+      }
+    }
   }
 
   // ----- Generate ----------------------------------------------------------
@@ -394,6 +420,21 @@ export default function App() {
         ? { label: 'Ollama', cls: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:ring-violet-800/50' }
         : { label: '…', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300' }
 
+  if (sharedView) {
+    return (
+      <SharedNote
+        session={sharedView}
+        darkMode={darkMode}
+        setDarkMode={setDarkMode}
+        onClose={() => {
+          setSharedView(null)
+          window.history.replaceState({}, '', '/')
+          setShowLanding(false)
+        }}
+      />
+    )
+  }
+
   if (showEval) {
     return <EvalDashboard onBack={() => setShowEval(false)} darkMode={darkMode} setDarkMode={setDarkMode} />
   }
@@ -449,6 +490,24 @@ export default function App() {
             >
               {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
             </button>
+            {supabaseEnabled &&
+              (user ? (
+                <div className="flex items-center gap-2">
+                  <span className="hidden max-w-[140px] truncate text-xs text-slate-500 sm:inline dark:text-slate-400">
+                    {user.email}
+                  </span>
+                  <button
+                    onClick={signOut}
+                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setAuthOpen(true)} className="btn-primary px-3.5 py-1.5 text-sm">
+                  Sign in
+                </button>
+              ))}
           </div>
         </div>
       </header>
@@ -568,12 +627,16 @@ export default function App() {
                   onLoad={loadSession}
                   onDelete={deleteSession}
                   onUpdate={updateSession}
+                  onShare={cloud ? shareLink : null}
+                  cloud={cloud}
                 />
               )}
             </div>
           </div>
         </div>
       </main>
+
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
 
       {/* Toast */}
       {toast && (

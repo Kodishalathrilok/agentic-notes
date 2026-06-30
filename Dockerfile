@@ -3,6 +3,12 @@
 # ---- Stage 1: build the React frontend ----
 FROM node:20-slim AS frontend
 WORKDIR /app/frontend
+# Supabase (optional): pass as build args so Vite can inline them. The anon key
+# is public by design (protected by row-level security), so it's safe here.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
