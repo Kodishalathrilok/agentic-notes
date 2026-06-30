@@ -57,6 +57,36 @@
   }
 }
 
+/* Landing animations */
+@keyframes gradient-x {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+@keyframes float-blob {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(28px, -22px) scale(1.06);
+  }
+  66% {
+    transform: translate(-22px, 18px) scale(0.96);
+  }
+}
+.animate-gradient-x {
+  background-size: 220% 220%;
+  animation: gradient-x 6s ease infinite;
+}
+.animate-float-blob {
+  animation: float-blob 16s ease-in-out infinite;
+}
+
 /* Flashcard flip */
 .flip-card {
   perspective: 1200px;
