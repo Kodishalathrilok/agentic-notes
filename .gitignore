@@ -24,3 +24,6 @@ backend/eval/report.md
 Thumbs.db
 .idea/
 .vscode/
+
+# Local-only project summary (not tracked)
+STATUS.md
