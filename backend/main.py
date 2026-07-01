@@ -13,6 +13,7 @@ Endpoints:
 import os
 import json
 import asyncio
+import logging
 from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -45,6 +46,16 @@ from models import (
 )
 
 load_dotenv()
+
+# Surface retrieval logs (index build, per-retrieval metrics, failure fallbacks)
+# in the console — observability only, doesn't affect behavior.
+_retrieval_logger = logging.getLogger("retrieval")
+if not _retrieval_logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(levelname)s [retrieval] %(message)s"))
+    _retrieval_logger.addHandler(_h)
+    _retrieval_logger.setLevel(logging.INFO)
+    _retrieval_logger.propagate = False
 
 app = FastAPI(title="Agentic AI Notes Generator", version="1.0.0")
 
