@@ -87,6 +87,46 @@
   animation: float-blob 16s ease-in-out infinite;
 }
 
+/* TextEffect presets (per-word / per-char staggered reveal) */
+@keyframes te-slide {
+  from {
+    opacity: 0;
+    transform: translateY(0.45em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes te-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes te-blur {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+.te-slide {
+  animation: te-slide 0.5s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+}
+.te-fade {
+  animation: te-fade 0.55s ease both;
+}
+.te-blur {
+  animation: te-blur 0.6s ease both;
+  will-change: filter, opacity;
+}
+
 /* Flashcard flip */
 .flip-card {
   perspective: 1200px;

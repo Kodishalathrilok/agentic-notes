@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from './Icons'
+import TextEffect from './TextEffect'
 
 const GITHUB_URL = 'https://github.com/Kodishalathrilok/agentic-notes'
 
@@ -170,15 +171,20 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
           </div>
 
           <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl">
-            <span className="block animate-slide-up" style={{ animationDelay: '80ms' }}>
+            <TextEffect per="word" preset="slide" as="span" className="block" stagger={0.08} startDelay={0.05}>
               Study notes that
-            </span>
-            <span
-              className="animate-gradient-x block animate-slide-up bg-gradient-to-r from-brand-500 via-fuchsia-500 to-brand-700 bg-clip-text text-transparent"
-              style={{ animationDelay: '180ms' }}
+            </TextEffect>
+            <TextEffect
+              per="word"
+              preset="slide"
+              as="span"
+              className="block"
+              unitClassName="bg-gradient-to-r from-brand-500 via-fuchsia-500 to-brand-700 bg-clip-text text-transparent"
+              stagger={0.08}
+              startDelay={0.29}
             >
               fact-check themselves
-            </span>
+            </TextEffect>
           </h1>
 
           <p
