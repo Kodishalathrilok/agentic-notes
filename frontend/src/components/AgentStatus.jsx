@@ -40,7 +40,7 @@ const COLORS = {
 export default function AgentStatus({ steps, critique }) {
   return (
     <div className="card p-5">
-      <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+      <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
         Agent Pipeline
       </h2>
       <ol className="space-y-2">

@@ -186,6 +186,7 @@ export default function NotesOutput({
   rewriting,
   sources = [],
   onEditSelection,
+  streaming = false,
 }) {
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(null)
@@ -249,8 +250,18 @@ export default function NotesOutput({
 
   if (!notes && !editing) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-400 dark:border-slate-600">
-        Your generated notes will appear here.
+      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-white/10 text-sm text-stone-500">
+        {streaming ? (
+          <>
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-400" />
+            </span>
+            Agents are reading your source…
+          </>
+        ) : (
+          'Your generated notes will appear here.'
+        )}
       </div>
     )
   }
@@ -284,15 +295,25 @@ export default function NotesOutput({
     }
   }
 
-  const btn =
-    'inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors cursor-pointer hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70 dark:hover:text-white'
+  const btn = 'pill'
 
   const diff = showDiff && notesBefore ? diffLines(notesBefore, notes) : null
 
   return (
     <div>
-      {/* Action buttons */}
-      <div className="mb-3 flex flex-wrap gap-2">
+      {/* Streaming indicator */}
+      {streaming && (
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-4 py-1.5 text-xs font-semibold text-brand-300">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-400" />
+          </span>
+          Agents writing…
+        </div>
+      )}
+
+      {/* Action pills */}
+      <div className="mb-4 flex flex-wrap gap-2">
         <button onClick={copy} className={btn}>
           {copied ? <Icon.Check className="h-3.5 w-3.5 text-green-500" /> : <Icon.Copy className="h-3.5 w-3.5" />}
           {copied ? 'Copied' : 'Copy'}
@@ -336,10 +357,10 @@ export default function NotesOutput({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={18}
-          className="w-full resize-y rounded-xl border border-slate-300 bg-white p-4 font-mono text-sm text-slate-800 outline-none focus:border-brand-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+          className="field resize-y rounded-3xl p-5 font-mono text-sm"
         />
       ) : diff ? (
-        <div className="scroll-area max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 font-mono text-xs leading-relaxed dark:border-slate-700 dark:bg-slate-800">
+        <div className="scroll-area max-h-[60vh] overflow-y-auto rounded-3xl border border-white/[0.06] bg-ink-900/70 p-5 font-mono text-xs leading-relaxed">
           {diff.map((d, i) => (
             <div
               key={i}
@@ -360,13 +381,17 @@ export default function NotesOutput({
         </div>
       ) : (
         <>
+          {/* Document-style reading surface */}
           <div
             ref={containerRef}
-            className="scroll-area max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"
+            className="scroll-area max-h-[65vh] overflow-y-auto rounded-3xl border border-white/[0.06] bg-ink-900/70 px-6 py-8 sm:px-10 sm:py-10"
           >
-            {renderNotes(notes, sources.length ? handleCite : null)}
+            <div className="mx-auto max-w-3xl">
+              {renderNotes(notes, sources.length ? handleCite : null)}
+              {streaming && <span className="stream-caret" aria-hidden />}
+            </div>
           </div>
-          <p className="mt-1.5 text-center text-xs text-slate-400">
+          <p className="mt-2 text-center text-xs text-stone-500">
             Tip: select any text in your notes to explain or rewrite it with AI.
           </p>
           <InlineAssistant containerRef={containerRef} notes={notes} onEditSelection={onEditSelection} />

@@ -10,51 +10,76 @@
   body {
     font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
     font-feature-settings: 'cv11', 'ss01';
+    @apply bg-ink-950 text-stone-300;
+  }
+  ::selection {
+    @apply bg-brand-500/40 text-white;
   }
   /* Consistent, accessible focus ring */
   :focus-visible {
     outline: 2px solid theme('colors.brand.500');
     outline-offset: 2px;
-    border-radius: 4px;
+    border-radius: 6px;
   }
 }
 
 @layer components {
-  /* Surface card */
+  /* Surface card — large radius, warm charcoal, soft depth */
   .card {
-    @apply rounded-2xl border border-slate-200/80 bg-white shadow-card
-      dark:border-slate-700/60 dark:bg-slate-800/80;
+    @apply rounded-3xl border border-white/[0.06] bg-ink-900/90 shadow-card
+      backdrop-blur-sm;
   }
 
-  /* Buttons */
+  /* Pill buttons */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5
       text-sm font-semibold transition-all duration-200 cursor-pointer
       disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white shadow-soft hover:bg-brand-700
+    @apply btn bg-brand-500 text-white shadow-soft hover:bg-brand-400
       hover:shadow-lift active:scale-[0.98];
   }
   .btn-ghost {
-    @apply btn border border-slate-200 text-slate-600 hover:bg-slate-100
-      hover:text-slate-900 dark:border-slate-700 dark:text-slate-300
-      dark:hover:bg-slate-700/70 dark:hover:text-white;
+    @apply btn border border-white/10 text-stone-300 hover:bg-white/5
+      hover:text-white;
+  }
+  /* Small pill (export groups, inline actions) */
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10
+      px-4 py-2 text-xs font-semibold text-stone-300 transition-colors
+      cursor-pointer hover:bg-white/5 hover:text-white disabled:opacity-50;
   }
 
-  /* Small pill chip */
+  /* Small chip */
   .chip {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
 
   /* Form field */
   .field {
-    @apply w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm
-      text-slate-800 outline-none transition-colors placeholder:text-slate-400
-      focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10
-      disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900/60
-      dark:text-slate-100;
+    @apply w-full rounded-2xl border border-white/10 bg-ink-800/70 px-4 py-2.5
+      text-sm text-cream outline-none transition-colors
+      placeholder:text-stone-500 focus:border-brand-500
+      focus:ring-4 focus:ring-brand-500/10 disabled:opacity-60;
   }
+
+  /* Oversized section heading */
+  .display-title {
+    @apply text-4xl font-black tracking-tighter text-cream sm:text-5xl;
+  }
+}
+
+/* Streaming caret (blinks at the end of streamed notes) */
+.stream-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 2px;
+  background: theme('colors.brand.400');
+  animation: te-fade 0.8s ease-in-out infinite alternate;
 }
 
 /* Landing animations */

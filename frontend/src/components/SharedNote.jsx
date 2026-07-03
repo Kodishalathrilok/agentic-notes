@@ -1,32 +1,23 @@
 import Icon from './Icons'
 import NotesOutput from './NotesOutput'
 
-export default function SharedNote({ session, darkMode, setDarkMode, onClose }) {
+export default function SharedNote({ session, onClose }) {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
+    <div className="min-h-screen bg-ink-950 text-stone-300">
+      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-3xl items-center justify-between px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
             <div className="leading-tight">
-              <h1 className="text-base font-extrabold tracking-tight">{session.title || 'Shared notes'}</h1>
-              <p className="text-xs text-slate-400">Shared · read-only</p>
+              <h1 className="text-base font-extrabold tracking-tight text-cream">{session.title || 'Shared notes'}</h1>
+              <p className="text-xs text-stone-500">Shared · read-only</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setDarkMode((d) => !d)}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
-              aria-label="Toggle dark mode"
-            >
-              {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
-            </button>
-            <button onClick={onClose} className="btn-primary px-3.5 py-1.5 text-sm">
-              Open the app
-            </button>
-          </div>
+          <button onClick={onClose} className="btn-primary px-4 py-2 text-sm">
+            Open the app
+          </button>
         </div>
       </header>
 

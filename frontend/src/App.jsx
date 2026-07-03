@@ -19,7 +19,6 @@ import { supabase, supabaseEnabled } from './lib/supabase'
 const HISTORY_KEY = 'agentic-notes-history'
 const SETTINGS_KEY = 'agentic-notes-settings'
 const INPUT_KEY = 'agentic-notes-input'
-const THEME_KEY = 'theme'
 
 const INITIAL_STEPS = [
   { step: 'plan', message: '', status: 'pending' },
@@ -58,9 +57,13 @@ function loadJSON(key, fallback) {
 export default function App() {
   const { stream, isStreaming, cancel } = useStream()
 
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'dark')
   const [showLanding, setShowLanding] = useState(true)
   const [showEval, setShowEval] = useState(false)
+
+  // Premium dark-only theme: keep legacy `dark:` variants active everywhere.
+  useEffect(() => {
+    document.documentElement.classList.add('dark')
+  }, [])
 
   // Persisted settings + input
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) }))
@@ -105,18 +108,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(INPUT_KEY, inputText)
   }, [inputText])
-
-  // ----- Dark mode ---------------------------------------------------------
-  useEffect(() => {
-    const root = document.documentElement
-    if (darkMode) {
-      root.classList.add('dark')
-      localStorage.setItem(THEME_KEY, 'dark')
-    } else {
-      root.classList.remove('dark')
-      localStorage.setItem(THEME_KEY, 'light')
-    }
-  }, [darkMode])
 
   // ----- Health + models ---------------------------------------------------
   useEffect(() => {
@@ -424,8 +415,6 @@ export default function App() {
     return (
       <SharedNote
         session={sharedView}
-        darkMode={darkMode}
-        setDarkMode={setDarkMode}
         onClose={() => {
           setSharedView(null)
           window.history.replaceState({}, '', '/')
@@ -436,7 +425,7 @@ export default function App() {
   }
 
   if (showEval) {
-    return <EvalDashboard onBack={() => setShowEval(false)} darkMode={darkMode} setDarkMode={setDarkMode} />
+    return <EvalDashboard onBack={() => setShowEval(false)} />
   }
 
   if (showLanding) {
@@ -448,8 +437,6 @@ export default function App() {
             setShowLanding(false)
             setShowEval(true)
           }}
-          darkMode={darkMode}
-          setDarkMode={setDarkMode}
           user={user}
           supabaseEnabled={supabaseEnabled}
           onSignIn={() => setAuthOpen(true)}
@@ -461,27 +448,30 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-3">
+    <div className="relative min-h-screen overflow-x-hidden bg-ink-950 text-stone-300">
+      {/* Ambient background glow */}
+      <div className="pointer-events-none fixed inset-0 -z-10">
+        <div className="absolute left-[8%] top-[-12%] h-[420px] w-[420px] rounded-full bg-brand-600/15 blur-3xl" />
+        <div className="absolute bottom-[-15%] right-[5%] h-[380px] w-[380px] rounded-full bg-fuchsia-600/10 blur-3xl" />
+      </div>
+
+      {/* Minimal nav: logo left · Eval + auth + CTA right */}
+      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-5 py-4">
           <button
             onClick={() => setShowLanding(true)}
             className="flex items-center gap-3 text-left"
             title="Back to home"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
-            <div className="leading-tight">
-              <h1 className="text-base font-extrabold tracking-tight sm:text-lg">Agentic Notes</h1>
-              <p className="hidden text-xs text-slate-400 sm:block">Multi-agent study generator</p>
-            </div>
+            <h1 className="text-base font-extrabold tracking-tight text-cream sm:text-lg">Agentic Notes</h1>
           </button>
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => setShowEval(true)}
-              className="hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 sm:inline-flex dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+              className="hidden rounded-full px-4 py-2 text-sm font-semibold text-stone-400 transition-colors hover:bg-white/5 hover:text-white sm:inline-flex"
             >
               Eval
             </button>
@@ -489,29 +479,18 @@ export default function App() {
               <Icon.Zap className="h-3 w-3" />
               {providerBadge.label}
             </span>
-            <button
-              onClick={() => setDarkMode((d) => !d)}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-              title="Toggle dark mode"
-              aria-label="Toggle dark mode"
-            >
-              {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
-            </button>
             {supabaseEnabled &&
               (user ? (
                 <div className="flex items-center gap-2">
-                  <span className="hidden max-w-[140px] truncate text-xs text-slate-500 sm:inline dark:text-slate-400">
+                  <span className="hidden max-w-[140px] truncate text-xs text-stone-500 sm:inline">
                     {user.email}
                   </span>
-                  <button
-                    onClick={signOut}
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                  >
+                  <button onClick={signOut} className="btn-ghost px-4 py-2 text-sm">
                     Sign out
                   </button>
                 </div>
               ) : (
-                <button onClick={() => setAuthOpen(true)} className="btn-primary px-3.5 py-1.5 text-sm">
+                <button onClick={() => setAuthOpen(true)} className="btn-primary px-4 py-2 text-sm">
                   Sign in
                 </button>
               ))}
@@ -520,10 +499,24 @@ export default function App() {
       </header>
 
       {/* Main */}
-      <main className="mx-auto max-w-7xl px-4 py-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+      <main className="mx-auto max-w-7xl px-5 py-12 sm:py-16">
+        {/* App hero */}
+        <div className="mb-12 max-w-3xl animate-fade-in">
+          <h2 className="text-4xl font-black leading-[1.02] tracking-tighter text-cream sm:text-6xl">
+            Generate notes
+            <span className="block bg-gradient-to-r from-brand-400 to-fuchsia-400 bg-clip-text text-transparent">
+              from anything.
+            </span>
+          </h2>
+          <p className="mt-4 max-w-xl text-base text-stone-500">
+            Paste text, drop a PDF or photo, link a YouTube video, or record audio — six AI agents
+            turn it into faithful, cited study notes.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-5">
           {/* Left column */}
-          <div className="space-y-6 lg:col-span-2">
+          <div className="space-y-8 lg:col-span-2">
             <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} />
             <ControlPanel
               mode={mode}
@@ -543,13 +536,13 @@ export default function App() {
               isStreaming={isStreaming}
               canGenerate={!!inputText.trim()}
             />
-            <p className="text-center text-xs text-slate-400">
+            <p className="text-center text-xs text-stone-500">
               Tip: press{' '}
-              <kbd className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">
+              <kbd className="rounded-md border border-white/10 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px]">
                 Ctrl
               </kbd>{' '}
               +{' '}
-              <kbd className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">
+              <kbd className="rounded-md border border-white/10 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px]">
                 Enter
               </kbd>{' '}
               to generate
@@ -557,7 +550,7 @@ export default function App() {
             {isStreaming && (
               <button
                 onClick={cancel}
-                className="w-full rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 dark:border-red-900/60 dark:hover:bg-red-900/20"
+                className="w-full rounded-full border border-red-900/60 px-4 py-2.5 text-sm font-semibold text-red-400 transition-colors hover:bg-red-900/20"
               >
                 Cancel generation
               </button>
@@ -565,7 +558,7 @@ export default function App() {
           </div>
 
           {/* Right column */}
-          <div className="space-y-6 lg:col-span-3">
+          <div className="space-y-8 lg:col-span-3">
             <AgentStatus steps={agentSteps} critique={critique} />
             <PipelineInsights plan={plan} critique={critique} />
 
@@ -583,16 +576,16 @@ export default function App() {
               </div>
             )}
 
-            {/* Tab bar */}
-            <div className="scroll-area flex w-full gap-1 overflow-x-auto rounded-xl border border-slate-200/70 bg-white p-1 dark:border-slate-800 dark:bg-slate-900/50">
+            {/* Tab bar — pill group */}
+            <div className="scroll-area flex w-full gap-1.5 overflow-x-auto rounded-full border border-white/[0.06] bg-ink-900/80 p-1.5">
               {TABS.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setActiveTab(t.id)}
-                  className={`flex-1 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-200 ${
+                  className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
                     activeTab === t.id
-                      ? 'bg-brand-600 text-white shadow-soft'
-                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                      ? 'bg-brand-500 text-white shadow-soft'
+                      : 'text-stone-400 hover:bg-white/5 hover:text-white'
                   }`}
                 >
                   {t.label}
@@ -616,6 +609,7 @@ export default function App() {
                   rewriting={rewriting}
                   sources={sources}
                   onEditSelection={editSelection}
+                  streaming={isStreaming}
                 />
               )}
               {activeTab === 'quiz' && (

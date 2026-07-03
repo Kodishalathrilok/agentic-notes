@@ -27,7 +27,7 @@ export default function PipelineInsights({ plan, critique }) {
         onClick={() => setOpen((o) => !o)}
         className="flex w-full cursor-pointer items-center justify-between px-5 py-3.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40"
       >
-        <span className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+        <span className="text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
           Pipeline Insights
         </span>
         <span className={`text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>

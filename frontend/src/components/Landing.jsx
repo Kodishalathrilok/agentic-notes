@@ -83,17 +83,17 @@ function RotatingWord({ words }) {
   )
 }
 
-function Nav({ onLaunch, onEval, darkMode, setDarkMode, user, supabaseEnabled, onSignIn, onSignOut }) {
+function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
   const link =
-    'hidden rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 sm:inline-flex dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+    'hidden rounded-full px-4 py-2 text-sm font-semibold text-stone-400 transition-colors hover:bg-white/5 hover:text-white sm:inline-flex'
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+    <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+          <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />
           </span>
-          <span className="text-base font-extrabold tracking-tight">Agentic Notes</span>
+          <span className="text-base font-extrabold tracking-tight text-cream">Agentic Notes</span>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onEval} className={link}>
@@ -112,13 +112,6 @@ function Nav({ onLaunch, onEval, darkMode, setDarkMode, user, supabaseEnabled, o
                 Sign in
               </button>
             ))}
-          <button
-            onClick={() => setDarkMode((d) => !d)}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-            aria-label="Toggle dark mode"
-          >
-            {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
-          </button>
           <button onClick={onLaunch} className="btn-primary">
             Launch App
             <span aria-hidden>→</span>
@@ -129,14 +122,12 @@ function Nav({ onLaunch, onEval, darkMode, setDarkMode, user, supabaseEnabled, o
   )
 }
 
-export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user, supabaseEnabled, onSignIn, onSignOut }) {
+export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
   return (
-    <div className="min-h-screen overflow-x-hidden bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div className="min-h-screen overflow-x-hidden bg-ink-950 text-stone-300">
       <Nav
         onLaunch={onLaunch}
         onEval={onEval}
-        darkMode={darkMode}
-        setDarkMode={setDarkMode}
         user={user}
         supabaseEnabled={supabaseEnabled}
         onSignIn={onSignIn}
@@ -163,32 +154,32 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
 
         <div className="mx-auto max-w-4xl px-4 py-24 text-center sm:py-32">
           <div
-            className="mb-6 inline-flex animate-slide-up items-center gap-2 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700 dark:border-brand-800/60 dark:bg-brand-900/30 dark:text-brand-300"
+            className="mb-6 inline-flex animate-slide-up items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-300"
             style={{ animationDelay: '0ms' }}
           >
             <Icon.Sparkles className="h-3.5 w-3.5" />
             Multi-agent · self-correcting · faithfulness-checked
           </div>
 
-          <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl">
+          <h1 className="text-5xl font-black leading-[0.98] tracking-tighter text-cream sm:text-7xl md:text-8xl">
             <TextEffect per="word" preset="slide" as="span" className="block" stagger={0.08} startDelay={0.05}>
-              Study notes that
+              Generate notes
             </TextEffect>
             <TextEffect
               per="word"
               preset="slide"
               as="span"
               className="block"
-              unitClassName="bg-gradient-to-r from-brand-500 via-fuchsia-500 to-brand-700 bg-clip-text text-transparent"
+              unitClassName="bg-gradient-to-r from-brand-400 via-fuchsia-400 to-brand-500 bg-clip-text text-transparent"
               stagger={0.08}
               startDelay={0.29}
             >
-              fact-check themselves
+              from anything.
             </TextEffect>
           </h1>
 
           <p
-            className="mx-auto mt-6 max-w-2xl animate-slide-up text-lg text-slate-600 dark:text-slate-300"
+            className="mx-auto mt-7 max-w-2xl animate-slide-up text-lg text-stone-400"
             style={{ animationDelay: '300ms' }}
           >
             A pipeline of AI agents plans, writes, critiques, and revises your notes — checking every
@@ -196,7 +187,7 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
           </p>
 
           <p
-            className="mt-3 animate-slide-up text-base text-slate-500 dark:text-slate-400"
+            className="mt-3 animate-slide-up text-base text-stone-500"
             style={{ animationDelay: '380ms' }}
           >
             Turn <RotatingWord words={SOURCES} /> into exam-ready notes.
@@ -224,10 +215,10 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
       </section>
 
       {/* How it works */}
-      <section className="mx-auto max-w-6xl px-4 py-16">
+      <section className="mx-auto max-w-6xl px-5 py-24">
         <Reveal className="mb-10 text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight">How it works</h2>
-          <p className="mt-2 text-slate-500 dark:text-slate-400">
+          <h2 className="display-title">How it works</h2>
+          <p className="mt-2 text-stone-500">
             Six specialized agents, with a self-correcting critique loop at the core.
           </p>
         </Reveal>
@@ -238,18 +229,18 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
               <div
                 className={`w-40 rounded-2xl border p-4 text-center transition-shadow hover:shadow-lift ${
                   step.name === 'Critique' || step.name === 'Revise'
-                    ? 'border-brand-300 bg-brand-50/60 dark:border-brand-700/60 dark:bg-brand-900/20'
-                    : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900/50'
+                    ? 'border-brand-500/30 bg-brand-500/10'
+                    : 'border-white/[0.06] bg-ink-900'
                 }`}
               >
                 <div className="mx-auto mb-2 flex h-8 w-8 items-center justify-center rounded-full bg-brand-600 text-sm font-bold text-white">
                   {i + 1}
                 </div>
-                <div className="text-sm font-bold">{step.name}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{step.desc}</div>
+                <div className="text-sm font-bold text-cream">{step.name}</div>
+                <div className="mt-1 text-xs text-stone-500">{step.desc}</div>
               </div>
               {i < PIPELINE.length - 1 && (
-                <span className="hidden text-slate-300 dark:text-slate-600 lg:inline" aria-hidden>
+                <span className="hidden text-stone-600 lg:inline" aria-hidden>
                   →
                 </span>
               )}
@@ -257,27 +248,27 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
           ))}
         </div>
 
-        <Reveal delay={200} className="mx-auto mt-6 max-w-md rounded-xl border border-brand-200 bg-brand-50/60 px-4 py-3 text-center text-sm text-brand-700 dark:border-brand-800/60 dark:bg-brand-900/20 dark:text-brand-300">
+        <Reveal delay={200} className="mx-auto mt-6 max-w-md rounded-xl border border-brand-500/25 bg-brand-500/10 px-4 py-3 text-center text-sm text-brand-300">
           <Icon.Refresh className="mr-1.5 inline h-4 w-4" />
           Critique → Revise repeats until the notes are faithful and complete.
         </Reveal>
       </section>
 
       {/* Features */}
-      <section className="bg-white py-16 dark:bg-slate-900/40">
+      <section className="bg-ink-900/40 py-24">
         <div className="mx-auto max-w-6xl px-4">
           <Reveal className="mb-10 text-center">
-            <h2 className="text-3xl font-extrabold tracking-tight">Everything you need to study</h2>
+            <h2 className="display-title">Everything you need to study</h2>
           </Reveal>
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((f, i) => (
               <Reveal key={f.title} delay={(i % 3) * 90}>
                 <div className="card h-full p-6 transition-shadow duration-200 hover:shadow-lift">
-                  <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-900/30 dark:text-brand-300">
+                  <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-500/15 text-brand-300">
                     <f.icon className="h-5 w-5" />
                   </span>
-                  <h3 className="mb-1.5 text-base font-bold">{f.title}</h3>
-                  <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-400">{f.body}</p>
+                  <h3 className="mb-1.5 text-base font-bold text-cream">{f.title}</h3>
+                  <p className="text-sm leading-relaxed text-stone-400">{f.body}</p>
                 </div>
               </Reveal>
             ))}
@@ -286,22 +277,22 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
       </section>
 
       {/* Engineered for quality */}
-      <section className="mx-auto max-w-6xl px-4 py-16">
+      <section className="mx-auto max-w-6xl px-5 py-24">
         <Reveal className="mb-10 text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight">Engineered for quality</h2>
-          <p className="mt-2 text-slate-500 dark:text-slate-400">
+          <h2 className="display-title">Engineered for quality</h2>
+          <p className="mt-2 text-stone-500">
             The parts that separate a real system from an API wrapper.
           </p>
         </Reveal>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {QUALITY.map(([title, body], i) => (
             <Reveal key={title} delay={(i % 3) * 90}>
-              <div className="h-full rounded-2xl border border-slate-200 p-5 dark:border-slate-800">
+              <div className="h-full rounded-3xl border border-white/[0.06] bg-ink-900/60 p-6">
                 <div className="mb-1.5 flex items-center gap-2">
                   <Icon.Check className="h-4 w-4 text-green-500" />
-                  <h3 className="text-sm font-bold">{title}</h3>
+                  <h3 className="text-sm font-bold text-cream">{title}</h3>
                 </div>
-                <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-400">{body}</p>
+                <p className="text-sm leading-relaxed text-stone-400">{body}</p>
               </div>
             </Reveal>
           ))}
@@ -311,7 +302,7 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
           {STACK.map((t) => (
             <span
               key={t}
-              className="chip border border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300"
+              className="chip border border-white/10 bg-ink-900 text-stone-400"
             >
               {t}
             </span>
@@ -324,7 +315,7 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
         <Reveal className="mx-auto max-w-4xl">
           <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-600 to-brand-800 px-6 py-14 text-center text-white shadow-lift">
             <div className="animate-float-blob pointer-events-none absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
-            <h2 className="text-3xl font-extrabold tracking-tight">Ready to study smarter?</h2>
+            <h2 className="display-title">Ready to study smarter?</h2>
             <p className="mx-auto mt-2 max-w-xl text-brand-100">
               Turn any source into structured notes, a quiz, and flashcards in under a minute.
             </p>
@@ -340,10 +331,10 @@ export default function Landing({ onLaunch, onEval, darkMode, setDarkMode, user,
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 py-8 dark:border-slate-800">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-sm text-slate-500 sm:flex-row">
+      <footer className="border-t border-white/[0.06] py-10">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-sm text-stone-500 sm:flex-row">
           <span>Agentic AI Notes Generator</span>
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="hover:text-brand-600 dark:hover:text-brand-400">
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="hover:text-brand-400">
             github.com/Kodishalathrilok/agentic-notes
           </a>
         </div>

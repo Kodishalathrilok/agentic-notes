@@ -94,53 +94,47 @@ function triggerDownload(blob, filename) {
   URL.revokeObjectURL(url)
 }
 
+const RATE_STYLES = {
+  again: 'bg-red-500/15 text-red-300 hover:bg-red-500/25',
+  good: 'bg-brand-500/20 text-brand-300 hover:bg-brand-500/30',
+  easy: 'bg-green-500/15 text-green-300 hover:bg-green-500/25',
+}
+
 export default function FlashcardPanel({ flashcards, onRegenerate, regenerating }) {
   const parsed = useMemo(() => parseFlashcards(flashcards), [flashcards])
   const [order, setOrder] = useState(parsed)
-  const [index, setIndex] = useState(0)
-  const [flipped, setFlipped] = useState(false)
+  const [flippedIds, setFlippedIds] = useState(() => new Set())
   const [exporting, setExporting] = useState(false)
   const [srs, setSrs] = useState(loadSRS)
   const [dueOnly, setDueOnly] = useState(false)
 
   useEffect(() => {
     setOrder(parsed)
-    setIndex(0)
-    setFlipped(false)
+    setFlippedIds(new Set())
     setDueOnly(false)
   }, [parsed])
 
   const dueCount = parsed.filter((c) => isDue(c, srs)).length
 
-  const go = (delta) => {
-    setFlipped(false)
-    setIndex((i) => (i + delta + order.length) % order.length)
+  const toggleFlip = (i) => {
+    setFlippedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
   }
 
-  // Keyboard shortcuts: ← / → navigate, Space flips.
-  useEffect(() => {
-    const onKey = (e) => {
-      const tag = (e.target.tagName || '').toLowerCase()
-      if (tag === 'input' || tag === 'textarea') return
-      if (e.key === 'ArrowRight') go(1)
-      else if (e.key === 'ArrowLeft') go(-1)
-      else if (e.key === ' ') {
-        e.preventDefault()
-        setFlipped((f) => !f)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order.length])
-
-  const rate = (level) => {
-    const card = order[index]
-    if (!card) return
+  const rate = (card, level, i) => {
     const next = { ...srs, [cardKey(card)]: schedule(srs[cardKey(card)], level) }
     setSrs(next)
     saveSRS(next)
-    go(1)
+    // unflip the rated card
+    setFlippedIds((prev) => {
+      const n = new Set(prev)
+      n.delete(i)
+      return n
+    })
   }
 
   const toggleDueOnly = () => {
@@ -152,8 +146,12 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
       setOrder(parsed)
       setDueOnly(false)
     }
-    setIndex(0)
-    setFlipped(false)
+    setFlippedIds(new Set())
+  }
+
+  const shuffle = () => {
+    setOrder(shuffleArray(order))
+    setFlippedIds(new Set())
   }
 
   const exportCsv = async () => {
@@ -176,14 +174,10 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
 
   if (!flashcards || order.length === 0) {
     return (
-      <div className="flex h-48 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-slate-300 text-sm text-slate-400 dark:border-slate-600">
+      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-white/10 text-sm text-stone-500">
         No flashcards yet. Generate notes to create flashcards.
         {onRegenerate && (
-          <button
-            onClick={onRegenerate}
-            disabled={regenerating}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70"
-          >
+          <button onClick={onRegenerate} disabled={regenerating} className="pill">
             <Icon.Refresh className="h-3.5 w-3.5" />
             {regenerating ? 'Generating…' : 'Generate flashcards from notes'}
           </button>
@@ -192,121 +186,85 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
     )
   }
 
-  const card = order[index]
-
-  const fcBtn =
-    'inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors cursor-pointer hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70 dark:hover:text-white'
-
-  const shuffle = () => {
-    setOrder(shuffleArray(order))
-    setIndex(0)
-    setFlipped(false)
-  }
-
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="flex w-full flex-wrap items-center justify-between gap-2">
-        <span className="text-sm text-slate-500 dark:text-slate-400">
-          Card {index + 1} of {order.length}
+    <div className="space-y-5">
+      {/* Controls — pill group */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-stone-500">
+          {order.length} cards · {dueCount} due
         </span>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={toggleDueOnly}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
-              dueOnly
-                ? 'border-brand-500 bg-brand-50 text-brand-600 dark:bg-brand-900/30 dark:text-brand-300'
-                : 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70'
-            }`}
+            className={`pill ${dueOnly ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : ''}`}
           >
             <Icon.Star className={`h-3.5 w-3.5 ${dueOnly ? 'fill-current' : ''}`} />
             {dueOnly ? 'Due only' : `Due (${dueCount})`}
           </button>
           {onRegenerate && (
-            <button onClick={onRegenerate} disabled={regenerating} className={fcBtn}>
+            <button onClick={onRegenerate} disabled={regenerating} className="pill">
               <Icon.Refresh className="h-3.5 w-3.5" />
               {regenerating ? 'Generating…' : 'New cards'}
             </button>
           )}
-          <button onClick={exportCsv} disabled={exporting} className={fcBtn}>
+          <button onClick={exportCsv} disabled={exporting} className="pill">
             <Icon.Download className="h-3.5 w-3.5" />
             {exporting ? 'Exporting…' : 'Anki CSV'}
           </button>
-          <button onClick={shuffle} className={fcBtn}>
+          <button onClick={shuffle} className="pill">
             <Icon.Shuffle className="h-3.5 w-3.5" />
             Shuffle
           </button>
         </div>
       </div>
 
-      <div
-        className="flip-card h-56 w-full max-w-md cursor-pointer"
-        onClick={() => setFlipped((f) => !f)}
-      >
-        <div className={`flip-card-inner ${flipped ? 'flipped' : ''}`}>
-          <div className="flip-face rounded-2xl border border-slate-200 bg-white p-6 shadow-md dark:border-slate-700 dark:bg-slate-800">
-            <div className="text-center">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
-                Front
-              </div>
-              <div className="text-lg font-medium text-slate-800 dark:text-slate-100">
-                {card.front}
+      {/* Card grid — mobile-first: 1 col → 2 (sm) → 3 (xl) */}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        {order.map((card, i) => {
+          const flipped = flippedIds.has(i)
+          return (
+            <div
+              key={`${cardKey(card)}-${i}`}
+              onClick={() => toggleFlip(i)}
+              className="flip-card h-56 cursor-pointer transition-transform duration-300 hover:-translate-y-1.5"
+            >
+              <div className={`flip-card-inner ${flipped ? 'flipped' : ''}`}>
+                {/* Front */}
+                <div className="flip-face rounded-3xl border border-white/[0.06] bg-ink-900 p-6 shadow-card transition-shadow hover:shadow-lift">
+                  <div className="text-center">
+                    <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-400">
+                      Front
+                    </div>
+                    <div className="text-lg font-semibold leading-snug text-cream">{card.front}</div>
+                    <div className="mt-4 text-[11px] text-stone-500">tap to flip</div>
+                  </div>
+                </div>
+                {/* Back */}
+                <div className="flip-face flip-face-back flex-col rounded-3xl border border-brand-500/25 bg-gradient-to-br from-ink-900 to-brand-900/30 p-6 shadow-card">
+                  <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+                    <div>
+                      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-400">
+                        Back
+                      </div>
+                      <div className="text-sm leading-relaxed text-stone-200">{card.back}</div>
+                    </div>
+                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      {['again', 'good', 'easy'].map((level) => (
+                        <button
+                          key={level}
+                          onClick={() => rate(card, level, i)}
+                          className={`rounded-full px-4 py-1.5 text-xs font-semibold capitalize transition-colors ${RATE_STYLES[level]}`}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flip-face flip-face-back rounded-2xl border border-brand-200 bg-brand-50 p-6 shadow-md dark:border-brand-800 dark:bg-brand-900/30">
-            <div className="text-center">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-500">
-                Back
-              </div>
-              <div className="text-base text-slate-800 dark:text-slate-100">{card.back}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <p className="text-xs text-slate-400">
-        Click or press <kbd className="rounded bg-slate-200 px-1 dark:bg-slate-700">Space</kbd> to flip ·{' '}
-        <kbd className="rounded bg-slate-200 px-1 dark:bg-slate-700">←</kbd>
-        <kbd className="rounded bg-slate-200 px-1 dark:bg-slate-700">→</kbd> to navigate
-      </p>
-
-      {/* Spaced-repetition rating (rate then auto-advance) */}
-      {flipped && (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => rate('again')}
-            className="rounded-lg bg-red-100 px-4 py-1.5 text-sm font-medium text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300"
-          >
-            Again
-          </button>
-          <button
-            onClick={() => rate('good')}
-            className="rounded-lg bg-brand-100 px-4 py-1.5 text-sm font-medium text-brand-700 hover:bg-brand-200 dark:bg-brand-900/30 dark:text-brand-300"
-          >
-            Good
-          </button>
-          <button
-            onClick={() => rate('easy')}
-            className="rounded-lg bg-green-100 px-4 py-1.5 text-sm font-medium text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300"
-          >
-            Easy
-          </button>
-        </div>
-      )}
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => go(-1)}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
-        >
-          ← Previous
-        </button>
-        <button
-          onClick={() => go(1)}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
-        >
-          Next →
-        </button>
+          )
+        })}
       </div>
     </div>
   )

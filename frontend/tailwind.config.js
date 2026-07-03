@@ -9,6 +9,14 @@ export default {
         mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
       },
       colors: {
+        // Warm near-black base (premium dark theme)
+        ink: {
+          950: '#0d0a0a',
+          900: '#151110',
+          800: '#1e1917',
+          700: '#2b2422',
+        },
+        cream: '#f2ede4',
         // Brand accent — indigo (kept distinct from green/red/amber semantics)
         brand: {
           50: '#eef2ff',
@@ -24,9 +32,9 @@ export default {
         },
       },
       boxShadow: {
-        soft: '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.06)',
-        card: '0 1px 3px 0 rgb(0 0 0 / 0.05), 0 4px 16px -4px rgb(0 0 0 / 0.06)',
-        lift: '0 8px 30px -8px rgb(79 70 229 / 0.25)',
+        soft: '0 1px 2px 0 rgb(0 0 0 / 0.3)',
+        card: '0 1px 3px 0 rgb(0 0 0 / 0.35), 0 12px 32px -12px rgb(0 0 0 / 0.5)',
+        lift: '0 10px 40px -10px rgb(99 102 241 / 0.35)',
       },
       borderRadius: {
         xl: '0.875rem',

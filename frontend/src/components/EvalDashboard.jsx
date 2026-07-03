@@ -52,7 +52,7 @@ function Stat({ label, value, sub }) {
   )
 }
 
-export default function EvalDashboard({ onBack, darkMode, setDarkMode }) {
+export default function EvalDashboard({ onBack }) {
   const [state, setState] = useState({ loading: true })
 
   useEffect(() => {
@@ -74,33 +74,24 @@ export default function EvalDashboard({ onBack, darkMode, setDarkMode }) {
     : null
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/70 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/70">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+    <div className="min-h-screen bg-ink-950 text-stone-300">
+      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <button onClick={onBack} className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
-            <span className="text-base font-extrabold tracking-tight">Agentic Notes</span>
+            <span className="text-base font-extrabold tracking-tight text-cream">Agentic Notes</span>
           </button>
-          <div className="flex items-center gap-2">
-            <button onClick={onBack} className="btn-ghost">
-              ← Back to app
-            </button>
-            <button
-              onClick={() => setDarkMode((d) => !d)}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
-              aria-label="Toggle dark mode"
-            >
-              {darkMode ? <Icon.Sun className="h-4 w-4" /> : <Icon.Moon className="h-4 w-4" />}
-            </button>
-          </div>
+          <button onClick={onBack} className="btn-ghost">
+            ← Back to app
+          </button>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-10">
         <div className="mb-8">
-          <h1 className="text-3xl font-extrabold tracking-tight">Pipeline evaluation</h1>
+          <h1 className="display-title">Pipeline evaluation</h1>
           <p className="mt-2 max-w-2xl text-slate-500 dark:text-slate-400">
             An independent LLM-judge scores generated notes for faithfulness, coverage, clarity, and
             quiz-answer accuracy — comparing the basic pipeline against the full self-correcting one.

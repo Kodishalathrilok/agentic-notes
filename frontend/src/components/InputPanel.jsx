@@ -174,21 +174,21 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
 
   // ----- Render ------------------------------------------------------------
   return (
-    <div className="card p-5">
-      <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-        Input
+    <div className="card p-6 sm:p-7">
+      <h2 className="mb-5 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
+        Source
       </h2>
 
-      {/* Tab switcher */}
-      <div className="mb-4 inline-flex rounded-xl border border-slate-200/70 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-900/50">
+      {/* Tab switcher — pills */}
+      <div className="scroll-area mb-5 flex gap-1 overflow-x-auto rounded-full border border-white/[0.06] bg-ink-800/60 p-1">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-all duration-200 ${
+            className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-semibold transition-all duration-200 ${
               tab === t.id
-                ? 'bg-white text-brand-600 shadow-soft dark:bg-slate-700 dark:text-brand-300'
-                : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                ? 'bg-brand-500 text-white shadow-soft'
+                : 'text-stone-400 hover:text-white'
             }`}
           >
             {t.label}
