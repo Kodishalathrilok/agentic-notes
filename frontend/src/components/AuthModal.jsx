@@ -48,7 +48,7 @@ export default function AuthModal({ onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+ className="fixed inset-0 z-50 flex items-center justify-center bg-espresso-900/50 p-4 backdrop-blur-sm"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="card w-full max-w-sm animate-slide-up p-6">
@@ -61,7 +61,7 @@ export default function AuthModal({ onClose }) {
 
         <button
           onClick={google}
-          className="mb-3 flex w-full items-center justify-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+ className="mb-3 flex w-full items-center justify-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
         >
           <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" />
@@ -85,7 +85,7 @@ export default function AuthModal({ onClose }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email"
-            className="field"
+ className="field"
             autoFocus
           />
           <input
@@ -95,7 +95,7 @@ export default function AuthModal({ onClose }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password (min 6 chars)"
-            className="field"
+ className="field"
           />
 
           {error && (
@@ -122,7 +122,7 @@ export default function AuthModal({ onClose }) {
               setError(null)
               setNotice(null)
             }}
-            className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+ className="font-semibold text-brand-600 hover:underline dark:text-brand-600"
           >
             {mode === 'signup' ? 'Sign in' : 'Sign up'}
           </button>

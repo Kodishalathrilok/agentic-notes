@@ -32,7 +32,7 @@ function StatusIcon({ status }) {
 
 const COLORS = {
   pending: 'text-slate-400 dark:text-slate-500',
-  active: 'text-brand-600 dark:text-brand-400',
+  active: 'text-brand-600 dark:text-brand-600',
   done: 'text-green-600 dark:text-green-400',
   error: 'text-red-600 dark:text-red-400',
 }
@@ -40,7 +40,7 @@ const COLORS = {
 export default function AgentStatus({ steps, critique }) {
   return (
     <div className="card p-5">
-      <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
+      <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-espresso-500">
         Agent Pipeline
       </h2>
       <ol className="space-y-2">
@@ -49,7 +49,7 @@ export default function AgentStatus({ steps, critique }) {
           return (
             <li
               key={s.step}
-              className={`flex items-start gap-3 rounded-xl px-3 py-2 transition-all duration-300 ${
+ className={`flex items-start gap-3 rounded-xl px-3 py-2 transition-all duration-300 ${
                 s.status === 'active'
                   ? 'bg-brand-50 dark:bg-brand-900/20'
                   : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
@@ -64,7 +64,7 @@ export default function AgentStatus({ steps, critique }) {
                     {s.step}
                   </span>
                   {isCritique && critique && typeof critique.score === 'number' && (
-                    <span className="rounded-full bg-brand-100 px-2 py-0.5 text-xs font-semibold text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
+                    <span className="rounded-full bg-brand-100 px-2 py-0.5 text-xs font-semibold text-brand-700 dark:bg-brand-900/40 dark:text-brand-700">
                       {critique.score}/10
                     </span>
                   )}

@@ -96,7 +96,7 @@ function triggerDownload(blob, filename) {
 
 const RATE_STYLES = {
   again: 'bg-red-500/15 text-red-300 hover:bg-red-500/25',
-  good: 'bg-brand-500/20 text-brand-300 hover:bg-brand-500/30',
+  good: 'bg-brand-500/20 text-brand-700 hover:bg-brand-500/30',
   easy: 'bg-green-500/15 text-green-300 hover:bg-green-500/25',
 }
 
@@ -174,7 +174,7 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
 
   if (!flashcards || order.length === 0) {
     return (
-      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-white/10 text-sm text-stone-500">
+      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-espresso-900/15 text-sm text-espresso-500">
         No flashcards yet. Generate notes to create flashcards.
         {onRegenerate && (
           <button onClick={onRegenerate} disabled={regenerating} className="pill">
@@ -190,13 +190,13 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
     <div className="space-y-5">
       {/* Controls — pill group */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm text-stone-500">
+        <span className="text-sm text-espresso-500">
           {order.length} cards · {dueCount} due
         </span>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={toggleDueOnly}
-            className={`pill ${dueOnly ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : ''}`}
+ className={`pill ${dueOnly ? 'border-brand-500/50 bg-brand-500/15 text-brand-700' : ''}`}
           >
             <Icon.Star className={`h-3.5 w-3.5 ${dueOnly ? 'fill-current' : ''}`} />
             {dueOnly ? 'Due only' : `Due (${dueCount})`}
@@ -226,34 +226,34 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
             <div
               key={`${cardKey(card)}-${i}`}
               onClick={() => toggleFlip(i)}
-              className="flip-card h-56 cursor-pointer transition-transform duration-300 hover:-translate-y-1.5"
+ className="flip-card h-56 cursor-pointer transition-transform duration-300 hover:-translate-y-1.5"
             >
               <div className={`flip-card-inner ${flipped ? 'flipped' : ''}`}>
                 {/* Front */}
-                <div className="flip-face rounded-3xl border border-white/[0.06] bg-ink-900 p-6 shadow-card transition-shadow hover:shadow-lift">
+                <div className="flip-face rounded-3xl border border-espresso-900/10 bg-white p-6 shadow-card transition-shadow hover:shadow-lift">
                   <div className="text-center">
-                    <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-400">
+                    <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-600">
                       Front
                     </div>
-                    <div className="text-lg font-semibold leading-snug text-cream">{card.front}</div>
-                    <div className="mt-4 text-[11px] text-stone-500">tap to flip</div>
+                    <div className="text-lg font-semibold leading-snug text-espresso-900">{card.front}</div>
+                    <div className="mt-4 text-[11px] text-espresso-500">tap to flip</div>
                   </div>
                 </div>
                 {/* Back */}
-                <div className="flip-face flip-face-back flex-col rounded-3xl border border-brand-500/25 bg-gradient-to-br from-ink-900 to-brand-900/30 p-6 shadow-card">
+                <div className="flip-face flip-face-back flex-col rounded-3xl border border-espresso-900/30 bg-gradient-to-br from-espresso-700 to-espresso-900 p-6 shadow-card">
                   <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
                     <div>
-                      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-400">
+                      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-300">
                         Back
                       </div>
-                      <div className="text-sm leading-relaxed text-stone-200">{card.back}</div>
+                      <div className="text-sm leading-relaxed text-latte-100">{card.back}</div>
                     </div>
                     <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                       {['again', 'good', 'easy'].map((level) => (
                         <button
                           key={level}
                           onClick={() => rate(card, level, i)}
-                          className={`rounded-full px-4 py-1.5 text-xs font-semibold capitalize transition-colors ${RATE_STYLES[level]}`}
+ className={`rounded-full px-4 py-1.5 text-xs font-semibold capitalize transition-colors ${RATE_STYLES[level]}`}
                         >
                           {level}
                         </button>

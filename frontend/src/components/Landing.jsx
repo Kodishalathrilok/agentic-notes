@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from './Icons'
 import TextEffect from './TextEffect'
+import MenuOverlay from './MenuOverlay'
 
 const GITHUB_URL = 'https://github.com/Kodishalathrilok/agentic-notes'
 
@@ -58,7 +59,7 @@ function Reveal({ children, delay = 0, className = '' }) {
     <div
       ref={ref}
       style={{ transitionDelay: `${delay}ms` }}
-      className={`transition-all duration-700 ease-out ${
+ className={`transition-all duration-700 ease-out ${
         shown ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0'
       } ${className}`}
     >
@@ -76,24 +77,24 @@ function RotatingWord({ words }) {
   return (
     <span
       key={i}
-      className="inline-block animate-slide-up bg-gradient-to-r from-brand-500 to-brand-700 bg-clip-text font-bold text-transparent"
+ className="inline-block animate-slide-up bg-gradient-to-r from-espresso-700 to-espresso-900 bg-clip-text font-bold text-transparent"
     >
       {words[i]}
     </span>
   )
 }
 
-function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
+function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut, onMenu }) {
   const link =
-    'hidden rounded-full px-4 py-2 text-sm font-semibold text-stone-400 transition-colors hover:bg-white/5 hover:text-white sm:inline-flex'
+    'hidden rounded-full px-4 py-2 text-sm font-semibold text-espresso-600 transition-colors hover:bg-espresso-900/5 hover:text-espresso-900 sm:inline-flex'
   return (
-    <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+          <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />
           </span>
-          <span className="text-base font-extrabold tracking-tight text-cream">Agentic Notes</span>
+          <span className="text-base font-extrabold tracking-tight text-espresso-900">Agentic Notes</span>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onEval} className={link}>
@@ -116,6 +117,13 @@ function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
             Launch App
             <span aria-hidden>→</span>
           </button>
+          <button
+            onClick={onMenu}
+            aria-label="Open menu"
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
+          >
+            <Icon.Menu className="h-5 w-5" />
+          </button>
         </div>
       </div>
     </header>
@@ -123,8 +131,17 @@ function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
 }
 
 export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const heroRef = useRef(null)
+  const onHeroMove = (e) => {
+    const el = heroRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    el.style.setProperty('--mx', `${e.clientX - r.left}px`)
+    el.style.setProperty('--my', `${e.clientY - r.top}px`)
+  }
   return (
-    <div className="min-h-screen overflow-x-hidden bg-ink-950 text-stone-300">
+    <div className="min-h-screen overflow-x-hidden bg-latte-100 text-espresso-800">
       <Nav
         onLaunch={onLaunch}
         onEval={onEval}
@@ -132,18 +149,33 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
         supabaseEnabled={supabaseEnabled}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
+        onMenu={() => setMenuOpen(true)}
       />
 
-      {/* Hero */}
-      <section className="relative overflow-hidden">
+      <MenuOverlay
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        items={[
+          { label: 'Launch App', onClick: onLaunch },
+          { label: 'Eval', onClick: onEval },
+          { label: 'GitHub', href: GITHUB_URL },
+          ...(supabaseEnabled
+            ? [user ? { label: 'Sign out', onClick: onSignOut } : { label: 'Sign in', onClick: onSignIn }]
+            : []),
+        ]}
+      />
+
+      {/* Hero — cursor spotlight follows the mouse */}
+      <section ref={heroRef} onMouseMove={onHeroMove} className="relative overflow-hidden">
+        <div className="spotlight pointer-events-none absolute inset-0 -z-[5]" />
         <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="animate-float-blob absolute left-[15%] top-[-8%] h-[360px] w-[360px] rounded-full bg-brand-400/25 blur-3xl dark:bg-brand-600/20" />
+          <div className="animate-float-blob absolute left-[15%] top-[-8%] h-[360px] w-[360px] rounded-full bg-brand-500/25 blur-3xl dark:bg-brand-600/20" />
           <div
-            className="animate-float-blob absolute right-[10%] top-[10%] h-[320px] w-[320px] rounded-full bg-fuchsia-400/20 blur-3xl dark:bg-fuchsia-600/15"
+ className="animate-float-blob absolute right-[10%] top-[10%] h-[320px] w-[320px] rounded-full bg-rose-300/40 blur-3xl"
             style={{ animationDelay: '-6s' }}
           />
           <div
-            className="absolute inset-0 opacity-[0.04] dark:opacity-[0.07]"
+ className="absolute inset-0 opacity-[0.04] dark:opacity-[0.07]"
             style={{
               backgroundImage:
                 'linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px)',
@@ -154,14 +186,17 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
 
         <div className="mx-auto max-w-4xl px-4 py-24 text-center sm:py-32">
           <div
-            className="mb-6 inline-flex animate-slide-up items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-300"
+ className="mb-6 inline-flex animate-slide-up items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-700"
             style={{ animationDelay: '0ms' }}
           >
             <Icon.Sparkles className="h-3.5 w-3.5" />
             Multi-agent · self-correcting · faithfulness-checked
           </div>
 
-          <h1 className="text-5xl font-black leading-[0.98] tracking-tighter text-cream sm:text-7xl md:text-8xl">
+          <p className="mb-1 animate-slide-up font-display text-2xl font-semibold text-espresso-600 sm:text-3xl" style={{ animationDelay: '20ms' }}>
+            psst — move your cursor ✦
+          </p>
+          <h1 className="font-display text-7xl font-bold leading-[0.9] text-espresso-900 sm:text-8xl md:text-9xl">
             <TextEffect per="word" preset="slide" as="span" className="block" stagger={0.08} startDelay={0.05}>
               Generate notes
             </TextEffect>
@@ -169,8 +204,8 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
               per="word"
               preset="slide"
               as="span"
-              className="block"
-              unitClassName="bg-gradient-to-r from-brand-400 via-fuchsia-400 to-brand-500 bg-clip-text text-transparent"
+ className="block"
+              unitClassName="bg-gradient-to-r from-brand-600 via-rose-500 to-brand-700 bg-clip-text text-transparent"
               stagger={0.08}
               startDelay={0.29}
             >
@@ -179,7 +214,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
           </h1>
 
           <p
-            className="mx-auto mt-7 max-w-2xl animate-slide-up text-lg text-stone-400"
+ className="mx-auto mt-7 max-w-2xl animate-slide-up text-lg text-espresso-600"
             style={{ animationDelay: '300ms' }}
           >
             A pipeline of AI agents plans, writes, critiques, and revises your notes — checking every
@@ -187,14 +222,14 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
           </p>
 
           <p
-            className="mt-3 animate-slide-up text-base text-stone-500"
+ className="mt-3 animate-slide-up text-base text-espresso-500"
             style={{ animationDelay: '380ms' }}
           >
             Turn <RotatingWord words={SOURCES} /> into exam-ready notes.
           </p>
 
           <div
-            className="mt-9 flex animate-slide-up flex-wrap items-center justify-center gap-3"
+ className="mt-9 flex animate-slide-up flex-wrap items-center justify-center gap-3"
             style={{ animationDelay: '460ms' }}
           >
             <button onClick={onLaunch} className="btn-primary px-6 py-3 text-base">
@@ -206,7 +241,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
             </a>
           </div>
           <p
-            className="mt-4 animate-slide-up text-xs text-slate-400"
+ className="mt-4 animate-slide-up text-xs text-slate-400"
             style={{ animationDelay: '540ms' }}
           >
             Powered by Llama on Groq, Gemini & local Ollama — with automatic failover
@@ -214,11 +249,22 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
         </div>
       </section>
 
+      {/* Marquee */}
+      <div className="marquee overflow-hidden border-y border-espresso-900/10 py-4">
+        <div className="marquee-track">
+          {[0, 1].map((n) => (
+            <span key={n} aria-hidden={n === 1} className="font-display text-3xl font-semibold text-espresso-800">
+              {'PDF → Notes ✦ YouTube → Quiz ✦ Photo → Flashcards ✦ Audio → Notes ✦ Paste → Study ✦ '.repeat(2)}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {/* How it works */}
       <section className="mx-auto max-w-6xl px-5 py-24">
         <Reveal className="mb-10 text-center">
           <h2 className="display-title">How it works</h2>
-          <p className="mt-2 text-stone-500">
+          <p className="mt-2 text-espresso-500">
             Six specialized agents, with a self-correcting critique loop at the core.
           </p>
         </Reveal>
@@ -227,20 +273,20 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
           {PIPELINE.map((step, i) => (
             <Reveal key={step.name} delay={i * 90} className="flex items-center gap-3">
               <div
-                className={`w-40 rounded-2xl border p-4 text-center transition-shadow hover:shadow-lift ${
+ className={`w-40 rounded-2xl border p-4 text-center transition-shadow hover:shadow-lift ${
                   step.name === 'Critique' || step.name === 'Revise'
                     ? 'border-brand-500/30 bg-brand-500/10'
-                    : 'border-white/[0.06] bg-ink-900'
+                    : 'border-espresso-900/10 bg-white'
                 }`}
               >
                 <div className="mx-auto mb-2 flex h-8 w-8 items-center justify-center rounded-full bg-brand-600 text-sm font-bold text-white">
                   {i + 1}
                 </div>
-                <div className="text-sm font-bold text-cream">{step.name}</div>
-                <div className="mt-1 text-xs text-stone-500">{step.desc}</div>
+                <div className="text-sm font-bold text-espresso-900">{step.name}</div>
+                <div className="mt-1 text-xs text-espresso-500">{step.desc}</div>
               </div>
               {i < PIPELINE.length - 1 && (
-                <span className="hidden text-stone-600 lg:inline" aria-hidden>
+                <span className="hidden text-espresso-500 lg:inline" aria-hidden>
                   →
                 </span>
               )}
@@ -248,14 +294,14 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
           ))}
         </div>
 
-        <Reveal delay={200} className="mx-auto mt-6 max-w-md rounded-xl border border-brand-500/25 bg-brand-500/10 px-4 py-3 text-center text-sm text-brand-300">
+        <Reveal delay={200} className="mx-auto mt-6 max-w-md rounded-xl border border-brand-500/25 bg-brand-500/10 px-4 py-3 text-center text-sm text-brand-700">
           <Icon.Refresh className="mr-1.5 inline h-4 w-4" />
           Critique → Revise repeats until the notes are faithful and complete.
         </Reveal>
       </section>
 
       {/* Features */}
-      <section className="bg-ink-900/40 py-24">
+      <section className="bg-espresso-900/[0.04] py-24">
         <div className="mx-auto max-w-6xl px-4">
           <Reveal className="mb-10 text-center">
             <h2 className="display-title">Everything you need to study</h2>
@@ -264,11 +310,11 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
             {FEATURES.map((f, i) => (
               <Reveal key={f.title} delay={(i % 3) * 90}>
                 <div className="card h-full p-6 transition-shadow duration-200 hover:shadow-lift">
-                  <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-500/15 text-brand-300">
+                  <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-500/15 text-brand-700">
                     <f.icon className="h-5 w-5" />
                   </span>
-                  <h3 className="mb-1.5 text-base font-bold text-cream">{f.title}</h3>
-                  <p className="text-sm leading-relaxed text-stone-400">{f.body}</p>
+                  <h3 className="mb-1.5 text-base font-bold text-espresso-900">{f.title}</h3>
+                  <p className="text-sm leading-relaxed text-espresso-600">{f.body}</p>
                 </div>
               </Reveal>
             ))}
@@ -280,19 +326,19 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
       <section className="mx-auto max-w-6xl px-5 py-24">
         <Reveal className="mb-10 text-center">
           <h2 className="display-title">Engineered for quality</h2>
-          <p className="mt-2 text-stone-500">
+          <p className="mt-2 text-espresso-500">
             The parts that separate a real system from an API wrapper.
           </p>
         </Reveal>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {QUALITY.map(([title, body], i) => (
             <Reveal key={title} delay={(i % 3) * 90}>
-              <div className="h-full rounded-3xl border border-white/[0.06] bg-ink-900/60 p-6">
+              <div className="h-full rounded-3xl border border-espresso-900/10 bg-white/60 p-6">
                 <div className="mb-1.5 flex items-center gap-2">
                   <Icon.Check className="h-4 w-4 text-green-500" />
-                  <h3 className="text-sm font-bold text-cream">{title}</h3>
+                  <h3 className="text-sm font-bold text-espresso-900">{title}</h3>
                 </div>
-                <p className="text-sm leading-relaxed text-stone-400">{body}</p>
+                <p className="text-sm leading-relaxed text-espresso-600">{body}</p>
               </div>
             </Reveal>
           ))}
@@ -302,7 +348,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
           {STACK.map((t) => (
             <span
               key={t}
-              className="chip border border-white/10 bg-ink-900 text-stone-400"
+ className="chip border border-espresso-900/15 bg-white text-espresso-600"
             >
               {t}
             </span>
@@ -313,15 +359,15 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
       {/* CTA */}
       <section className="px-4 pb-20">
         <Reveal className="mx-auto max-w-4xl">
-          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-600 to-brand-800 px-6 py-14 text-center text-white shadow-lift">
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-espresso-800 to-espresso-900 px-6 py-14 text-center text-white shadow-lift">
             <div className="animate-float-blob pointer-events-none absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
             <h2 className="display-title">Ready to study smarter?</h2>
-            <p className="mx-auto mt-2 max-w-xl text-brand-100">
+            <p className="mx-auto mt-2 max-w-xl text-latte-200">
               Turn any source into structured notes, a quiz, and flashcards in under a minute.
             </p>
             <button
               onClick={onLaunch}
-              className="mt-7 inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 text-base font-bold text-brand-700 shadow-soft transition-transform hover:scale-[1.03] active:scale-100"
+ className="mt-7 inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 text-base font-bold text-brand-700 shadow-soft transition-transform hover:scale-[1.03] active:scale-100"
             >
               <Icon.Sparkles className="h-5 w-5" />
               Launch the app
@@ -331,10 +377,10 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/[0.06] py-10">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-sm text-stone-500 sm:flex-row">
+      <footer className="border-t border-espresso-900/10 py-10">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-sm text-espresso-500 sm:flex-row">
           <span>Agentic AI Notes Generator</span>
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="hover:text-brand-400">
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="hover:text-brand-600">
             github.com/Kodishalathrilok/agentic-notes
           </a>
         </div>

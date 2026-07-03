@@ -111,7 +111,7 @@ export default function ChatPanel({ notes, model }) {
                   <button
                     key={s}
                     onClick={() => setInput(s)}
-                    className="rounded-full border border-slate-300 px-3 py-1 text-xs hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-700"
+ className="rounded-full border border-slate-300 px-3 py-1 text-xs hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-700"
                   >
                     {s}
                   </button>
@@ -123,7 +123,7 @@ export default function ChatPanel({ notes, model }) {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[85%] space-y-0.5 rounded-2xl px-4 py-2 text-sm leading-relaxed ${
+ className={`max-w-[85%] space-y-0.5 rounded-2xl px-4 py-2 text-sm leading-relaxed ${
                 m.role === 'user'
                   ? 'bg-brand-600 text-white'
                   : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-100'
@@ -150,7 +150,7 @@ export default function ChatPanel({ notes, model }) {
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send()}
           placeholder="Ask about your notes…"
           disabled={busy}
-          className="field flex-1"
+ className="field flex-1"
         />
         <button onClick={send} disabled={busy || !input.trim()} className="btn-primary shrink-0">
           <Icon.Send className="h-4 w-4" />

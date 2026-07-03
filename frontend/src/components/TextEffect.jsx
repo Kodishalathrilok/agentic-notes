@@ -10,7 +10,7 @@ export default function TextEffect({
   per = 'word',
   as: Tag = 'span',
   preset = 'slide',
-  className = '',
+ className = '',
   unitClassName = '',
   stagger = 0.06,
   startDelay = 0,
@@ -23,7 +23,7 @@ export default function TextEffect({
     nodes.push(
       <span
         key={i}
-        className={`te-${preset} inline-block ${unitClassName}`}
+ className={`te-${preset} inline-block ${unitClassName}`}
         style={{ animationDelay: `${startDelay + i * stagger}s` }}
       >
         {unit}

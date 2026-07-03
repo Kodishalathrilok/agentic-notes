@@ -171,7 +171,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
           }}
           onMouseDown={(ev) => ev.preventDefault()} // keep selection
           onClick={() => setOpen(true)}
-          className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white shadow-lift dark:bg-white dark:text-slate-900"
+ className="flex items-center gap-1 rounded-lg bg-espresso-900 px-2.5 py-1 text-xs font-semibold text-white shadow-lift "
         >
           <Icon.Sparkles className="h-3.5 w-3.5" /> Ask AI
         </button>
@@ -181,9 +181,9 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
         <div
           ref={popRef}
           style={{ position: 'fixed', top, left, width: POP_W, maxHeight, zIndex: 50 }}
-          className="card flex flex-col p-3 shadow-lift"
+ className="card flex flex-col p-3 shadow-lift"
         >
-          <div className="mb-2 line-clamp-2 shrink-0 rounded-md bg-slate-50 px-2 py-1 text-xs italic text-slate-500 dark:bg-slate-900/50 dark:text-slate-400">
+          <div className="mb-2 line-clamp-2 shrink-0 rounded-md bg-slate-50 px-2 py-1 text-xs italic text-slate-500 dark:bg-espresso-900/50 dark:text-slate-400">
             “{sel.text}”
           </div>
           <input
@@ -192,7 +192,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && explain()}
             placeholder="Ask about it, or say how to change it…"
-            className="field mb-2 shrink-0 text-sm"
+ className="field mb-2 shrink-0 text-sm"
           />
           <div className="flex shrink-0 gap-2">
             <button onClick={explain} disabled={loading} className="btn-ghost flex-1 py-1.5 text-xs">
@@ -207,7 +207,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
           {answer && (
             <div
               ref={answerRef}
-              className="scroll-area mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto rounded-lg bg-slate-50 p-2 text-xs leading-relaxed text-slate-700 dark:bg-slate-900/50 dark:text-slate-200"
+ className="scroll-area mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto rounded-lg bg-slate-50 p-2 text-xs leading-relaxed text-slate-700 dark:bg-espresso-900/50 dark:text-slate-200"
             >
               {renderMd(answer)}
             </div>

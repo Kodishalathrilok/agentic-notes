@@ -31,7 +31,7 @@ function Select({ label, value, onChange, options, disabled }) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="field cursor-pointer"
+ className="field cursor-pointer"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -65,7 +65,7 @@ export default function ControlPanel({
 
   return (
     <div className="card p-5">
-      <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
+      <h2 className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-espresso-500">
         Settings
       </h2>
 
@@ -98,14 +98,14 @@ export default function ControlPanel({
           disabled={isStreaming}
           rows={2}
           placeholder="e.g. focus on formulas, add mnemonics, use UK spelling…"
-          className="field resize-y"
+ className="field resize-y"
         />
       </label>
 
       <button
         onClick={onGenerate}
         disabled={isStreaming || !canGenerate}
-        className="btn-primary mt-5 w-full py-2.5"
+ className="btn-primary mt-5 w-full py-2.5"
       >
         {isStreaming ? (
           <>

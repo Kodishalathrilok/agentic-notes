@@ -51,7 +51,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
           <button
             onClick={onRegenerate}
             disabled={regenerating}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70"
+ className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70"
           >
             <Icon.Refresh className="h-3.5 w-3.5" />
             {regenerating ? 'Generating…' : 'Generate quiz from notes'}
@@ -83,7 +83,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
       <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
         <div className="text-sm font-medium text-slate-600 dark:text-slate-300">
           {allAnswered ? (
-            <span className="text-brand-600 dark:text-brand-400">
+            <span className="text-brand-600 dark:text-brand-600">
               Final score: {score} / {questions.length}
             </span>
           ) : (
@@ -97,7 +97,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
             <button
               onClick={onRegenerate}
               disabled={regenerating}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70"
+ className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/70"
             >
               <Icon.Refresh className="h-3.5 w-3.5" />
               {regenerating ? 'Generating…' : 'New questions'}
@@ -105,7 +105,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
           )}
           <button
             onClick={reset}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+ className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
           >
             Reset Quiz
           </button>
@@ -117,7 +117,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
         return (
           <div
             key={qi}
-            className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
+ className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
           >
             <p className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
               {qi + 1}. {q.question}
@@ -141,7 +141,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
                     key={opt}
                     onClick={() => choose(qi, opt)}
                     disabled={!!chosen}
-                    className={`flex w-full items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${cls}`}
+ className={`flex w-full items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${cls}`}
                   >
                     <span className="font-semibold">{opt})</span>
                     <span>{q.options[opt]}</span>
@@ -151,7 +151,7 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
             </div>
 
             {chosen && (
-              <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-slate-900/40 dark:text-slate-300">
+              <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-espresso-900/40 dark:text-slate-300">
                 {chosen === q.answer ? (
                   <span className="font-medium text-green-600 dark:text-green-400">Correct! </span>
                 ) : (

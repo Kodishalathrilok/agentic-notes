@@ -65,7 +65,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
     <div className="card p-4 transition-shadow duration-200 hover:shadow-lift">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs text-slate-400">{formatDate(session.date)}</span>
-        <span className="chip bg-brand-50 capitalize text-brand-700 ring-1 ring-brand-100 dark:bg-brand-900/30 dark:text-brand-300 dark:ring-brand-800/50">
+        <span className="chip bg-brand-50 capitalize text-brand-700 ring-1 ring-brand-100 dark:bg-brand-900/30 dark:text-brand-700 dark:ring-brand-800/50">
           {session.mode}
         </span>
       </div>
@@ -79,7 +79,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
             onKeyDown={(e) => e.key === 'Enter' && saveTitle()}
             autoFocus
             placeholder="Session title…"
-            className="flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+ className="flex-1 rounded-lg border border-slate-300 px-2 py-1 text-sm dark:border-slate-600 dark:bg-espresso-900 dark:text-slate-100"
           />
           <button onClick={saveTitle} className="text-xs font-medium text-brand-600">
             Save
@@ -88,7 +88,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
       ) : (
         <button
           onClick={() => setEditingTitle(true)}
-          className="group mb-1 inline-flex items-center gap-1.5 text-left text-sm font-bold text-slate-800 hover:text-brand-600 dark:text-slate-100 dark:hover:text-brand-400"
+ className="group mb-1 inline-flex items-center gap-1.5 text-left text-sm font-bold text-slate-800 hover:text-brand-600 dark:text-slate-100 dark:hover:text-brand-600"
           title="Click to rename"
         >
           {session.title || defaultTitle(session) || 'Untitled session'}
@@ -105,7 +105,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
         {(session.tags || []).map((t) => (
           <span
             key={t}
-            className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+ className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300"
           >
             {t}
             <button onClick={() => removeTag(t)} className="text-slate-400 hover:text-red-500">
@@ -118,7 +118,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
             placeholder="+ tag"
-            className="w-16 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs outline-none focus:w-24 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+ className="w-16 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs outline-none focus:w-24 dark:border-slate-600 dark:bg-espresso-900 dark:text-slate-100"
           />
         </form>
       </div>
@@ -126,21 +126,21 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
       <div className="flex gap-2">
         <button
           onClick={() => onLoad(session)}
-          className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+ className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
         >
           Load
         </button>
         {onShare && (
           <button
             onClick={() => onShare(session.id)}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+ className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
           >
             {session.is_public ? 'Copy link' : 'Share'}
           </button>
         )}
         <button
           onClick={() => onDelete(session.id)}
-          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-slate-600 dark:hover:bg-red-900/20"
+ className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-slate-600 dark:hover:bg-red-900/20"
         >
           Delete
         </button>
@@ -184,7 +184,7 @@ export default function HistoryPanel({ history, onLoad, onDelete, onUpdate, onSh
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search history (title, mode, tag, text)…"
-          className="field pl-9"
+ className="field pl-9"
         />
       </div>
 

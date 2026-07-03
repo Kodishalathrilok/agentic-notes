@@ -88,6 +88,9 @@ const Icon = {
   Star: make(
     <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14l-5-4.87 6.91-1.01z" />
   ),
+  Menu: make(<path d="M4 7h16M4 12h16M4 17h16" />),
+  X: make(<path d="M18 6 6 18M6 6l12 12" />),
+  ArrowUpRight: make(<path d="M7 17 17 7M8 7h9v9" />),
 }
 
 export default Icon

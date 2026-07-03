@@ -175,20 +175,20 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
   // ----- Render ------------------------------------------------------------
   return (
     <div className="card p-6 sm:p-7">
-      <h2 className="mb-5 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
+      <h2 className="mb-5 text-xs font-bold uppercase tracking-[0.2em] text-espresso-500">
         Source
       </h2>
 
       {/* Tab switcher — pills */}
-      <div className="scroll-area mb-5 flex gap-1 overflow-x-auto rounded-full border border-white/[0.06] bg-ink-800/60 p-1">
+      <div className="scroll-area mb-5 flex gap-1 overflow-x-auto rounded-full border border-espresso-900/10 bg-espresso-900/[0.06] p-1">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-semibold transition-all duration-200 ${
+ className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-semibold transition-all duration-200 ${
               tab === t.id
-                ? 'bg-brand-500 text-white shadow-soft'
-                : 'text-stone-400 hover:text-white'
+                ? 'bg-espresso-900 text-cream shadow-soft'
+                : 'text-espresso-600 hover:text-espresso-900'
             }`}
           >
             {t.label}
@@ -205,7 +205,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
             disabled={isStreaming}
             rows={10}
             placeholder="Paste lecture notes, article, or any text..."
-            className="field resize-y p-3 leading-relaxed"
+ className="field resize-y p-3 leading-relaxed"
           />
           <div className="mt-1 text-right text-xs text-slate-400">
             {inputText.length.toLocaleString()} / {MAX_CHARS.toLocaleString()}
@@ -224,7 +224,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
             onClick={() => fileInputRef.current?.click()}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
+ className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
               dragging
                 ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20'
                 : 'border-slate-300 hover:border-brand-400 dark:border-slate-600'
@@ -240,7 +240,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
               ref={fileInputRef}
               type="file"
               accept="application/pdf"
-              className="hidden"
+ className="hidden"
               onChange={(e) => handlePdfFile(e.target.files?.[0])}
             />
           </div>
@@ -274,7 +274,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
               handleImageFile(e.dataTransfer.files?.[0])
             }}
             onClick={() => imgInputRef.current?.click()}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
+ className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
               imgDragging
                 ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20'
                 : 'border-slate-300 hover:border-brand-400 dark:border-slate-600'
@@ -292,7 +292,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
               ref={imgInputRef}
               type="file"
               accept="image/*"
-              className="hidden"
+ className="hidden"
               onChange={(e) => handleImageFile(e.target.files?.[0])}
             />
           </div>
@@ -323,7 +323,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && fetchUrl()}
               placeholder="https://example.com/article or YouTube link"
-              className="field flex-1"
+ className="field flex-1"
             />
             <button onClick={fetchUrl} disabled={urlLoading || !url.trim()} className="btn-primary shrink-0">
               {urlLoading ? 'Fetching…' : 'Fetch'}
@@ -352,7 +352,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
             {!recording ? (
               <button
                 onClick={startRecording}
-                className="flex items-center gap-2 rounded-full bg-red-500 px-5 py-2.5 text-sm font-medium text-white shadow hover:bg-red-600"
+ className="flex items-center gap-2 rounded-full bg-red-500 px-5 py-2.5 text-sm font-medium text-white shadow hover:bg-red-600"
               >
                 <span className="h-3 w-3 rounded-full bg-white" />
                 Record
@@ -360,7 +360,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming }) {
             ) : (
               <button
                 onClick={stopRecording}
-                className="flex items-center gap-2 rounded-full bg-slate-700 px-5 py-2.5 text-sm font-medium text-white shadow hover:bg-slate-800"
+ className="flex items-center gap-2 rounded-full bg-slate-700 px-5 py-2.5 text-sm font-medium text-white shadow hover:bg-slate-800"
               >
                 <span className="h-3 w-3 rounded-sm bg-white" />
                 Stop

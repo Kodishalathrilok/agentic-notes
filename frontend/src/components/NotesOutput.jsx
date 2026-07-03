@@ -21,7 +21,7 @@ function renderInline(text, keyPrefix, onCite) {
         <button
           key={`${keyPrefix}-${i}`}
           onClick={() => onCite(n)}
-          className="mx-0.5 inline-flex translate-y-[-1px] items-center rounded-md bg-brand-100 px-1.5 text-[10px] font-bold text-brand-700 align-super hover:bg-brand-200 dark:bg-brand-900/40 dark:text-brand-300"
+ className="mx-0.5 inline-flex translate-y-[-1px] items-center rounded-md bg-brand-100 px-1.5 text-[10px] font-bold text-brand-700 align-super hover:bg-brand-200 dark:bg-brand-900/40 dark:text-brand-700"
           title={`Jump to source ${n}`}
         >
           {n}
@@ -49,7 +49,7 @@ function renderNotes(notes, onCite) {
         out.push(
           <pre
             key={`code-${codeKey++}`}
-            className="my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100 dark:bg-black"
+ className="my-2 overflow-x-auto rounded-lg bg-espresso-900 p-3 text-xs text-slate-100 "
           >
             <code>{codeBuffer.join('\n')}</code>
           </pre>
@@ -74,7 +74,7 @@ function renderNotes(notes, onCite) {
     const headerMatch = trimmed.match(/^\*\*(.+?):?\*\*$/)
     if (headerMatch) {
       out.push(
-        <h3 key={idx} className="mt-4 mb-1 text-base font-bold text-brand-700 dark:text-brand-400">
+        <h3 key={idx} className="mt-4 mb-1 text-base font-bold text-brand-700 dark:text-brand-600">
           {headerMatch[1]}
         </h3>
       )
@@ -122,7 +122,7 @@ function renderNotes(notes, onCite) {
     out.push(
       <pre
         key={`code-${codeKey++}`}
-        className="my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100 dark:bg-black"
+ className="my-2 overflow-x-auto rounded-lg bg-espresso-900 p-3 text-xs text-slate-100 "
       >
         <code>{codeBuffer.join('\n')}</code>
       </pre>
@@ -250,12 +250,12 @@ export default function NotesOutput({
 
   if (!notes && !editing) {
     return (
-      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-white/10 text-sm text-stone-500">
+      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-espresso-900/15 text-sm text-espresso-500">
         {streaming ? (
           <>
             <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-400" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-500 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-500" />
             </span>
             Agents are reading your source…
           </>
@@ -303,10 +303,10 @@ export default function NotesOutput({
     <div>
       {/* Streaming indicator */}
       {streaming && (
-        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-4 py-1.5 text-xs font-semibold text-brand-300">
+        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-4 py-1.5 text-xs font-semibold text-brand-700">
           <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-400" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-500 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-500" />
           </span>
           Agents writing…
         </div>
@@ -357,14 +357,14 @@ export default function NotesOutput({
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={18}
-          className="field resize-y rounded-3xl p-5 font-mono text-sm"
+ className="field resize-y rounded-3xl p-5 font-mono text-sm"
         />
       ) : diff ? (
-        <div className="scroll-area max-h-[60vh] overflow-y-auto rounded-3xl border border-white/[0.06] bg-ink-900/70 p-5 font-mono text-xs leading-relaxed">
+        <div className="scroll-area max-h-[60vh] overflow-y-auto rounded-3xl border border-espresso-900/10 bg-white/70 p-5 font-mono text-xs leading-relaxed">
           {diff.map((d, i) => (
             <div
               key={i}
-              className={
+ className={
                 d.type === 'add'
                   ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
                   : d.type === 'del'
@@ -384,14 +384,14 @@ export default function NotesOutput({
           {/* Document-style reading surface */}
           <div
             ref={containerRef}
-            className="scroll-area max-h-[65vh] overflow-y-auto rounded-3xl border border-white/[0.06] bg-ink-900/70 px-6 py-8 sm:px-10 sm:py-10"
+ className="scroll-area max-h-[65vh] overflow-y-auto rounded-3xl border border-espresso-900/10 bg-white/70 px-6 py-8 sm:px-10 sm:py-10"
           >
             <div className="mx-auto max-w-3xl">
               {renderNotes(notes, sources.length ? handleCite : null)}
               {streaming && <span className="stream-caret" aria-hidden />}
             </div>
           </div>
-          <p className="mt-2 text-center text-xs text-stone-500">
+          <p className="mt-2 text-center text-xs text-espresso-500">
             Tip: select any text in your notes to explain or rewrite it with AI.
           </p>
           <InlineAssistant containerRef={containerRef} notes={notes} onEditSelection={onEditSelection} />
@@ -410,13 +410,13 @@ export default function NotesOutput({
                 <div
                   id={`src-${s.id}`}
                   key={s.id}
-                  className={`rounded-lg border p-3 text-xs leading-relaxed transition-colors ${
+ className={`rounded-lg border p-3 text-xs leading-relaxed transition-colors ${
                     highlight === s.id
                       ? 'border-brand-400 bg-brand-50 dark:border-brand-600 dark:bg-brand-900/20'
                       : 'border-slate-200 dark:border-slate-700'
                   }`}
                 >
-                  <span className="mr-2 font-bold text-brand-600 dark:text-brand-400">[{s.id}]</span>
+                  <span className="mr-2 font-bold text-brand-600 dark:text-brand-600">[{s.id}]</span>
                   <span className="text-slate-600 dark:text-slate-300">{s.text}</span>
                 </div>
               ))}

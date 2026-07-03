@@ -10,6 +10,7 @@ import FlashcardPanel from './components/FlashcardPanel'
 import HistoryPanel from './components/HistoryPanel'
 import Icon from './components/Icons'
 import Landing from './components/Landing'
+import MenuOverlay from './components/MenuOverlay'
 import EvalDashboard from './components/EvalDashboard'
 import AuthModal from './components/AuthModal'
 import SharedNote from './components/SharedNote'
@@ -60,9 +61,9 @@ export default function App() {
   const [showLanding, setShowLanding] = useState(true)
   const [showEval, setShowEval] = useState(false)
 
-  // Premium dark-only theme: keep legacy `dark:` variants active everywhere.
+  // Warm light theme: make sure no legacy `dark` class lingers from before.
   useEffect(() => {
-    document.documentElement.classList.add('dark')
+    document.documentElement.classList.remove('dark')
   }, [])
 
   // Persisted settings + input
@@ -92,6 +93,7 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const [error, setError] = useState(null)
   const [blocked, setBlocked] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
 
   const [rewriting, setRewriting] = useState(null)
   const [quizRegen, setQuizRegen] = useState(false)
@@ -448,30 +450,30 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-ink-950 text-stone-300">
+    <div className="relative min-h-screen overflow-x-hidden bg-latte-100 text-espresso-800">
       {/* Ambient background glow */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute left-[8%] top-[-12%] h-[420px] w-[420px] rounded-full bg-brand-600/15 blur-3xl" />
-        <div className="absolute bottom-[-15%] right-[5%] h-[380px] w-[380px] rounded-full bg-fuchsia-600/10 blur-3xl" />
+        <div className="absolute left-[8%] top-[-12%] h-[420px] w-[420px] rounded-full bg-brand-400/25 blur-3xl" />
+        <div className="absolute bottom-[-15%] right-[5%] h-[380px] w-[380px] rounded-full bg-rose-300/30 blur-3xl" />
       </div>
 
       {/* Minimal nav: logo left · Eval + auth + CTA right */}
-      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-5 py-4">
           <button
             onClick={() => setShowLanding(true)}
-            className="flex items-center gap-3 text-left"
+ className="flex items-center gap-3 text-left"
             title="Back to home"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
-            <h1 className="text-base font-extrabold tracking-tight text-cream sm:text-lg">Agentic Notes</h1>
+            <h1 className="text-base font-extrabold tracking-tight text-espresso-900 sm:text-lg">Agentic Notes</h1>
           </button>
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => setShowEval(true)}
-              className="hidden rounded-full px-4 py-2 text-sm font-semibold text-stone-400 transition-colors hover:bg-white/5 hover:text-white sm:inline-flex"
+ className="hidden rounded-full px-4 py-2 text-sm font-semibold text-espresso-600 transition-colors hover:bg-espresso-900/5 hover:text-espresso-900 sm:inline-flex"
             >
               Eval
             </button>
@@ -482,7 +484,7 @@ export default function App() {
             {supabaseEnabled &&
               (user ? (
                 <div className="flex items-center gap-2">
-                  <span className="hidden max-w-[140px] truncate text-xs text-stone-500 sm:inline">
+                  <span className="hidden max-w-[140px] truncate text-xs text-espresso-500 sm:inline">
                     {user.email}
                   </span>
                   <button onClick={signOut} className="btn-ghost px-4 py-2 text-sm">
@@ -494,21 +496,43 @@ export default function App() {
                   Sign in
                 </button>
               ))}
+            <button
+              onClick={() => setMenuOpen(true)}
+              aria-label="Open menu"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
+            >
+              <Icon.Menu className="h-5 w-5" />
+            </button>
           </div>
         </div>
       </header>
+
+      <MenuOverlay
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        items={[
+          { label: 'Home', onClick: () => setShowLanding(true) },
+          { label: 'Eval', onClick: () => setShowEval(true) },
+          { label: 'GitHub', href: 'https://github.com/Kodishalathrilok/agentic-notes' },
+          ...(supabaseEnabled
+            ? [user
+                ? { label: 'Sign out', onClick: signOut }
+                : { label: 'Sign in', onClick: () => setAuthOpen(true) }]
+            : []),
+        ]}
+      />
 
       {/* Main */}
       <main className="mx-auto max-w-7xl px-5 py-12 sm:py-16">
         {/* App hero */}
         <div className="mb-12 max-w-3xl animate-fade-in">
-          <h2 className="text-4xl font-black leading-[1.02] tracking-tighter text-cream sm:text-6xl">
+          <h2 className="font-display text-6xl font-bold leading-[0.95] text-espresso-900 sm:text-8xl">
             Generate notes
-            <span className="block bg-gradient-to-r from-brand-400 to-fuchsia-400 bg-clip-text text-transparent">
+            <span className="block bg-gradient-to-r from-brand-600 to-rose-500 bg-clip-text text-transparent">
               from anything.
             </span>
           </h2>
-          <p className="mt-4 max-w-xl text-base text-stone-500">
+          <p className="mt-4 max-w-xl text-base text-espresso-500">
             Paste text, drop a PDF or photo, link a YouTube video, or record audio — six AI agents
             turn it into faithful, cited study notes.
           </p>
@@ -536,13 +560,13 @@ export default function App() {
               isStreaming={isStreaming}
               canGenerate={!!inputText.trim()}
             />
-            <p className="text-center text-xs text-stone-500">
+            <p className="text-center text-xs text-espresso-500">
               Tip: press{' '}
-              <kbd className="rounded-md border border-white/10 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded-md border border-espresso-900/15 bg-latte-200 px-1.5 py-0.5 font-mono text-[10px]">
                 Ctrl
               </kbd>{' '}
               +{' '}
-              <kbd className="rounded-md border border-white/10 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded-md border border-espresso-900/15 bg-latte-200 px-1.5 py-0.5 font-mono text-[10px]">
                 Enter
               </kbd>{' '}
               to generate
@@ -550,7 +574,7 @@ export default function App() {
             {isStreaming && (
               <button
                 onClick={cancel}
-                className="w-full rounded-full border border-red-900/60 px-4 py-2.5 text-sm font-semibold text-red-400 transition-colors hover:bg-red-900/20"
+ className="w-full rounded-full border border-red-900/60 px-4 py-2.5 text-sm font-semibold text-red-400 transition-colors hover:bg-red-900/20"
               >
                 Cancel generation
               </button>
@@ -577,15 +601,15 @@ export default function App() {
             )}
 
             {/* Tab bar — pill group */}
-            <div className="scroll-area flex w-full gap-1.5 overflow-x-auto rounded-full border border-white/[0.06] bg-ink-900/80 p-1.5">
+            <div className="scroll-area flex w-full gap-1.5 overflow-x-auto rounded-full border border-espresso-900/10 bg-white/70 p-1.5">
               {TABS.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setActiveTab(t.id)}
-                  className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
+ className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
                     activeTab === t.id
-                      ? 'bg-brand-500 text-white shadow-soft'
-                      : 'text-stone-400 hover:bg-white/5 hover:text-white'
+                      ? 'bg-espresso-900 text-cream shadow-soft'
+                      : 'text-espresso-600 hover:bg-espresso-900/5 hover:text-espresso-900'
                   }`}
                 >
                   {t.label}
@@ -641,7 +665,7 @@ export default function App() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-slide-up items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lift dark:bg-white dark:text-slate-900">
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-slide-up items-center gap-2 rounded-xl bg-espresso-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lift ">
           <Icon.Check className="h-4 w-4 text-green-400 dark:text-green-600" />
           {toast.replace(' ✓', '')}
         </div>

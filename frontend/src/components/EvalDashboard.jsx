@@ -45,7 +45,7 @@ function MetricGroup({ label, summary, variants }) {
 function Stat({ label, value, sub }) {
   return (
     <div className="card p-5 text-center">
-      <div className="text-3xl font-extrabold text-brand-600 dark:text-brand-400">{value}</div>
+      <div className="text-3xl font-extrabold text-brand-600 dark:text-brand-600">{value}</div>
       <div className="mt-1 text-sm font-semibold">{label}</div>
       {sub && <div className="mt-0.5 text-xs text-slate-400">{sub}</div>}
     </div>
@@ -74,14 +74,14 @@ export default function EvalDashboard({ onBack }) {
     : null
 
   return (
-    <div className="min-h-screen bg-ink-950 text-stone-300">
-      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+    <div className="min-h-screen bg-latte-100 text-espresso-800">
+      <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <button onClick={onBack} className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lift">
+            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
               <Icon.Book className="h-5 w-5" />
             </span>
-            <span className="text-base font-extrabold tracking-tight text-cream">Agentic Notes</span>
+            <span className="text-base font-extrabold tracking-tight text-espresso-900">Agentic Notes</span>
           </button>
           <button onClick={onBack} className="btn-ghost">
             ← Back to app
@@ -107,7 +107,7 @@ export default function EvalDashboard({ onBack }) {
               Generate one by running the eval harness — it scores the pipeline against fixed test
               inputs and writes <code className="font-mono">eval/report.json</code>.
             </p>
-            <pre className="mx-auto mt-4 w-fit rounded-lg bg-slate-900 px-4 py-3 text-left text-xs text-slate-100 dark:bg-black">
+            <pre className="mx-auto mt-4 w-fit rounded-lg bg-espresso-900 px-4 py-3 text-left text-xs text-slate-100 ">
               <code>cd backend{'\n'}python -m eval.run_eval</code>
             </pre>
           </div>
