@@ -140,6 +140,23 @@ def get_active_provider() -> str:
     return "ollama"
 
 
+# A cheaper "helper" model for the mechanical packaging agents (gatekeeper,
+# title, quiz, flashcards). It runs on a SEPARATE free-tier daily token quota
+# from the main writing model, so these steps don't burn the primary model's
+# budget — the writing/critique that actually determines quality keeps the
+# strong model.
+HELPER_GROQ_MODEL = os.getenv("HELPER_GROQ_MODEL", "llama-3.1-8b-instant").strip()
+HELPER_GEMINI_MODEL = os.getenv("HELPER_GEMINI_MODEL", "gemini-2.0-flash-lite").strip()
+
+
+def helper_model(main_model=None) -> str:
+    """Pick a cheap helper model in the same provider family as `main_model`."""
+    target = resolve_model(main_model)
+    if _provider_for(target) == "gemini":
+        return HELPER_GEMINI_MODEL
+    return HELPER_GROQ_MODEL
+
+
 # ---------------------------------------------------------------------------
 # Groq
 # ---------------------------------------------------------------------------

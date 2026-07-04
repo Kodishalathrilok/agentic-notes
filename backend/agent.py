@@ -11,7 +11,7 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
 
 import os
 
-from models import call_model, call_model_stream, safe_json
+from models import call_model, call_model_stream, safe_json, helper_model
 from retriever import Retriever
 
 # Quality thresholds for the self-improvement loop
@@ -635,9 +635,15 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
       done, error
     """
     try:
+        # Mechanical packaging agents (gatekeeper, title, quiz, flashcards) run
+        # on a cheaper model with its OWN free-tier daily quota, so they don't
+        # spend the main model's token budget — writing & critique keep the
+        # strong model where quality actually matters.
+        helper = helper_model(model)
+
         # 0. Academic gatekeeper — this tool only handles study material.
         yield _emit("status", "gate", "Checking topic…")
-        gate = classify_academic(text, model=model)
+        gate = classify_academic(text, model=helper)
         if not gate.get("academic", True):
             yield _emit(
                 "blocked",
@@ -778,7 +784,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
 
         # Auto-title (best effort)
         try:
-            title = generate_title(notes, model=model)
+            title = generate_title(notes, model=helper)
             if title:
                 yield _emit("title_done", "title", title)
         except Exception:  # noqa: BLE001
@@ -786,13 +792,13 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
 
         # 8-9. Quiz (generate, then verify the answer key against the notes)
         yield _emit("status", "quiz", "Generating quiz...")
-        quiz = generate_quiz(notes, n=5, model=model)
-        quiz = verify_quiz(notes, quiz, model=model)
+        quiz = generate_quiz(notes, n=5, model=helper)
+        quiz = verify_quiz(notes, quiz, model=helper)
         yield _emit("quiz_done", "quiz", quiz)
 
         # 10-11. Flashcards
         yield _emit("status", "flashcards", "Creating flashcards...")
-        cards = generate_flashcards(notes, n=8, model=model)
+        cards = generate_flashcards(notes, n=8, model=helper)
         yield _emit("flashcards_done", "flashcards", cards)
 
         # 12. Done

@@ -67,6 +67,14 @@ def test_groq_create_gives_up_after_retries(monkeypatch):
         assert "429" in str(exc)
 
 
+def test_helper_model_matches_provider_family():
+    # Groq main -> Groq helper; Gemini main -> Gemini helper.
+    assert models.helper_model("llama-3.3-70b-versatile") == models.HELPER_GROQ_MODEL
+    assert models.helper_model("gemini-2.0-flash") == models.HELPER_GEMINI_MODEL
+    # A cheap helper must not equal the strong 70B writing model.
+    assert models.HELPER_GROQ_MODEL != "llama-3.3-70b-versatile"
+
+
 def test_non_rate_limit_error_not_retried(monkeypatch):
     monkeypatch.setattr(models.time, "sleep", lambda s: None)
     calls = {"n": 0}
