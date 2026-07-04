@@ -9,6 +9,8 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
     generate_title, chat_about_notes_stream
 """
 
+import os
+
 from models import call_model, call_model_stream, safe_json
 from retriever import Retriever
 
@@ -21,6 +23,9 @@ MAX_REVISION_ROUNDS = 2  # cap revision passes to bound latency
 # document, so no part of a large source is left out.
 SECTION_DOC_THRESHOLD = 20000  # chars
 SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
+# Cap sections so a very large doc can't fire an unbounded burst of model calls
+# (protects free-tier rate limits). Override with SECTION_MAX_COUNT.
+SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
 
 
 def _format_context(chunks) -> str:
@@ -663,10 +668,13 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
         sectioned = len(text) > SECTION_DOC_THRESHOLD and len(outline) >= 3
 
         if sectioned:
+            # Bound the number of sections to keep model-call volume sane on
+            # free-tier providers (the writer still covers the whole doc).
+            write_outline = outline[:SECTION_MAX_COUNT]
             # Retrieve per-section context up front; expose the union as sources.
             section_ctx = []
             seen = {}
-            for sec in outline:
+            for sec in write_outline:
                 sec_chunks = retriever.retrieve(f"{sec} — {mode} study notes", k=SECTION_RETRIEVAL_K)
                 section_ctx.append((sec, sec_chunks))
                 for c in sec_chunks:

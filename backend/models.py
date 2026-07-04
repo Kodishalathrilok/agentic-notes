@@ -22,6 +22,7 @@ Public API:
 import os
 import re
 import json
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -79,11 +80,27 @@ def _gemini_available() -> bool:
     return bool(GEMINI_API_KEY)
 
 
+_ollama_reachable = None
+
+
+def _ollama_available() -> bool:
+    """Probe Ollama once and cache it. On hosted deploys (no local Ollama) this
+    is False, so a dead localhost fallback never masks the real Groq/Gemini error."""
+    global _ollama_reachable
+    if _ollama_reachable is None:
+        try:
+            requests.get(f"{OLLAMA_URL}/api/tags", timeout=1.5)
+            _ollama_reachable = True
+        except Exception:  # noqa: BLE001
+            _ollama_reachable = False
+    return _ollama_reachable
+
+
 def _provider_ready(prov: str) -> bool:
     return {
         "groq": _groq_available(),
         "gemini": _gemini_available(),
-        "ollama": True,
+        "ollama": _ollama_available(),
     }.get(prov, False)
 
 
@@ -151,6 +168,47 @@ def _groq_messages(prompt):
     ]
 
 
+def _retry_after(exc, attempt: int) -> float:
+    """Seconds to wait before retrying a rate-limited request. Honour Groq's
+    Retry-After header when present, else exponential backoff (2, 4, 8s)."""
+    for attr in ("response", "body"):
+        obj = getattr(exc, attr, None)
+        headers = getattr(obj, "headers", None)
+        if headers:
+            ra = headers.get("retry-after") or headers.get("Retry-After")
+            if ra:
+                try:
+                    return min(float(ra) + 0.5, 30.0)
+                except (TypeError, ValueError):
+                    pass
+    return min(2.0 * (2 ** attempt), 20.0)
+
+
+def _is_rate_limit(exc) -> bool:
+    return getattr(exc, "status_code", None) == 429 or "429" in str(exc) or \
+        "rate limit" in str(exc).lower()
+
+
+GROQ_RATE_LIMIT_RETRIES = int(os.getenv("GROQ_RATE_LIMIT_RETRIES", "4"))
+
+
+def _groq_create(client, **kwargs):
+    """Create a Groq completion, retrying transient 429 rate limits with backoff.
+    The map-reduce path fires many calls fast and can hit free-tier TPM limits;
+    a short wait lets the per-minute window refill instead of failing the run."""
+    for attempt in range(GROQ_RATE_LIMIT_RETRIES + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if _is_rate_limit(exc) and attempt < GROQ_RATE_LIMIT_RETRIES:
+                wait = _retry_after(exc, attempt)
+                print(f"[models] groq rate-limited; retrying in {wait:.0f}s "
+                      f"(attempt {attempt + 1}/{GROQ_RATE_LIMIT_RETRIES}).")
+                time.sleep(wait)
+                continue
+            raise
+
+
 def _call_groq(prompt, max_tokens, model, temperature, json_mode):
     client = _get_groq_client()
     kwargs = dict(
@@ -161,13 +219,14 @@ def _call_groq(prompt, max_tokens, model, temperature, json_mode):
     )
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
-    completion = client.chat.completions.create(**kwargs)
+    completion = _groq_create(client, **kwargs)
     return (completion.choices[0].message.content or "").strip()
 
 
 def _stream_groq(prompt, max_tokens, model, temperature):
     client = _get_groq_client()
-    stream = client.chat.completions.create(
+    stream = _groq_create(
+        client,
         model=_groq_model(model),
         messages=_groq_messages(prompt),
         max_tokens=max_tokens,
@@ -338,27 +397,38 @@ def _dispatch_stream(prov, prompt, max_tokens, model, temperature):
         yield from _stream_ollama(prompt, max_tokens, temperature)
 
 
+def _providers_failed(errors) -> RuntimeError:
+    """Build an actionable error. Reports each configured provider's real reason
+    (Groq/Gemini first — a dead local Ollama fallback shouldn't hide the cause)."""
+    if not errors:
+        return RuntimeError(
+            "No model provider is configured. Set GROQ_API_KEY (or GEMINI_API_KEY) "
+            "in the server environment."
+        )
+    ordered = sorted(errors, key=lambda e: e[0] == "ollama")  # non-ollama first
+    detail = " | ".join(f"{prov}: {_safe(exc)}" for prov, exc in ordered)
+    return RuntimeError(f"All model providers failed — {detail}")
+
+
 def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
     """Call the chosen provider, failing over to the next available one on error."""
     target = resolve_model(model)
-    last = None
+    errors = []
     for prov in _failover_chain(_provider_for(target)):
         if not _provider_ready(prov):
             continue
         try:
             return _dispatch(prov, prompt, max_tokens, target, temperature, json_mode)
         except Exception as exc:  # noqa: BLE001
-            last = exc
+            errors.append((prov, exc))
             print(f"[models] {prov} call failed ({_safe(exc)}); trying next provider.")
-    raise RuntimeError(
-        f"All model providers failed. Last error: {_safe(last) if last else 'none available'}"
-    )
+    raise _providers_failed(errors)
 
 
 def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
     """Stream from the chosen provider; fail over if it errors before any output."""
     target = resolve_model(model)
-    last = None
+    errors = []
     for prov in _failover_chain(_provider_for(target)):
         if not _provider_ready(prov):
             continue
@@ -369,14 +439,12 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
                 yield delta
             return
         except Exception as exc:  # noqa: BLE001
-            last = exc
+            errors.append((prov, exc))
             if yielded:
                 print(f"[models] {prov} stream interrupted ({_safe(exc)}).")
                 return
             print(f"[models] {prov} stream failed ({_safe(exc)}); trying next provider.")
-    raise RuntimeError(
-        f"All streaming providers failed. Last error: {_safe(last) if last else 'none available'}"
-    )
+    raise _providers_failed(errors)
 
 
 # ---------------------------------------------------------------------------
