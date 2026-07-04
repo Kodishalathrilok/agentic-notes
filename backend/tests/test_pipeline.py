@@ -93,6 +93,63 @@ def test_long_document_uses_sectioned_writing(monkeypatch):
     assert any("section 2/3" in s for s in statuses)
 
 
+def test_digest_document_scans_every_segment(monkeypatch):
+    """The digest must read 100% of the document, one segment at a time."""
+    seen = []
+
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        seen.append(prompt)
+        return "- topic A\n- topic B"
+
+    monkeypatch.setattr(agent, "call_model", model)
+
+    text = "q" * (agent.DIGEST_SEGMENT_CHARS * 3 + 100)  # 4 segments
+    inventory = digest = agent.digest_document(text)
+
+    assert len(seen) == 4
+    # every character of the doc was included in some prompt
+    total_scanned = sum(p.count("q") for p in seen)
+    assert total_scanned == len(text)
+    assert "topic A" in inventory and digest.count("topic B") == 4
+
+
+def test_big_docs_plan_from_full_coverage_inventory(monkeypatch):
+    """Docs over DIGEST_DOC_THRESHOLD: helper scans the whole doc and the
+    planner prompt must contain the resulting TOPIC INVENTORY. Small docs
+    must NOT trigger the scan."""
+    captured = {"plan_prompt": "", "digest_calls": 0}
+
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        if "topic inventory" in prompt and "scanning part" in prompt:
+            captured["digest_calls"] += 1
+            return "- rare topic on page 93"
+        if "PLANNING agent" in prompt:
+            captured["plan_prompt"] = prompt
+            return (
+                '{"outline":["A","B","C"],"checklist":["x"],'
+                '"difficulty":"easy","suggested_format":"bullet"}'
+            )
+        return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
+
+    monkeypatch.setattr(agent, "call_model", model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+
+    big = "Physics history biology economics content. " * 2000  # > 60k chars
+    assert len(big) > agent.DIGEST_DOC_THRESHOLD
+    events = list(agent.run_agent(big, "exam", "academic", "medium", "bullet"))
+    assert "error" not in [e["type"] for e in events]
+    assert captured["digest_calls"] >= 2  # multiple segments scanned
+    assert "TOPIC INVENTORY" in captured["plan_prompt"]
+    assert "rare topic on page 93" in captured["plan_prompt"]
+
+    # a small doc must skip the scan entirely
+    captured["digest_calls"] = 0
+    captured["plan_prompt"] = ""
+    list(agent.run_agent("short source text", "exam", "academic", "medium", "bullet"))
+    assert captured["digest_calls"] == 0
+    assert "TOPIC INVENTORY" not in captured["plan_prompt"]
+
+
 def test_pipeline_blocks_non_academic(monkeypatch):
     def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
         if "gatekeeper" in prompt.lower():

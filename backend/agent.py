@@ -27,6 +27,15 @@ SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
 # (protects free-tier rate limits). Override with SECTION_MAX_COUNT.
 SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
 
+# Above this size, the planner's even sample covers too little of the document
+# (e.g. ~8% of a 100-page PDF), so a topic on only 2-3 pages can be invisible
+# to it. Fix: a full-coverage DIGEST scan — the cheap helper model reads the
+# ENTIRE document in large segments and lists each segment's topics, and the
+# planner outlines from that 100%-coverage inventory instead of a sample.
+DIGEST_DOC_THRESHOLD = int(os.getenv("DIGEST_DOC_THRESHOLD", "60000"))
+DIGEST_SEGMENT_CHARS = 25000
+DIGEST_MAX_SEGMENTS = 12  # 12 x 25k = full coverage of the 300k input cap
+
 
 def _format_context(chunks) -> str:
     """Render retrieved chunks as numbered passages the agent can cite."""
@@ -124,10 +133,43 @@ def _instr_block(instructions: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Agent: Digest (full-coverage topic scan for very large documents)
+# ---------------------------------------------------------------------------
+
+def digest_document(text, model=None) -> str:
+    """Scan the ENTIRE document segment by segment and return a merged topic
+    inventory. Runs on the cheap helper model (its own token quota), so 100%
+    coverage costs nothing from the main model's budget. A failed segment is
+    skipped rather than failing the run — partial inventory still beats none."""
+    segments = [
+        text[i:i + DIGEST_SEGMENT_CHARS]
+        for i in range(0, len(text), DIGEST_SEGMENT_CHARS)
+    ][:DIGEST_MAX_SEGMENTS]
+
+    inventory = []
+    for i, seg in enumerate(segments, 1):
+        prompt = f"""You are scanning part {i} of {len(segments)} of a document to build a
+topic inventory. List the distinct topics and key concepts covered in THIS part.
+
+Respond with ONLY a bullet list (max 10 bullets). Each bullet is a short,
+specific topic phrase (3-8 words). No commentary, no numbering, no headers.
+
+PART {i}:
+\"\"\"{seg}\"\"\""""
+        try:
+            out = call_model(prompt, max_tokens=250, model=model, temperature=0.1)
+        except Exception:  # noqa: BLE001
+            continue
+        if out and out.strip():
+            inventory.append(out.strip())
+    return "\n".join(inventory)
+
+
+# ---------------------------------------------------------------------------
 # Agent: Plan
 # ---------------------------------------------------------------------------
 
-def plan_outline(text, mode, tone, length, model=None, instructions="", doc_chars=None) -> dict:
+def plan_outline(text, mode, tone, length, model=None, instructions="", doc_chars=None, topic_inventory="") -> dict:
     doc_chars = doc_chars or len(text or "")
     if doc_chars > 120000:
         outline_rule = (
@@ -143,11 +185,20 @@ def plan_outline(text, mode, tone, length, model=None, instructions="", doc_char
     else:
         outline_rule = "Produce 3-5 outline sections covering the material."
 
+    inventory_block = ""
+    if (topic_inventory or "").strip():
+        inventory_block = f"""
+TOPIC INVENTORY — built by scanning the ENTIRE document part by part. This is
+the complete list of topics the document contains. Your outline MUST cover all
+major topics below (group closely related ones under one section):
+{topic_inventory[:8000]}
+"""
+
     prompt = f"""You are the PLANNING agent in a notes-generation pipeline.
 
 Analyse the SOURCE material (an even sample spanning the WHOLE document) and
 produce a study plan. {outline_rule}
-
+{inventory_block}
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone}
 Target length: {LENGTH_TARGETS.get(length.lower(), '300-400 words')}
@@ -656,11 +707,24 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
         # Build the retrieval index over the source (RAG)
         retriever = Retriever(text)
 
-        # 1-2. Plan (sees a breadth sample across the whole document)
+        # 1-2. Plan. For very large documents the even sample alone covers too
+        # little (a topic on only a few pages can be invisible in it), so first
+        # the helper model scans the WHOLE document and builds a topic
+        # inventory the planner must cover — 100% coverage at planning time.
+        topic_inventory = ""
+        if len(text) > DIGEST_DOC_THRESHOLD:
+            n_parts = min(
+                (len(text) + DIGEST_SEGMENT_CHARS - 1) // DIGEST_SEGMENT_CHARS,
+                DIGEST_MAX_SEGMENTS,
+            )
+            yield _emit("status", "plan", f"Scanning full document ({n_parts} parts)…")
+            topic_inventory = digest_document(text, model=helper)
+
         yield _emit("status", "plan", "Planning outline...")
         plan = plan_outline(
             retriever.sample(24000), mode, tone, length,
             model=model, instructions=instructions, doc_chars=len(text),
+            topic_inventory=topic_inventory,
         )
         yield _emit("plan_done", "plan", "", plan)
 
