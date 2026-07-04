@@ -75,7 +75,7 @@ export default function EvalDashboard({ onBack }) {
 
   return (
     <div className="min-h-screen bg-latte-100 text-espresso-800">
-      <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
+      <header className="fixed inset-x-0 top-0 z-40">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <button onClick={onBack} className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
@@ -89,7 +89,7 @@ export default function EvalDashboard({ onBack }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-4 py-10">
+      <main className="mx-auto max-w-5xl px-4 pb-10 pt-28">
         <div className="mb-8">
           <h1 className="display-title">Pipeline evaluation</h1>
           <p className="mt-2 max-w-2xl text-slate-500 dark:text-slate-400">

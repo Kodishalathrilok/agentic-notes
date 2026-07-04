@@ -85,34 +85,16 @@ function RotatingWord({ words }) {
 }
 
 function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut, onMenu }) {
-  const link =
-    'hidden rounded-full px-4 py-2 text-sm font-semibold text-espresso-600 transition-colors hover:bg-espresso-900/5 hover:text-espresso-900 sm:inline-flex'
   return (
-    <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
+    <header className="fixed inset-x-0 top-0 z-40">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />
           </span>
           <span className="text-base font-extrabold tracking-tight text-espresso-900">Agentic Notes</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onEval} className={link}>
-            Eval
-          </button>
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className={link}>
-            GitHub
-          </a>
-          {supabaseEnabled &&
-            (user ? (
-              <button onClick={onSignOut} className={link.replace('hidden ', '').replace('sm:inline-flex', 'inline-flex')}>
-                Sign out
-              </button>
-            ) : (
-              <button onClick={onSignIn} className={link.replace('hidden ', '').replace('sm:inline-flex', 'inline-flex')}>
-                Sign in
-              </button>
-            ))}
+        <div className="flex items-center gap-2.5">
           <button onClick={onLaunch} className="btn-primary">
             Launch App
             <span aria-hidden>→</span>

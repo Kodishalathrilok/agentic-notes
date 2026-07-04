@@ -4,7 +4,7 @@ import NotesOutput from './NotesOutput'
 export default function SharedNote({ session, onClose }) {
   return (
     <div className="min-h-screen bg-latte-100 text-espresso-800">
-      <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
+      <header className="fixed inset-x-0 top-0 z-40">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-5 py-4">
           <div className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
@@ -21,7 +21,7 @@ export default function SharedNote({ session, onClose }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 py-8">
+      <main className="mx-auto max-w-3xl px-4 pb-8 pt-28">
         <NotesOutput
           notes={session.notes || ''}
           setNotes={() => {}}

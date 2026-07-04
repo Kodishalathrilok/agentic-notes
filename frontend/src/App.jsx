@@ -458,7 +458,7 @@ export default function App() {
       </div>
 
       {/* Minimal nav: logo left · Eval + auth + CTA right */}
-      <header className="sticky top-0 z-30 border-b border-espresso-900/10 bg-latte-100/80 backdrop-blur-xl">
+      <header className="fixed inset-x-0 top-0 z-40">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-5 py-4">
           <button
             onClick={() => setShowLanding(true)}
@@ -523,7 +523,7 @@ export default function App() {
       />
 
       {/* Main */}
-      <main className="mx-auto max-w-7xl px-5 py-12 sm:py-16">
+      <main className="mx-auto max-w-7xl px-5 pb-16 pt-28 sm:pt-32">
         {/* App hero */}
         <div className="mb-12 max-w-3xl animate-fade-in">
           <h2 className="font-display text-6xl font-bold leading-[0.95] text-espresso-900 sm:text-8xl">
