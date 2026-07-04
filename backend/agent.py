@@ -16,6 +16,12 @@ from retriever import Retriever
 REVISE_THRESHOLD = 8  # revise until score reaches this (1-10)
 MAX_REVISION_ROUNDS = 2  # cap revision passes to bound latency
 
+# Long-document handling: above this size, notes are written SECTION BY SECTION
+# (map-reduce) — each outline section gets its own retrieval over the whole
+# document, so no part of a large source is left out.
+SECTION_DOC_THRESHOLD = 20000  # chars
+SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
+
 
 def _format_context(chunks) -> str:
     """Render retrieved chunks as numbered passages the agent can cite."""
@@ -43,11 +49,25 @@ LENGTH_MAX_TOKENS = {
     "short": 900,
     "medium": 1600,
     "long": 2800,
+    "xl": 4096,  # used when revising long sectioned notes
 }
 
 
 def _max_tokens(length: str) -> int:
     return LENGTH_MAX_TOKENS.get((length or "medium").lower(), 1600)
+
+
+# Per-SECTION word budgets for long documents (map-reduce path).
+SECTION_WORDS = {
+    "short": "60-100 words",
+    "medium": "120-180 words",
+    "long": "200-300 words",
+}
+SECTION_MAX_TOKENS = {
+    "short": 450,
+    "medium": 750,
+    "long": 1200,
+}
 
 MODE_GUIDANCE = {
     "exam": "Focus on exam-critical facts, definitions, formulas, and likely "
@@ -102,10 +122,26 @@ def _instr_block(instructions: str) -> str:
 # Agent: Plan
 # ---------------------------------------------------------------------------
 
-def plan_outline(text, mode, tone, length, model=None, instructions="") -> dict:
+def plan_outline(text, mode, tone, length, model=None, instructions="", doc_chars=None) -> dict:
+    doc_chars = doc_chars or len(text or "")
+    if doc_chars > 120000:
+        outline_rule = (
+            "This is a LARGE document (a book chapter or long report). Produce "
+            "8-12 outline sections that together cover ALL of its major topics — "
+            "do not skip parts of the document."
+        )
+    elif doc_chars > SECTION_DOC_THRESHOLD:
+        outline_rule = (
+            "This is a substantial document. Produce 5-8 outline sections that "
+            "together cover ALL of its major topics — do not skip parts."
+        )
+    else:
+        outline_rule = "Produce 3-5 outline sections covering the material."
+
     prompt = f"""You are the PLANNING agent in a notes-generation pipeline.
 
-Analyse the SOURCE material and produce a study plan.
+Analyse the SOURCE material (an even sample spanning the WHOLE document) and
+produce a study plan. {outline_rule}
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone}
@@ -120,7 +156,7 @@ Respond with ONLY a JSON object (no prose, no code fences) of this exact shape:
 }}
 
 SOURCE:
-\"\"\"{text[:16000]}\"\"\""""
+\"\"\"{text[:24000]}\"\"\""""
 
     data = safe_json(call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True))
 
@@ -190,6 +226,40 @@ def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instr
 
 
 # ---------------------------------------------------------------------------
+# Agent: Section writer (map-reduce path for long documents)
+# ---------------------------------------------------------------------------
+
+def write_section_stream(section, context, mode, tone, length, fmt, checklist=None, model=None, instructions=""):
+    """Write ONE outline section from its own retrieved context (streamed)."""
+    related = "\n".join(f"- {c}" for c in (checklist or [])[:6])
+    words = SECTION_WORDS.get((length or "medium").lower(), "120-180 words")
+
+    prompt = f"""You are the WRITING agent producing ONE SECTION of a larger set of
+study notes. Write ONLY the body of the section titled "{section}" — do NOT
+repeat the section title, do NOT write other sections, no preamble.
+
+Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
+Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
+Section length: {words}.
+
+Cover any of these plan points that belong to this section:
+{related or '- (use your judgment)'}
+
+{_format_instructions(fmt)}
+{_CITE_RULE}
+{_instr_block(instructions)}
+CONTEXT (numbered passages retrieved for THIS section — cite these):
+{context[:16000]}"""
+
+    yield from call_model_stream(
+        prompt,
+        max_tokens=SECTION_MAX_TOKENS.get((length or "medium").lower(), 750),
+        model=model,
+        temperature=0.5,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent: Critique
 # ---------------------------------------------------------------------------
 
@@ -232,7 +302,7 @@ SOURCE:
 \"\"\"{source[:12000]}\"\"\"
 
 NOTES:
-\"\"\"{notes[:6000]}\"\"\""""
+\"\"\"{notes[:10000]}\"\"\""""
 
     data = safe_json(
         call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True)
@@ -315,7 +385,7 @@ Return ONLY the full, revised notes — no commentary.
 {context_block}
 
 CURRENT NOTES:
-\"\"\"{notes[:7000]}\"\"\""""
+\"\"\"{notes[:12000]}\"\"\""""
 
 
 def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium") -> str:
@@ -421,7 +491,7 @@ Explanation: <one-sentence explanation>
 Leave a blank line between questions. Number them Q1, Q2, ... up to Q{n}.
 
 NOTES:
-\"\"\"{notes[:6000]}\"\"\""""
+\"\"\"{notes[:9000]}\"\"\""""
 
     return call_model(prompt, max_tokens=1200, model=model, temperature=0.3)
 
@@ -476,7 +546,7 @@ Back: <clear, correct answer>
 Leave a blank line between cards. Number them CARD 1 ... CARD {n}.
 
 NOTES:
-\"\"\"{notes[:6000]}\"\"\""""
+\"\"\"{notes[:9000]}\"\"\""""
 
     return call_model(prompt, max_tokens=1200, model=model)
 
@@ -578,29 +648,76 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
         # 1-2. Plan (sees a breadth sample across the whole document)
         yield _emit("status", "plan", "Planning outline...")
         plan = plan_outline(
-            retriever.sample(16000), mode, tone, length, model=model, instructions=instructions
+            retriever.sample(24000), mode, tone, length,
+            model=model, instructions=instructions, doc_chars=len(text),
         )
         yield _emit("plan_done", "plan", "", plan)
 
         active_fmt = fmt or plan.get("suggested_format", "bullet")
+        outline = plan.get("outline", []) or ["Overview", "Key Concepts", "Summary"]
+        checklist = plan.get("checklist", []) or []
 
-        # Retrieve the most relevant passages for writing, and expose them as
-        # citable sources to the UI.
-        query = " ".join(plan.get("outline", []) + plan.get("checklist", []) + [mode])
-        chunks = retriever.retrieve(query, k=8)
-        context = _format_context(chunks)
-        yield _emit("sources", "write", "", chunks)
+        # Long documents: MAP-REDUCE. Each outline section gets its OWN
+        # retrieval across the whole document and is written from its own
+        # context — so no part of a large source is left out.
+        sectioned = len(text) > SECTION_DOC_THRESHOLD and len(outline) >= 3
 
-        # 3-4. Write (streamed, grounded in retrieved context with citations)
-        yield _emit("status", "write", "Writing notes...")
-        parts = []
-        for delta in write_notes_stream(
-            context, mode, tone, length, active_fmt, plan, model=model, instructions=instructions
-        ):
-            parts.append(delta)
-            yield _emit("notes_delta", "write", delta)
-        notes = "".join(parts).strip()
-        yield _emit("notes_done", "write", notes)
+        if sectioned:
+            # Retrieve per-section context up front; expose the union as sources.
+            section_ctx = []
+            seen = {}
+            for sec in outline:
+                sec_chunks = retriever.retrieve(f"{sec} — {mode} study notes", k=SECTION_RETRIEVAL_K)
+                section_ctx.append((sec, sec_chunks))
+                for c in sec_chunks:
+                    seen[c["id"]] = c
+            all_chunks = [seen[i] for i in sorted(seen)]
+            context = _format_context(all_chunks)
+            yield _emit("sources", "write", "", all_chunks)
+
+            # 3-4. Write section by section (streamed).
+            parts = []
+
+            def _push(s):
+                parts.append(s)
+                return _emit("notes_delta", "write", s)
+
+            for i, (sec, sec_chunks) in enumerate(section_ctx, 1):
+                yield _emit(
+                    "status", "write",
+                    f"Writing section {i}/{len(section_ctx)}: {sec}…",
+                )
+                yield _push(f"**{sec}:**\n")
+                for delta in write_section_stream(
+                    sec, _format_context(sec_chunks), mode, tone, length, active_fmt,
+                    checklist=checklist, model=model, instructions=instructions,
+                ):
+                    yield _push(delta)
+                yield _push("\n\n")
+            notes = "".join(parts).strip()
+            yield _emit("notes_done", "write", notes)
+        else:
+            # Small sources: single-pass write over one retrieval (fast path).
+            query = " ".join(outline + checklist + [mode])
+            chunks = retriever.retrieve(query, k=8)
+            context = _format_context(chunks)
+            yield _emit("sources", "write", "", chunks)
+
+            yield _emit("status", "write", "Writing notes...")
+            parts = []
+            for delta in write_notes_stream(
+                context, mode, tone, length, active_fmt, plan, model=model, instructions=instructions
+            ):
+                parts.append(delta)
+                yield _emit("notes_delta", "write", delta)
+            notes = "".join(parts).strip()
+            yield _emit("notes_done", "write", notes)
+
+        # Critique/revise judge against an even breadth sample of the WHOLE
+        # document (not just its beginning), and revise with a bigger budget
+        # when the notes are sectioned.
+        critique_source = retriever.sample(12000)
+        revise_length = "xl" if sectioned else length
 
         def _crit_msg(c):
             sc = c.get("score", 0)
@@ -612,7 +729,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
 
         # 5-6. Critique (grounded against the SOURCE for faithfulness + coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
-        critique = critique_notes(notes, plan, mode, source=text, model=model)
+        critique = critique_notes(notes, plan, mode, source=critique_source, model=model)
         yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         best_notes = notes
@@ -627,7 +744,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             parts = []
             for delta in revise_notes_stream(
                 notes, critique, mode, plan, active_fmt, model=model,
-                instructions=instructions, context=context, length=length,
+                instructions=instructions, context=context, length=revise_length,
             ):
                 parts.append(delta)
                 yield _emit("notes_delta", "revise", delta)
@@ -636,7 +753,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
 
             # Re-critique the revised notes.
             yield _emit("status", "critique", f"Re-checking (round {rounds})...")
-            critique = critique_notes(notes, plan, mode, source=text, model=model)
+            critique = critique_notes(notes, plan, mode, source=critique_source, model=model)
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
             if critique.get("score", 0) >= best_critique.get("score", 0):

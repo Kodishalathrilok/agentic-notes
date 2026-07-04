@@ -8,7 +8,7 @@ const TABS = [
   { id: 'audio', label: 'Audio' },
 ]
 
-const MAX_CHARS = 50000
+const MAX_CHARS = 300000
 
 export default function InputPanel({ inputText, setInputText, isStreaming }) {
   const [tab, setTab] = useState('text')

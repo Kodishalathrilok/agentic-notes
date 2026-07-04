@@ -47,6 +47,52 @@ def test_pipeline_event_sequence(monkeypatch):
     assert "".join(deltas) == "Some notes."
 
 
+def test_long_document_uses_sectioned_writing(monkeypatch):
+    """Docs over SECTION_DOC_THRESHOLD are written section-by-section, each with
+    its own retrieval — so a large source's later parts aren't left out."""
+
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        if "PLANNING agent" in prompt:
+            return (
+                '{"outline":["Alpha","Beta","Gamma"],"checklist":["x"],'
+                '"difficulty":"easy","suggested_format":"bullet"}'
+            )
+        return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
+
+    streams = {"n": 0}
+
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+        streams["n"] += 1
+        yield f"body-{streams['n']} "
+
+    monkeypatch.setattr(agent, "call_model", model)
+    monkeypatch.setattr(agent, "call_model_stream", stream)
+
+    # long, multi-topic source (> SECTION_DOC_THRESHOLD chars)
+    long_text = (
+        "Photosynthesis converts light into chemical energy in chloroplasts. "
+        "Binary search halves a sorted interval, running in O(log n). "
+        "The French Revolution began in 1789 and reshaped Europe. "
+    ) * 300
+    assert len(long_text) > agent.SECTION_DOC_THRESHOLD
+
+    events = list(agent.run_agent(long_text, "exam", "academic", "long", "bullet"))
+    types = [e["type"] for e in events]
+
+    assert "error" not in types
+    assert types.count("sources") == 1  # one unified sources event
+    notes = next(e["content"] for e in events if e["type"] == "notes_done")
+
+    # every outline section is present as a header, with its own written body
+    for sec in ("Alpha", "Beta", "Gamma"):
+        assert f"**{sec}:**" in notes
+    assert streams["n"] == 3  # one write stream per section
+
+    # progress messages expose per-section status
+    statuses = [e["content"] for e in events if e["type"] == "status"]
+    assert any("section 2/3" in s for s in statuses)
+
+
 def test_pipeline_blocks_non_academic(monkeypatch):
     def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
         if "gatekeeper" in prompt.lower():

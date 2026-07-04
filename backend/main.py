@@ -72,7 +72,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "50000"))
+MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "300000"))
 
 
 def _groq_configured() -> bool:
