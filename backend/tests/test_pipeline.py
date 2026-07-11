@@ -5,6 +5,8 @@ Verifies run_agent emits the right event sequence and that streamed note
 deltas reassemble into the final notes.
 """
 
+import threading
+
 import agent
 
 
@@ -60,10 +62,13 @@ def test_long_document_uses_sectioned_writing(monkeypatch):
         return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
 
     streams = {"n": 0}
+    lock = threading.Lock()
 
     def stream(prompt, max_tokens=1400, model=None, temperature=0.4):
-        streams["n"] += 1
-        yield f"body-{streams['n']} "
+        with lock:  # sections are now written concurrently
+            streams["n"] += 1
+            n = streams["n"]
+        yield f"body-{n} "
 
     monkeypatch.setattr(agent, "call_model", model)
     monkeypatch.setattr(agent, "call_model_stream", stream)
@@ -189,3 +194,104 @@ def test_pipeline_triggers_revision_when_needed(monkeypatch):
     assert "revise_start" in types
     assert types.count("critique_done") >= 2
     assert "error" not in types
+
+
+# ---------------------------------------------------------------------------
+# New behaviors: citation enforcement, corrective re-retrieval, advisory
+# missing_topics
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_citations_strips_invented_ids():
+    notes = "Point one [1]. Point two [2][9]. Link [text](http://x) stays. [77]\nEnd [3]"
+    cleaned = agent.enforce_citations(notes, valid_ids={1, 3})
+    assert "[1]" in cleaned and "[3]" in cleaned
+    assert "[2]" not in cleaned and "[9]" not in cleaned and "[77]" not in cleaned
+    assert "[text](http://x)" in cleaned  # markdown links untouched
+
+
+def test_final_notes_have_invalid_citations_stripped(monkeypatch):
+    """A hallucinated [99] in the written notes must not survive the pipeline."""
+
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+        yield "A real point [1]. "
+        yield "A fabricated citation [99]."
+
+    monkeypatch.setattr(agent, "call_model", _fake_call_model)
+    monkeypatch.setattr(agent, "call_model_stream", stream)
+
+    events = list(agent.run_agent("source text " * 50, "exam", "academic", "medium", "bullet"))
+    types = [e["type"] for e in events]
+    assert "error" not in types
+
+    # The cleanup is surfaced to the client as a notes_revised event.
+    final = [e["content"] for e in events if e["type"] in ("notes_done", "notes_revised")][-1]
+    assert "[99]" not in final
+    assert "[1]" in final
+
+
+def test_missing_topics_alone_do_not_trigger_revision(monkeypatch):
+    """missing_topics is advisory: with a high score, no unsupported claims and
+    needs_revision=false, the pipeline must NOT revise."""
+
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        if "CRITIQUE agent" in prompt:
+            return (
+                '{"score":9,"needs_revision":false,"unsupported_claims":[],'
+                '"missing_topics":["some minor aside"],"issues":[],"strengths":[]}'
+            )
+        return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
+
+    monkeypatch.setattr(agent, "call_model", model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+
+    events = list(agent.run_agent("source text", "exam", "academic", "medium", "bullet"))
+    types = [e["type"] for e in events]
+    assert "revise_start" not in types
+    assert "error" not in types
+
+
+def test_corrective_retrieval_adds_context_for_missing_topics(monkeypatch):
+    """When a revision IS needed and missing_topics is non-empty, the pipeline
+    must query the retriever per topic and re-emit the merged sources."""
+    calls = {"critique": 0}
+    retrieval_queries = []
+
+    def model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+        if "CRITIQUE agent" in prompt:
+            calls["critique"] += 1
+            if calls["critique"] == 1:
+                return (
+                    '{"score":5,"needs_revision":true,"unsupported_claims":[],'
+                    '"missing_topics":["photosynthesis details"],"issues":[],"strengths":[]}'
+                )
+            return (
+                '{"score":9,"needs_revision":false,"unsupported_claims":[],'
+                '"missing_topics":[],"issues":[],"strengths":[]}'
+            )
+        return _fake_call_model(prompt, max_tokens, model, temperature, json_mode)
+
+    real_retrieve = agent.Retriever.retrieve
+
+    def spy_retrieve(self, query, k=None):
+        retrieval_queries.append(query)
+        return real_retrieve(self, query, k=k)
+
+    monkeypatch.setattr(agent, "call_model", model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+    monkeypatch.setattr(agent.Retriever, "retrieve", spy_retrieve)
+
+    # enough distinct text that retrieval produces multiple chunks
+    src = (
+        "Photosynthesis converts light into chemical energy in chloroplasts. "
+        "Binary search halves a sorted interval each step. "
+        "The French Revolution began in 1789. "
+    ) * 40
+
+    events = list(agent.run_agent(src, "exam", "academic", "medium", "bullet"))
+    types = [e["type"] for e in events]
+
+    assert "error" not in types
+    assert "revise_start" in types
+    # the missing topic itself was used as a retrieval query
+    assert any("photosynthesis details" in q for q in retrieval_queries)

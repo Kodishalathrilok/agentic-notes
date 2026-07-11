@@ -10,6 +10,9 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
 """
 
 import os
+import re
+import queue as _queue
+from concurrent.futures import ThreadPoolExecutor
 
 from models import call_model, call_model_stream, safe_json, helper_model
 from retriever import Retriever
@@ -26,6 +29,18 @@ SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
 # Cap sections so a very large doc can't fire an unbounded burst of model calls
 # (protects free-tier rate limits). Override with SECTION_MAX_COUNT.
 SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
+# How many sections are written CONCURRENTLY on the map-reduce path. Sections
+# are independent (each has its own retrieved context), so overlapping the
+# model calls cuts wall-clock time; keep this modest to respect free-tier
+# rate limits (failover still covers 429s). Override with SECTION_CONCURRENCY.
+SECTION_CONCURRENCY = int(os.getenv("SECTION_CONCURRENCY", "2"))
+
+# Corrective re-retrieval (CRAG-style): when the critique reports missing
+# topics, run a fresh retrieval PER TOPIC and add those chunks to the context
+# before revising — the reviser can then actually fix omissions instead of
+# being asked to add material it was never shown.
+CORRECTIVE_TOPICS_MAX = 4  # cap topics queried per revision round
+CORRECTIVE_K_PER_TOPIC = 3  # chunks retrieved per missing topic
 
 # Above this size, the planner's even sample covers too little of the document
 # (e.g. ~8% of a 100-page PDF), so a topic on only 2-3 pages can be invisible
@@ -40,6 +55,34 @@ DIGEST_MAX_SEGMENTS = 12  # 12 x 25k = full coverage of the 300k input cap
 def _format_context(chunks) -> str:
     """Render retrieved chunks as numbered passages the agent can cite."""
     return "\n\n".join(f"[{c['id']}] {c['text']}" for c in chunks)
+
+
+# Deterministic citation verification: [n] markers are only kept if n is a
+# chunk ID that was actually retrieved and shown to the model. This turns
+# "don't invent citations" from a prompt instruction into a code guarantee.
+_CITATION_RE = re.compile(r"\[(\d{1,3})\]")
+
+
+def enforce_citations(notes: str, valid_ids) -> str:
+    """Strip any [n] citation whose n is not a real retrieved-chunk ID.
+
+    Pure text post-processing — no model call. Leaves markdown links
+    (``[text](url)``) untouched because they never match a bare ``[digits]``
+    pattern followed by nothing.
+    """
+    valid = set()
+    for i in valid_ids:
+        try:
+            valid.add(int(i))
+        except (TypeError, ValueError):
+            continue
+
+    def _sub(match):
+        return match.group(0) if int(match.group(1)) in valid else ""
+
+    cleaned = _CITATION_RE.sub(_sub, notes or "")
+    # Tidy whitespace left behind by removals (trailing spaces before newlines).
+    return re.sub(r"[ \t]+(\n)", r"\1", cleaned)
 
 
 _CITE_RULE = (
@@ -319,22 +362,39 @@ CONTEXT (numbered passages retrieved for THIS section — cite these):
 # Agent: Critique
 # ---------------------------------------------------------------------------
 
-def critique_notes(notes, plan, mode, source="", model=None) -> dict:
+def critique_notes(notes, plan, mode, source="", model=None, doc_sample="") -> dict:
     """
-    Grounded critique: judges the NOTES against the original SOURCE for
-    faithfulness (no fabricated claims) and coverage (nothing important missing),
-    plus overall quality for the study mode.
+    Grounded critique. FAITHFULNESS is judged against `source` — the numbered
+    CONTEXT passages the writer was actually given (the ground truth for what
+    the notes were allowed to claim). COVERAGE is judged against `doc_sample`,
+    an even breadth sample of the wider document, so topics the retrieval
+    missed can still be reported as missing.
+
+    `needs_revision` triggers on real signal only: the model's own flag, a
+    score below threshold, or unsupported claims. `missing_topics` alone is
+    advisory — it feeds corrective re-retrieval, not an automatic rewrite.
     """
     checklist = plan.get("checklist", [])
     checklist_str = "\n".join(f"- {c}" for c in checklist) if checklist else "(none)"
 
+    sample_block = ""
+    if (doc_sample or "").strip():
+        sample_block = f"""
+DOCUMENT SAMPLE — an even sample of the wider document, for judging COVERAGE
+only (a topic present here but absent from the notes may be a missing topic;
+do NOT use this block to judge faithfulness):
+\"\"\"{doc_sample[:8000]}\"\"\"
+"""
+
     prompt = f"""You are the CRITIQUE agent in a notes-generation pipeline. Be a
 strict, fair reviewer for the "{mode}" study mode.
 
-Compare the NOTES against the SOURCE. Judge THREE things:
+Judge the NOTES on THREE things:
 1. FAITHFULNESS — does every claim in the notes actually appear in / follow from
-   the SOURCE? List any statement that is fabricated, distorted, or unsupported.
-2. COVERAGE — are any important points from the SOURCE (or the checklist) missing?
+   the CONTEXT passages below? The CONTEXT is the ONLY ground truth for this:
+   list any statement that is fabricated, distorted, or unsupported by it.
+2. COVERAGE — are any important points from the checklist or the document
+   missing from the notes?
 3. QUALITY — clarity, structure, and usefulness for studying.
 
 Checklist that should be covered:
@@ -344,8 +404,8 @@ Respond with ONLY a JSON object of this exact shape:
 {{
   "score": <integer 1-10>,
   "needs_revision": <true|false>,
-  "unsupported_claims": ["claim in the notes NOT supported by the source", "..."],
-  "missing_topics": ["important source point the notes omitted", "..."],
+  "unsupported_claims": ["claim in the notes NOT supported by the context", "..."],
+  "missing_topics": ["important point the notes omitted", "..."],
   "issues": ["other quality problem", "..."],
   "strengths": ["what was done well", "..."]
 }}
@@ -354,9 +414,9 @@ Scoring: deduct heavily for any unsupported_claims (faithfulness matters most).
 A score of {REVISE_THRESHOLD} or above with NO unsupported claims means no
 revision is needed.
 
-SOURCE:
+CONTEXT (the passages the notes were written from — the ground truth):
 \"\"\"{source[:12000]}\"\"\"
-
+{sample_block}
 NOTES:
 \"\"\"{notes[:10000]}\"\"\""""
 
@@ -384,11 +444,14 @@ NOTES:
 
     unsupported = data.get("unsupported_claims", []) or []
     missing = data.get("missing_topics", []) or []
+    # missing_topics is deliberately NOT a trigger on its own — an LLM critic
+    # almost always lists something, which previously forced a revision on
+    # nearly every run. Missing topics instead drive corrective re-retrieval
+    # inside the revise loop when a revision does happen.
     needs = (
         bool(data.get("needs_revision", False))
         or score < REVISE_THRESHOLD
         or len(unsupported) > 0
-        or len(missing) > 0
     )
 
     return {
@@ -681,9 +744,14 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
     Drive the full pipeline, yielding event dicts as each stage progresses.
 
     Event types:
-      status, plan_done, notes_delta, notes_done, critique_done,
+      status, plan_done, sources, notes_delta, notes_done, critique_done,
       revise_start, notes_revised, title_done, quiz_done, flashcards_done,
       done, error
+
+    `sources` may be emitted AGAIN during the revise loop when corrective
+    re-retrieval adds chunks for missing topics — the payload is always the
+    full merged list (a superset of the previous one), so clients can simply
+    replace their sources state.
     """
     try:
         # Mechanical packaging agents (gatekeeper, title, quiz, flashcards) run
@@ -743,41 +811,72 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             write_outline = outline[:SECTION_MAX_COUNT]
             # Retrieve per-section context up front; expose the union as sources.
             section_ctx = []
-            seen = {}
+            chunk_map = {}
             for sec in write_outline:
                 sec_chunks = retriever.retrieve(f"{sec} — {mode} study notes", k=SECTION_RETRIEVAL_K)
                 section_ctx.append((sec, sec_chunks))
                 for c in sec_chunks:
-                    seen[c["id"]] = c
-            all_chunks = [seen[i] for i in sorted(seen)]
+                    chunk_map[c["id"]] = c
+            all_chunks = [chunk_map[i] for i in sorted(chunk_map)]
             context = _format_context(all_chunks)
             yield _emit("sources", "write", "", all_chunks)
 
-            # 3-4. Write section by section (streamed).
+            # 3-4. Write sections CONCURRENTLY (each has independent context),
+            # but stream them to the client strictly IN ORDER: every section's
+            # deltas go into its own queue; the main generator drains queue 1
+            # live while later sections are already being written in the
+            # background. Event sequence is identical to the sequential path.
             parts = []
 
             def _push(s):
                 parts.append(s)
                 return _emit("notes_delta", "write", s)
 
-            for i, (sec, sec_chunks) in enumerate(section_ctx, 1):
-                yield _emit(
-                    "status", "write",
-                    f"Writing section {i}/{len(section_ctx)}: {sec}…",
-                )
-                yield _push(f"**{sec}:**\n")
-                for delta in write_section_stream(
-                    sec, _format_context(sec_chunks), mode, tone, length, active_fmt,
-                    checklist=checklist, model=model, instructions=instructions,
-                ):
-                    yield _push(delta)
-                yield _push("\n\n")
+            def _write_worker(sec, ctx, out_q):
+                try:
+                    for delta in write_section_stream(
+                        sec, ctx, mode, tone, length, active_fmt,
+                        checklist=checklist, model=model, instructions=instructions,
+                    ):
+                        out_q.put(("delta", delta))
+                except Exception as exc:  # noqa: BLE001
+                    out_q.put(("error", exc))
+                finally:
+                    out_q.put(("end", None))
+
+            queues = [_queue.Queue() for _ in section_ctx]
+            pool = ThreadPoolExecutor(max_workers=max(1, SECTION_CONCURRENCY))
+            try:
+                for (sec, sec_chunks), out_q in zip(section_ctx, queues):
+                    pool.submit(_write_worker, sec, _format_context(sec_chunks), out_q)
+
+                for i, ((sec, _sec_chunks), out_q) in enumerate(zip(section_ctx, queues), 1):
+                    yield _emit(
+                        "status", "write",
+                        f"Writing section {i}/{len(section_ctx)}: {sec}…",
+                    )
+                    yield _push(f"**{sec}:**\n")
+                    while True:
+                        kind, payload = out_q.get()
+                        if kind == "delta":
+                            yield _push(payload)
+                        elif kind == "error":
+                            raise payload
+                        else:  # "end"
+                            break
+                    yield _push("\n\n")
+            finally:
+                # If the client disconnects mid-stream, cancel sections that
+                # haven't started; running ones finish into abandoned queues.
+                pool.shutdown(wait=False, cancel_futures=True)
+
             notes = "".join(parts).strip()
             yield _emit("notes_done", "write", notes)
         else:
             # Small sources: single-pass write over one retrieval (fast path).
             query = " ".join(outline + checklist + [mode])
             chunks = retriever.retrieve(query, k=8)
+            chunk_map = {c["id"]: c for c in chunks}
             context = _format_context(chunks)
             yield _emit("sources", "write", "", chunks)
 
@@ -791,10 +890,12 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             notes = "".join(parts).strip()
             yield _emit("notes_done", "write", notes)
 
-        # Critique/revise judge against an even breadth sample of the WHOLE
-        # document (not just its beginning), and revise with a bigger budget
-        # when the notes are sectioned.
-        critique_source = retriever.sample(12000)
+        # Critique: FAITHFULNESS is judged against the CONTEXT the writer was
+        # actually given (previously it was judged against an unrelated even
+        # sample, which produced false "unsupported claim" flags). COVERAGE is
+        # still judged against a breadth sample of the whole document. Revise
+        # with a bigger budget when the notes are sectioned.
+        doc_sample = retriever.sample(8000)
         revise_length = "xl" if sectioned else length
 
         def _crit_msg(c):
@@ -805,18 +906,48 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
                 return f"Quality {sc}/10{extra} — revising ✍"
             return f"Quality {sc}/10 — faithful, no revision needed ✓"
 
-        # 5-6. Critique (grounded against the SOURCE for faithfulness + coverage)
+        # 5-6. Critique (grounded against the writer's CONTEXT for faithfulness,
+        # plus a breadth sample for coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
-        critique = critique_notes(notes, plan, mode, source=critique_source, model=model)
+        critique = critique_notes(
+            notes, plan, mode, source=context, model=model, doc_sample=doc_sample
+        )
         yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         best_notes = notes
         best_critique = critique
 
-        # 7. Iterative revise loop: revise → re-critique, keep the best version.
+        # 7. Iterative revise loop: (corrective re-retrieval) → revise →
+        # re-critique, keep the best version.
         rounds = 0
         while critique.get("needs_revision") and rounds < MAX_REVISION_ROUNDS:
             rounds += 1
+
+            # Corrective re-retrieval (CRAG): the reviser can only add missing
+            # topics if the context actually CONTAINS them. Query the retriever
+            # with each missing topic and merge any new chunks into the context
+            # before revising; the frontend gets the merged sources list.
+            missing = critique.get("missing_topics") or []
+            if missing:
+                added = False
+                for topic in missing[:CORRECTIVE_TOPICS_MAX]:
+                    try:
+                        extra = retriever.retrieve(str(topic), k=CORRECTIVE_K_PER_TOPIC)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    for c in extra:
+                        if c["id"] not in chunk_map:
+                            chunk_map[c["id"]] = c
+                            added = True
+                if added:
+                    merged = [chunk_map[i] for i in sorted(chunk_map)]
+                    context = _format_context(merged)
+                    yield _emit("sources", "revise", "", merged)
+                    yield _emit(
+                        "status", "revise",
+                        f"Retrieved extra context for {min(len(missing), CORRECTIVE_TOPICS_MAX)} missing topic(s)…",
+                    )
+
             yield _emit("status", "revise", f"Revising (round {rounds}/{MAX_REVISION_ROUNDS})...")
             yield _emit("revise_start", "revise", "")
             parts = []
@@ -829,9 +960,11 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             notes = "".join(parts).strip()
             yield _emit("notes_revised", "revise", notes)
 
-            # Re-critique the revised notes.
+            # Re-critique the revised notes (against the possibly augmented context).
             yield _emit("status", "critique", f"Re-checking (round {rounds})...")
-            critique = critique_notes(notes, plan, mode, source=critique_source, model=model)
+            critique = critique_notes(
+                notes, plan, mode, source=context, model=model, doc_sample=doc_sample
+            )
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
             if critique.get("score", 0) >= best_critique.get("score", 0):
@@ -845,6 +978,13 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             notes, critique = best_notes, best_critique
             yield _emit("notes_revised", "revise", notes)
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
+
+        # Citation verification (deterministic, no model call): drop any [n]
+        # citation that doesn't point at a chunk the model was actually shown.
+        cleaned = enforce_citations(notes, chunk_map.keys())
+        if cleaned != notes:
+            notes = cleaned
+            yield _emit("notes_revised", "revise", notes)
 
         # Auto-title (best effort)
         try:
