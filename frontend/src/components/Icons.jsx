@@ -91,6 +91,61 @@ const Icon = {
   Menu: make(<path d="M4 7h16M4 12h16M4 17h16" />),
   X: make(<path d="M18 6 6 18M6 6l12 12" />),
   ArrowUpRight: make(<path d="M7 17 17 7M8 7h9v9" />),
+  Paperclip: make(
+    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  ),
+  Mic: make(
+    <>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0M12 17v5" />
+    </>
+  ),
+  Link: make(
+    <>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </>
+  ),
+  Help: make(
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" />
+    </>
+  ),
+  Layers: make(
+    <>
+      <path d="m12 2 10 6.5-10 6.5L2 8.5Z" />
+      <path d="m2 15.5 10 6.5 10-6.5" />
+    </>
+  ),
+  Clock: make(
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </>
+  ),
+  Plus: make(<path d="M12 5v14M5 12h14" />),
+  FileText: make(
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+    </>
+  ),
+  Image: make(
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="m21 15-5-5L5 21" />
+    </>
+  ),
+  Music: make(
+    <>
+      <path d="M9 18V5l12-2v13" />
+      <circle cx="6" cy="18" r="3" />
+      <circle cx="18" cy="16" r="3" />
+    </>
+  ),
+  Type: make(<path d="M4 7V4h16v3M9 20h6M12 4v16" />),
 }
 
 export default Icon

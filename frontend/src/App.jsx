@@ -16,6 +16,7 @@ import AuthModal from './components/AuthModal'
 import SharedNote from './components/SharedNote'
 import useHistory from './hooks/useHistory'
 import { supabase, supabaseEnabled } from './lib/supabase'
+import { apiFetch } from './lib/api'
 
 const HISTORY_KEY = 'agentic-notes-history'
 const SETTINGS_KEY = 'agentic-notes-settings'
@@ -161,6 +162,13 @@ export default function App() {
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut()
   }
+
+  // Auth gate: with Supabase enabled, only signed-in users may use the app.
+  // (Backend enforces this too — this just keeps the UI honest.)
+  const authRequired = supabaseEnabled && !user
+  useEffect(() => {
+    if (authRequired && !showLanding && !sharedView && !showEval) setShowLanding(true)
+  }, [authRequired, showLanding, sharedView, showEval])
 
   // Load a shared (public) session if the URL has ?share=<id>.
   useEffect(() => {
@@ -336,7 +344,7 @@ export default function App() {
     if (!notes) return
     setQuizRegen(true)
     try {
-      const res = await fetch('/api/quiz', {
+      const res = await apiFetch('/api/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, model }),
@@ -354,7 +362,7 @@ export default function App() {
     if (!notes) return
     setCardsRegen(true)
     try {
-      const res = await fetch('/api/flashcards', {
+      const res = await apiFetch('/api/flashcards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, model }),
@@ -370,7 +378,7 @@ export default function App() {
 
   const editSelection = async (selection, instruction) => {
     if (!notes || !selection) return
-    const res = await fetch('/api/edit-selection', {
+    const res = await apiFetch('/api/edit-selection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes, selection, instruction, model }),
@@ -388,7 +396,7 @@ export default function App() {
     if (!notes) return
     setRewriting(direction)
     try {
-      const res = await fetch('/api/rewrite', {
+      const res = await apiFetch('/api/rewrite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, direction, mode, tone, format, model }),
@@ -434,6 +442,7 @@ export default function App() {
     return (
       <>
         <Landing
+          authRequired={authRequired}
           onLaunch={() => setShowLanding(false)}
           onEval={() => {
             setShowLanding(false)
@@ -458,8 +467,8 @@ export default function App() {
       </div>
 
       {/* Minimal nav: logo left · Eval + auth + CTA right */}
-      <header className="fixed inset-x-0 top-0 z-40">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-5 py-4">
+      <header className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
+        <div className="glass-pill flex w-full flex-wrap items-center justify-between gap-2 rounded-full py-2 pl-3 pr-2 sm:pl-4">
           <button
             onClick={() => setShowLanding(true)}
  className="flex items-center gap-3 text-left"
@@ -525,16 +534,14 @@ export default function App() {
       {/* Main */}
       <main className="mx-auto max-w-7xl px-5 pb-16 pt-28 sm:pt-32">
         {/* App hero */}
-        <div className="mb-12 max-w-3xl animate-fade-in">
-          <h2 className="font-display text-6xl font-bold leading-[0.95] text-espresso-900 sm:text-8xl">
-            Generate notes
-            <span className="block bg-gradient-to-r from-brand-600 to-rose-500 bg-clip-text text-transparent">
-              from anything.
-            </span>
+        <div className="mb-10 max-w-3xl animate-fade-in">
+          <h2 className="font-display text-5xl font-bold leading-[1.05] text-espresso-900 sm:text-7xl">
+            Time to
+            <span className="bg-gradient-to-r from-brand-600 to-rose-500 bg-clip-text text-transparent"> learn.</span>
           </h2>
-          <p className="mt-4 max-w-xl text-base text-espresso-500">
-            Paste text, drop a PDF or photo, link a YouTube video, or record audio — six AI agents
-            turn it into faithful, cited study notes.
+          <p className="mt-3 max-w-xl text-base text-espresso-500">
+            Paste text, drop a PDF or photo, link a video, or record audio — a pipeline of agents
+            turns it into faithful, cited study notes.
           </p>
         </div>
 
@@ -574,7 +581,7 @@ export default function App() {
             {isStreaming && (
               <button
                 onClick={cancel}
- className="w-full rounded-full border border-red-900/60 px-4 py-2.5 text-sm font-semibold text-red-400 transition-colors hover:bg-red-900/20"
+ className="w-full animate-slide-up rounded-full border border-red-300 bg-red-50/80 px-4 py-2.5 text-sm font-semibold text-red-600 backdrop-blur-sm transition-all hover:bg-red-100 hover:shadow-soft"
               >
                 Cancel generation
               </button>
@@ -601,14 +608,14 @@ export default function App() {
             )}
 
             {/* Tab bar — pill group */}
-            <div className="scroll-area flex w-full gap-1.5 overflow-x-auto rounded-full border border-espresso-900/10 bg-white/70 p-1.5">
+            <div className="scroll-area glass-pill flex w-full gap-1.5 overflow-x-auto rounded-full p-1.5">
               {TABS.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setActiveTab(t.id)}
  className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
                     activeTab === t.id
-                      ? 'bg-espresso-900 text-cream shadow-soft'
+                      ? 'bg-gradient-to-br from-espresso-800 to-espresso-900 text-cream shadow-soft scale-[1.02]'
                       : 'text-espresso-600 hover:bg-espresso-900/5 hover:text-espresso-900'
                   }`}
                 >
@@ -665,7 +672,7 @@ export default function App() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-slide-up items-center gap-2 rounded-xl bg-espresso-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lift ">
+        <div className="glass-pill fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-slide-up items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold text-espresso-900 shadow-lift">
           <Icon.Check className="h-4 w-4 text-green-400 dark:text-green-600" />
           {toast.replace(' ✓', '')}
         </div>

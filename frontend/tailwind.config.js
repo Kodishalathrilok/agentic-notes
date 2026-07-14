@@ -5,45 +5,51 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Plus Jakarta Sans', 'Inter', 'system-ui', 'sans-serif'],
-        display: ['Caveat', 'cursive'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        display: ['Questrial', 'Century Gothic', 'sans-serif'],
         mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Warm cream backgrounds (coffee-shop light theme)
+        // Pure white backgrounds (monochrome theme)
         latte: {
-          50: '#faf7f1',
-          100: '#f3ecdf',
-          200: '#eadfcc',
-          300: '#ddceb4',
+          50: '#ffffff',
+          100: '#ffffff',
+          200: '#f5f5f5',
+          300: '#e8e8e8',
         },
-        // Warm dark brown for text & CTAs
+        // Pure black for all text & CTAs
         espresso: {
-          500: '#8a7263',
-          600: '#6f594c',
-          700: '#523d31',
-          800: '#3b2b21',
-          900: '#2b1d15',
+          300: '#000000',
+          400: '#000000',
+          500: '#000000',
+          600: '#000000',
+          700: '#000000',
+          800: '#000000',
+          900: '#000000',
         },
-        cream: '#f6f1e7',
-        // Accent — burnt caramel (replaces the old indigo scale)
+        cream: '#ffffff',
+        // Accent — neutral grayscale (monochrome like the reference)
         brand: {
-          50: '#fdf3ec',
-          100: '#f9e4d4',
-          200: '#f2c9a8',
-          300: '#e8a678',
-          400: '#dc8350',
-          500: '#c96733',
-          600: '#a94f22',
-          700: '#87401f',
-          800: '#6b341d',
-          900: '#4a2515',
+          50: '#fafafa',
+          100: '#f5f5f5',
+          200: '#e5e5e5',
+          300: '#d4d4d4',
+          400: '#737373',
+          500: '#000000',
+          600: '#000000',
+          700: '#000000',
+          800: '#000000',
+          900: '#000000',
         },
       },
       boxShadow: {
-        soft: '0 2px 8px -2px rgb(59 43 33 / 0.15)',
-        card: '0 2px 6px -1px rgb(59 43 33 / 0.08), 0 16px 40px -16px rgb(59 43 33 / 0.18)',
-        lift: '0 18px 44px -14px rgb(59 43 33 / 0.35)',
+        soft: '0 2px 8px -2px rgb(0 0 0 / 0.12)',
+        card: '0 2px 6px -1px rgb(0 0 0 / 0.06), 0 16px 40px -16px rgb(0 0 0 / 0.14)',
+        lift: '0 18px 44px -14px rgb(0 0 0 / 0.28)',
+        // Neumorphism — soft extrusion on the white surface
+        neu: '10px 10px 24px rgb(0 0 0 / 0.07), -10px -10px 24px rgb(255 255 255 / 0.95)',
+        'neu-sm': '5px 5px 12px rgb(0 0 0 / 0.06), -5px -5px 12px rgb(255 255 255 / 0.9)',
+        'neu-inset': 'inset 4px 4px 10px rgb(0 0 0 / 0.05), inset -4px -4px 10px rgb(255 255 255 / 0.9)',
       },
       borderRadius: {
         xl: '0.875rem',

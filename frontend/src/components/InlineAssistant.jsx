@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { apiFetch } from '../lib/api'
 import Icon from './Icons'
 
 // --- tiny markdown renderer for the answer (bold + bullets) ---
@@ -112,7 +113,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
       ? `${instruction} (about this excerpt: "${sel.text}")`
       : `Explain this part of the notes simply: "${sel.text}"`
     try {
-      const res = await fetch('/api/chat', {
+      const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, question, history: [] }),

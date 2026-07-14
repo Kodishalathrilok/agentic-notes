@@ -295,3 +295,61 @@ def test_corrective_retrieval_adds_context_for_missing_topics(monkeypatch):
     assert "revise_start" in types
     # the missing topic itself was used as a retrieval query
     assert any("photosynthesis details" in q for q in retrieval_queries)
+
+def test_quiz_and_flashcards_skipped_when_flags_off(monkeypatch):
+    """On-demand generation: include_quiz/include_flashcards=False must skip
+    those stages entirely (no quiz_done / flashcards_done events) while the
+    rest of the pipeline runs to completion."""
+    monkeypatch.setattr(agent, "call_model", _fake_call_model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+
+    events = list(
+        agent.run_agent(
+            "source text", "exam", "academic", "medium", "bullet",
+            include_quiz=False, include_flashcards=False,
+        )
+    )
+    types = [e["type"] for e in events]
+
+    assert "quiz_done" not in types
+    assert "flashcards_done" not in types
+    for expected in ("plan_done", "notes_done", "critique_done"):
+        assert expected in types, f"missing {expected}"
+    assert types[-1] == "done"
+
+
+def test_single_pass_long_retrieves_more_context(monkeypatch):
+    """A small doc taking the single-pass path must retrieve a larger slice for
+    length='long' than for 'short', so the writer has enough source material to
+    reach the long word target."""
+    monkeypatch.setattr(agent, "call_model", _fake_call_model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+
+    captured = {}
+
+    class SpyRetriever:
+        def __init__(self, text):
+            self.texts = ["chunk"] * 30
+        def sample(self, n=16000):
+            return "sample text"
+        def retrieve(self, query, k=None):
+            captured["k"] = k
+            return [
+                {"chunk_id": i, "text": f"c{i}", "start_offset": 0, "end_offset": 1}
+                for i in range(k or 8)
+            ]
+
+    monkeypatch.setattr(agent, "Retriever", SpyRetriever)
+
+    # Short source (below SECTION_DOC_THRESHOLD) -> single-pass path
+    short_doc = "Immunology basics. " * 20
+
+    list(agent.run_agent(short_doc, "exam", "academic", "short", "bullet",
+                         include_quiz=False, include_flashcards=False))
+    k_short = captured["k"]
+
+    list(agent.run_agent(short_doc, "exam", "academic", "long", "bullet",
+                         include_quiz=False, include_flashcards=False))
+    k_long = captured["k"]
+
+    assert k_long > k_short, f"long ({k_long}) should retrieve more than short ({k_short})"

@@ -24,8 +24,19 @@ MAX_REVISION_ROUNDS = 2  # cap revision passes to bound latency
 # Long-document handling: above this size, notes are written SECTION BY SECTION
 # (map-reduce) — each outline section gets its own retrieval over the whole
 # document, so no part of a large source is left out.
-SECTION_DOC_THRESHOLD = 20000  # chars
+SECTION_DOC_THRESHOLD = 12000  # chars
 SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
+
+# Single-pass (small-doc) path: how many chunks the writer sees, scaled by the
+# requested length. The old fixed k=8 (~5.6k chars) starved "long" notes — the
+# writer can't produce 1000-1500 words from < 1000 words of context. These pull
+# a much larger slice of the document (candidate pool is 30) so the length
+# targets are actually reachable.
+SINGLE_PASS_K = {
+    "short": 8,
+    "medium": 14,
+    "long": 24,
+}
 # Cap sections so a very large doc can't fire an unbounded burst of model calls
 # (protects free-tier rate limits). Override with SECTION_MAX_COUNT.
 SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
@@ -85,6 +96,41 @@ def enforce_citations(notes: str, valid_ids) -> str:
     return re.sub(r"[ \t]+(\n)", r"\1", cleaned)
 
 
+# ---------------------------------------------------------------------------
+# Notes windowing: never let head-truncation hide the tail of long notes
+# ---------------------------------------------------------------------------
+
+# Hard cap on notes fed to a FULL-REWRITE step (revise / rewrite / edit).
+# Sized to fit the largest sectioned output (8 sections x ~500 words ~ 28k
+# chars) with headroom; a rewrite prompt must NEVER see a truncated copy,
+# because the model can only return what it was shown -- truncation here
+# silently deletes the tail of the document.
+NOTES_REWRITE_CAP = int(os.getenv("NOTES_REWRITE_CAP", "30000"))
+
+
+def _notes_excerpt(notes: str, max_chars: int) -> str:
+    """Return the notes whole if they fit, else an EVEN SAMPLE across the
+    entire notes. Used for read-only consumers (critique coverage, quiz,
+    flashcards, chat): head-truncation (`notes[:N]`) made the tail of long
+    notes invisible, producing false 'missing topic' flags and quizzes that
+    never covered later sections."""
+    notes = notes or ""
+    if len(notes) <= max_chars:
+        return notes
+    n_seg = 6
+    seg = max(1, max_chars // n_seg)
+    parts = []
+    # First n_seg-1 segments evenly spaced from the start of the notes...
+    stride = max(1, (len(notes) - seg) // (n_seg - 1))
+    for i in range(n_seg - 1):
+        start = i * stride
+        parts.append(notes[start:start + seg])
+    # ...and the LAST segment anchored to the very END, so the tail of the
+    # notes is always represented.
+    parts.append(notes[-seg:])
+    return "\n[...]\n".join(p for p in parts if p)
+
+
 _CITE_RULE = (
     "Support each point with a citation to the passage number(s) it came from, "
     "in square brackets right after the point, e.g. [1] or [2][5]. Only cite "
@@ -96,34 +142,35 @@ _CITE_RULE = (
 # ---------------------------------------------------------------------------
 
 LENGTH_TARGETS = {
-    "short": "150-200 words",
-    "medium": "300-400 words",
-    "long": "500-700 words",
+    "short": "250-350 words",
+    "medium": "500-700 words",
+    "long": "1000-1500 words",
 }
 
 # Output token budget per length (enough to finish without truncation).
+# Roughly 1.6 tokens/word plus headroom for markdown, citations, and headers.
 LENGTH_MAX_TOKENS = {
-    "short": 900,
-    "medium": 1600,
-    "long": 2800,
-    "xl": 4096,  # used when revising long sectioned notes
+    "short": 1200,
+    "medium": 2200,
+    "long": 4096,
+    "xl": 6000,  # used when revising long sectioned notes
 }
 
 
 def _max_tokens(length: str) -> int:
-    return LENGTH_MAX_TOKENS.get((length or "medium").lower(), 1600)
+    return LENGTH_MAX_TOKENS.get((length or "medium").lower(), LENGTH_MAX_TOKENS["medium"])
 
 
 # Per-SECTION word budgets for long documents (map-reduce path).
 SECTION_WORDS = {
-    "short": "60-100 words",
-    "medium": "120-180 words",
-    "long": "200-300 words",
+    "short": "120-180 words",
+    "medium": "220-320 words",
+    "long": "350-500 words",
 }
 SECTION_MAX_TOKENS = {
-    "short": 450,
-    "medium": 750,
-    "long": 1200,
+    "short": 700,
+    "medium": 1100,
+    "long": 1600,
 }
 
 MODE_GUIDANCE = {
@@ -290,7 +337,11 @@ Write high-quality study notes grounded in the CONTEXT passages below.
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
-Length target: {LENGTH_TARGETS.get(length.lower(), '300-400 words')}.
+Length target: {LENGTH_TARGETS.get(length.lower(), '500-700 words')}. Treat this as a
+MINIMUM to reach, not a ceiling — be thorough and comprehensive. Cover every outline
+point in depth with concrete facts, definitions, examples, and explanations drawn from
+the context. Do not pad with filler, but do not stop short: err on the side of MORE
+detail and completeness. It is better to slightly exceed the target than to fall under it.
 
 Follow this outline:
 {outline_str}
@@ -339,7 +390,9 @@ repeat the section title, do NOT write other sections, no preamble.
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
-Section length: {words}.
+Section length: {words}. Treat this as a minimum — cover this section's points
+thoroughly with concrete facts and explanations from the context. Prefer more
+detail over brevity.
 
 Cover any of these plan points that belong to this section:
 {related or '- (use your judgment)'}
@@ -418,7 +471,7 @@ CONTEXT (the passages the notes were written from — the ground truth):
 \"\"\"{source[:12000]}\"\"\"
 {sample_block}
 NOTES:
-\"\"\"{notes[:10000]}\"\"\""""
+\"\"\"{_notes_excerpt(notes, 20000)}\"\"\""""
 
     data = safe_json(
         call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True)
@@ -504,7 +557,7 @@ Return ONLY the full, revised notes — no commentary.
 {context_block}
 
 CURRENT NOTES:
-\"\"\"{notes[:12000]}\"\"\""""
+\"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
 
 
 def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium") -> str:
@@ -546,9 +599,15 @@ Keep the "{mode}" study focus and a {tone} tone.
 Return ONLY the rewritten notes — no commentary.
 
 NOTES:
-\"\"\"{notes[:8000]}\"\"\""""
+\"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
 
-    budget = 3000 if direction == "longer" else 1800
+    # Budget scales with input so the model can return the FULL rewritten text
+    # (a fixed budget silently truncated long rewrites).
+    est_tokens = max(1, len(notes)) // 3
+    if direction == "longer":
+        budget = min(4500, max(3000, est_tokens * 2))
+    else:
+        budget = min(3500, max(1800, est_tokens))
     return call_model(prompt, max_tokens=budget, model=model)
 
 
@@ -568,8 +627,10 @@ SELECTED PASSAGE:
 \"\"\"{selection[:2000]}\"\"\"
 
 FULL NOTES:
-\"\"\"{notes[:14000]}\"\"\""""
-    return call_model(prompt, max_tokens=2800, model=model, temperature=0.4)
+\"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
+    # Must be able to return the COMPLETE notes, not just the edited passage.
+    budget = min(8000, max(2800, len(notes) // 3))
+    return call_model(prompt, max_tokens=budget, model=model, temperature=0.4)
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +654,91 @@ NOTES:
 # Agent: Quiz
 # ---------------------------------------------------------------------------
 
+def _flat(text) -> str:
+    """Collapse a value to one clean line (the plain-text wire format is
+    line-oriented, so embedded newlines would corrupt parsing)."""
+    return " ".join(str(text or "").split())
+
+
+def _valid_questions(data, n: int) -> list:
+    """Validate model-returned quiz JSON. Returns [] if unusable, else a list
+    of fully-formed questions (question text, options A-D, valid answer)."""
+    qs = data.get("questions") if isinstance(data, dict) else None
+    if not isinstance(qs, list):
+        return []
+    out = []
+    for q in qs:
+        if not isinstance(q, dict):
+            continue
+        text = _flat(q.get("question"))
+        opts = q.get("options")
+        if isinstance(opts, list) and len(opts) >= 4:
+            opts = {"A": opts[0], "B": opts[1], "C": opts[2], "D": opts[3]}
+        if not isinstance(opts, dict):
+            continue
+        norm = {str(k).strip().upper()[:1]: _flat(v) for k, v in opts.items()}
+        if not all(norm.get(letter) for letter in "ABCD"):
+            continue
+        answer = str(q.get("answer") or "").strip().upper()[:1]
+        if answer not in "ABCD" or not text:
+            continue
+        out.append({
+            "question": text,
+            "options": {letter: norm[letter] for letter in "ABCD"},
+            "answer": answer,
+            "explanation": _flat(q.get("explanation")),
+        })
+    return out[:n]
+
+
+def _render_quiz(questions: list) -> str:
+    """Deterministically render validated questions into the plain-text format
+    the frontend/exports parse (Q#) / A)-D) / Answer: / Explanation:)."""
+    blocks = []
+    for i, q in enumerate(questions, 1):
+        lines = [f"Q{i}) {q['question']}"]
+        lines += [f"{letter}) {q['options'][letter]}" for letter in "ABCD"]
+        lines.append(f"Answer: {q['answer']}")
+        if q.get("explanation"):
+            lines.append(f"Explanation: {q['explanation']}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+_QUIZ_JSON_SCHEMA = """{"questions": [{"question": "<question text>",
+"options": {"A": "<option>", "B": "<option>", "C": "<option>", "D": "<option>"},
+"answer": "<A|B|C|D>", "explanation": "<one-sentence explanation>"}]}"""
+
+
 def generate_quiz(notes, n=5, model=None) -> str:
+    """Generate a quiz via structured JSON (validated, then rendered to the
+    plain-text wire format deterministically). Models drift from free-form
+    text formats constantly; JSON mode + validation makes output reliable.
+    Falls back to the legacy plain-text prompt if JSON parsing fails."""
+    prompt = f"""You are the QUIZ agent. Create exactly {n} multiple-choice
+questions that test understanding of the NOTES.
+
+Return ONLY a JSON object in exactly this shape (no markdown, no commentary):
+{_QUIZ_JSON_SCHEMA}
+
+Every question must have exactly four options A-D and one correct answer letter.
+
+NOTES:
+\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
+
+    try:
+        data = safe_json(call_model(
+            prompt, max_tokens=1600, model=model, temperature=0.3, json_mode=True))
+        questions = _valid_questions(data, n)
+        if questions:
+            return _render_quiz(questions)
+    except Exception:  # noqa: BLE001
+        pass
+    return _generate_quiz_text(notes, n=n, model=model)
+
+
+def _generate_quiz_text(notes, n=5, model=None) -> str:
+    """Legacy plain-text fallback (kept so a JSON hiccup can't break quizzes)."""
     prompt = f"""You are the QUIZ agent. Create exactly {n} multiple-choice
 questions that test understanding of the NOTES.
 
@@ -610,49 +755,143 @@ Explanation: <one-sentence explanation>
 Leave a blank line between questions. Number them Q1, Q2, ... up to Q{n}.
 
 NOTES:
-\"\"\"{notes[:9000]}\"\"\""""
+\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
 
     return call_model(prompt, max_tokens=1200, model=model, temperature=0.3)
 
 
 def verify_quiz(notes, quiz, model=None) -> str:
     """
-    Validate the answer key: re-check each marked answer against the NOTES and
-    return a corrected quiz in the SAME format. Falls back to the original quiz
-    if the verifier returns something implausibly short.
+    Validate the answer key: re-check each marked answer against the NOTES.
+    The verifier returns JSON corrections ({"corrections": [{"q": 1,
+    "answer": "B", "explanation": "..."}]}) which are applied to the parsed
+    quiz and re-rendered — so a chatty verifier can no longer corrupt the
+    quiz format. Any failure returns the original quiz unchanged.
     """
     if not quiz or not quiz.strip():
         return quiz
 
-    prompt = f"""You are a QUIZ VERIFIER. For each question below, check whether the
-marked "Answer:" letter is actually correct according to the NOTES. If an answer
-is wrong, fix the Answer letter and update the Explanation. Keep every question
-and the EXACT same plain-text format (Q#) / A) B) C) D) / Answer: / Explanation:).
+    prompt = f"""You are a QUIZ VERIFIER. For each question in the QUIZ, check whether
+the marked answer letter is actually correct according to the NOTES.
 
-Return ONLY the full corrected quiz — no commentary.
+Return ONLY a JSON object listing the corrections needed (empty list if all
+answers are correct), in exactly this shape:
+{{"corrections": [{{"q": <question number>, "answer": "<A|B|C|D>",
+"explanation": "<one-sentence corrected explanation>"}}]}}
 
 NOTES:
-\"\"\"{notes[:6000]}\"\"\"
+\"\"\"{_notes_excerpt(notes, 9000)}\"\"\"
 
 QUIZ:
 \"\"\"{quiz}\"\"\""""
 
     try:
-        result = call_model(prompt, max_tokens=1300, model=model, temperature=0.0).strip()
+        data = safe_json(call_model(
+            prompt, max_tokens=800, model=model, temperature=0.0, json_mode=True))
     except Exception:  # noqa: BLE001
         return quiz
 
-    # Guard against a degenerate verifier response.
-    if len(result) < max(40, int(len(quiz) * 0.5)) or "Answer" not in result:
+    corrections = data.get("corrections") if isinstance(data, dict) else None
+    if not isinstance(corrections, list) or not corrections:
         return quiz
-    return result
+
+    parsed = _parse_quiz_text(quiz)
+    if not parsed:
+        return quiz
+    for corr in corrections:
+        if not isinstance(corr, dict):
+            continue
+        try:
+            idx = int(corr.get("q")) - 1
+        except (TypeError, ValueError):
+            continue
+        answer = str(corr.get("answer") or "").strip().upper()[:1]
+        if 0 <= idx < len(parsed) and answer in "ABCD":
+            parsed[idx]["answer"] = answer
+            expl = _flat(corr.get("explanation"))
+            if expl:
+                parsed[idx]["explanation"] = expl
+    return _render_quiz(parsed)
+
+
+def _parse_quiz_text(quiz: str) -> list:
+    """Parse the plain-text quiz format back into structured questions
+    (mirror of the frontend parser, used to apply verifier corrections)."""
+    questions, current = [], None
+    for raw_line in (quiz or "").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        q_match = re.match(r"^Q?\s*\d+[).:]\s*(.+)$", line, re.IGNORECASE)
+        opt_match = re.match(r"^([A-D])[).:]\s*(.+)$", line)
+        ans_match = re.match(r"^Answer\s*:?\s*([A-D])", line, re.IGNORECASE)
+        exp_match = re.match(r"^Explanation\s*:?\s*(.+)$", line, re.IGNORECASE)
+        if q_match and not opt_match:
+            if current and current.get("question") and len(current.get("options", {})) == 4:
+                questions.append(current)
+            current = {"question": q_match.group(1).strip(), "options": {},
+                       "answer": "", "explanation": ""}
+        elif opt_match and current is not None:
+            current["options"][opt_match.group(1).upper()] = opt_match.group(2).strip()
+        elif ans_match and current is not None:
+            current["answer"] = ans_match.group(1).upper()
+        elif exp_match and current is not None:
+            current["explanation"] = exp_match.group(1).strip()
+    if current and current.get("question") and len(current.get("options", {})) == 4:
+        questions.append(current)
+    return questions
 
 
 # ---------------------------------------------------------------------------
 # Agent: Flashcards
 # ---------------------------------------------------------------------------
 
+def _valid_cards(data, n: int) -> list:
+    cards = data.get("cards") if isinstance(data, dict) else None
+    if not isinstance(cards, list):
+        return []
+    out = []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        front, back = _flat(card.get("front")), _flat(card.get("back"))
+        if front and back:
+            out.append({"front": front, "back": back})
+    return out[:n]
+
+
+def _render_flashcards(cards: list) -> str:
+    blocks = []
+    for i, card in enumerate(cards, 1):
+        blocks.append(f"CARD {i}\nFront: {card['front']}\nBack: {card['back']}")
+    return "\n\n".join(blocks)
+
+
 def generate_flashcards(notes, n=8, model=None) -> str:
+    """Structured-JSON flashcards (validated + deterministically rendered),
+    with the legacy plain-text prompt as fallback."""
+    prompt = f"""You are the FLASHCARD agent. Create exactly {n} flashcards
+from the NOTES.
+
+Return ONLY a JSON object in exactly this shape (no markdown, no commentary):
+{{"cards": [{{"front": "<concise question or term>", "back": "<clear, correct answer>"}}]}}
+
+NOTES:
+\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
+
+    try:
+        data = safe_json(call_model(
+            prompt, max_tokens=1400, model=model, json_mode=True))
+        cards = _valid_cards(data, n)
+        if cards:
+            return _render_flashcards(cards)
+    except Exception:  # noqa: BLE001
+        pass
+    return _generate_flashcards_text(notes, n=n, model=model)
+
+
+def _generate_flashcards_text(notes, n=8, model=None) -> str:
+    """Legacy plain-text fallback."""
     prompt = f"""You are the FLASHCARD agent. Create exactly {n} flashcards
 from the NOTES.
 
@@ -665,7 +904,7 @@ Back: <clear, correct answer>
 Leave a blank line between cards. Number them CARD 1 ... CARD {n}.
 
 NOTES:
-\"\"\"{notes[:9000]}\"\"\""""
+\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
 
     return call_model(prompt, max_tokens=1200, model=model)
 
@@ -680,7 +919,7 @@ def chat_about_notes_stream(notes, question, history=None, model=None):
     convo = ""
     for turn in history[-6:]:
         role = "Student" if turn.get("role") == "user" else "Tutor"
-        convo += f"{role}: {turn.get('content', '')}\n"
+        convo += f"{role}: {(turn.get('content') or '')[:2000]}\n"
 
     prompt = f"""You are a helpful study TUTOR. Answer the student's question using
 primarily the NOTES below as context. If the notes don't cover it, you may use
@@ -688,7 +927,7 @@ general knowledge but say so briefly. Be clear and concise. You may use `$...$`
 for math and fenced code blocks.
 
 NOTES:
-\"\"\"{notes[:7000]}\"\"\"
+\"\"\"{_notes_excerpt(notes, 10000)}\"\"\"
 
 Conversation so far:
 {convo}
@@ -722,7 +961,7 @@ SOURCE:
     data = safe_json(call_model(prompt, max_tokens=200, model=model, temperature=0.0, json_mode=True))
 
     # Permissive on parse failure — don't block legitimate content over a glitch.
-    if "academic" not in data:
+    if not isinstance(data, dict) or "academic" not in data:
         return {"academic": True, "subject": "n/a", "reason": ""}
     return {
         "academic": bool(data.get("academic", True)),
@@ -739,7 +978,8 @@ def _emit(type_, step, content="", data=None):
     return {"type": type_, "step": step, "content": content, "data": data}
 
 
-def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
+def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
+              include_quiz=True, include_flashcards=True):
     """
     Drive the full pipeline, yielding event dicts as each stage progresses.
 
@@ -874,8 +1114,11 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
             yield _emit("notes_done", "write", notes)
         else:
             # Small sources: single-pass write over one retrieval (fast path).
+            # Pull a length-scaled slice so "long" actually has enough source
+            # material to hit its word target.
             query = " ".join(outline + checklist + [mode])
-            chunks = retriever.retrieve(query, k=8)
+            single_k = SINGLE_PASS_K.get((length or "medium").lower(), 14)
+            chunks = retriever.retrieve(query, k=single_k)
             chunk_map = {c["id"]: c for c in chunks}
             context = _format_context(chunks)
             yield _emit("sources", "write", "", chunks)
@@ -920,6 +1163,15 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
         # 7. Iterative revise loop: (corrective re-retrieval) → revise →
         # re-critique, keep the best version.
         rounds = 0
+        # Safety: a full-rewrite revision must see the WHOLE notes. If they
+        # exceed the rewrite cap, revising would silently drop the tail —
+        # keep the draft (citation cleanup below still runs).
+        if len(notes) > NOTES_REWRITE_CAP and critique.get("needs_revision"):
+            critique["needs_revision"] = False
+            yield _emit(
+                "status", "revise",
+                "Notes are too long for a safe full revision — keeping the draft.",
+            )
         while critique.get("needs_revision") and rounds < MAX_REVISION_ROUNDS:
             rounds += 1
 
@@ -994,16 +1246,20 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions=""):
         except Exception:  # noqa: BLE001
             pass
 
-        # 8-9. Quiz (generate, then verify the answer key against the notes)
-        yield _emit("status", "quiz", "Generating quiz...")
-        quiz = generate_quiz(notes, n=5, model=helper)
-        quiz = verify_quiz(notes, quiz, model=helper)
-        yield _emit("quiz_done", "quiz", quiz)
+        # 8-9. Quiz (generate, then verify the answer key against the notes).
+        # Skipped by default in the app — the user generates these on demand
+        # from the Learn sidebar via /api/quiz and /api/flashcards.
+        if include_quiz:
+            yield _emit("status", "quiz", "Generating quiz...")
+            quiz = generate_quiz(notes, n=5, model=helper)
+            quiz = verify_quiz(notes, quiz, model=helper)
+            yield _emit("quiz_done", "quiz", quiz)
 
         # 10-11. Flashcards
-        yield _emit("status", "flashcards", "Creating flashcards...")
-        cards = generate_flashcards(notes, n=8, model=helper)
-        yield _emit("flashcards_done", "flashcards", cards)
+        if include_flashcards:
+            yield _emit("status", "flashcards", "Creating flashcards...")
+            cards = generate_flashcards(notes, n=8, model=helper)
+            yield _emit("flashcards_done", "flashcards", cards)
 
         # 12. Done
         yield _emit("done", "complete", "All done!")

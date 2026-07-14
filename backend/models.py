@@ -81,18 +81,24 @@ def _gemini_available() -> bool:
 
 
 _ollama_reachable = None
+_ollama_checked_at = 0.0
+_OLLAMA_PROBE_TTL = 60  # seconds — re-probe periodically instead of caching forever
 
 
 def _ollama_available() -> bool:
-    """Probe Ollama once and cache it. On hosted deploys (no local Ollama) this
-    is False, so a dead localhost fallback never masks the real Groq/Gemini error."""
-    global _ollama_reachable
-    if _ollama_reachable is None:
+    """Probe Ollama with a short TTL cache. On hosted deploys (no local Ollama)
+    this stays False, so a dead localhost fallback never masks the real
+    Groq/Gemini error — but if Ollama comes up later, it's picked up within a
+    minute instead of never."""
+    global _ollama_reachable, _ollama_checked_at
+    now = time.time()
+    if _ollama_reachable is None or (now - _ollama_checked_at) > _OLLAMA_PROBE_TTL:
         try:
             requests.get(f"{OLLAMA_URL}/api/tags", timeout=1.5)
             _ollama_reachable = True
         except Exception:  # noqa: BLE001
             _ollama_reachable = False
+        _ollama_checked_at = now
     return _ollama_reachable
 
 

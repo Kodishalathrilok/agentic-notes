@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
+import { apiFetch } from '../lib/api'
 import Icon from './Icons'
 
 // Parse "CARD n / Front: / Back:" format into { front, back } objects.
@@ -157,7 +158,7 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
   const exportCsv = async () => {
     setExporting(true)
     try {
-      const res = await fetch('/api/export/flashcards-csv', {
+      const res = await apiFetch('/api/export/flashcards-csv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flashcards }),
@@ -174,13 +175,22 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
 
   if (!flashcards || order.length === 0) {
     return (
-      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-espresso-900/15 text-sm text-espresso-500">
-        No flashcards yet. Generate notes to create flashcards.
-        {onRegenerate && (
-          <button onClick={onRegenerate} disabled={regenerating} className="pill">
-            <Icon.Refresh className="h-3.5 w-3.5" />
-            {regenerating ? 'Generating…' : 'Generate flashcards from notes'}
-          </button>
+      <div className="card flex h-56 flex-col items-center justify-center gap-3 text-sm text-espresso-500">
+        {regenerating ? (
+          <>
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-espresso-400 border-t-transparent" />
+            Building spaced-repetition flashcards…
+          </>
+        ) : (
+          <>
+            Flashcards are generated on demand from your notes.
+            {onRegenerate && (
+              <button onClick={onRegenerate} className="btn-primary px-5 py-2 text-sm">
+                <Icon.Sparkles className="h-4 w-4" />
+                Generate flashcards
+              </button>
+            )}
+          </>
         )}
       </div>
     )

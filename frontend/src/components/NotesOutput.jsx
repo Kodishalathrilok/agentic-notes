@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { apiFetch } from '../lib/api'
 import Icon from './Icons'
 import InlineAssistant from './InlineAssistant'
 
@@ -279,7 +280,7 @@ export default function NotesOutput({
   const exportFile = async (kind) => {
     setBusy(kind)
     try {
-      const res = await fetch(`/api/export/${kind}`, {
+      const res = await apiFetch(`/api/export/${kind}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, quiz, flashcards }),

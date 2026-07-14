@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { apiFetch } from '../lib/api'
 
 /**
  * Consume the /api/generate SSE stream.
@@ -98,7 +99,7 @@ export default function useStream() {
     }
 
     try {
-      const res = await fetch('/api/generate', {
+      const res = await apiFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

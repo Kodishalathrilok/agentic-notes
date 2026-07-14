@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, supabaseConfigError, friendlyAuthError } from '../lib/supabase'
 
 export default function AuthModal({ onClose }) {
   const [mode, setMode] = useState('signin') // 'signin' | 'signup'
@@ -10,18 +10,24 @@ export default function AuthModal({ onClose }) {
   const [notice, setNotice] = useState(null)
 
   const google = async () => {
-    if (!supabase) return
+    if (!supabase) {
+      setError(supabaseConfigError)
+      return
+    }
     setError(null)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin },
     })
-    if (error) setError(error.message)
+    if (error) setError(friendlyAuthError(error))
   }
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!supabase) return
+    if (!supabase) {
+      setError(supabaseConfigError)
+      return
+    }
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -40,7 +46,7 @@ export default function AuthModal({ onClose }) {
         onClose()
       }
     } catch (err) {
-      setError(err.message || 'Something went wrong.')
+      setError(friendlyAuthError(err))
     } finally {
       setBusy(false)
     }

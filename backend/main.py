@@ -12,11 +12,15 @@ Endpoints:
 
 import os
 import json
+import socket
 import asyncio
 import logging
+import ipaddress
 from io import BytesIO
+from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +28,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from dotenv import load_dotenv
 
+from auth import limiter
 from agent import (
     run_agent,
     generate_quiz,
@@ -74,6 +79,131 @@ app.add_middleware(
 
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "300000"))
 
+# ---------------------------------------------------------------------------
+# Server hardening: dedicated thread pool + size limits + SSRF-safe fetching
+# ---------------------------------------------------------------------------
+
+# Dedicated, bounded pool for all blocking work (model calls, PDF parsing,
+# OCR). Using the loop's DEFAULT executor for this is dangerous: it's shared
+# with the rest of asyncio and capped at min(32, cpus+4) threads, so a handful
+# of long generations could starve every other request. Size via env.
+WORKER_THREADS = int(os.getenv("WORKER_THREADS", "16"))
+EXECUTOR = ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix="work")
+
+# Hard cap on how many /api/generate pipelines may run at once. Excess
+# requests get a clear 503 instead of silently queueing behind the pool.
+MAX_CONCURRENT_GENERATIONS = int(os.getenv("MAX_CONCURRENT_GENERATIONS", "4"))
+_generation_slots = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+
+# Upload size caps (bytes). Without these, `await file.read()` loads whatever
+# the client sends straight into RAM.
+MAX_PDF_BYTES = int(os.getenv("MAX_PDF_MB", "20")) * 1024 * 1024
+MAX_AUDIO_BYTES = int(os.getenv("MAX_AUDIO_MB", "25")) * 1024 * 1024  # Groq Whisper limit
+MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_MB", "10")) * 1024 * 1024
+
+# Cap for server-side URL fetches (/api/extract-url).
+MAX_URL_FETCH_BYTES = int(os.getenv("MAX_URL_FETCH_MB", "5")) * 1024 * 1024
+
+
+async def _read_upload(file: UploadFile, max_bytes: int, label: str) -> bytes:
+    """Read an upload in chunks, aborting with 413 once it exceeds max_bytes."""
+    chunks, total = [], 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{label} is too large (max {max_bytes // (1024 * 1024)} MB).",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _host_resolves_public(host: str) -> bool:
+    """True only if EVERY address the hostname resolves to is a public IP.
+
+    Blocks loopback (127.x, ::1), private ranges (10.x, 172.16-31.x,
+    192.168.x), link-local / cloud metadata (169.254.x, fe80::), and other
+    reserved space — so /api/extract-url can't be used to probe this server
+    or its internal network (SSRF).
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def _fetch_url_safely(url: str) -> "object":
+    """GET a user-supplied URL with SSRF protection and a download size cap.
+
+    - Only http/https.
+    - Every hop (including each redirect target) must resolve to public IPs.
+    - Response body is streamed and truncated at MAX_URL_FETCH_BYTES.
+    Returns the requests.Response with `.safe_text` attached.
+    """
+    import requests as _requests
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; AgenticNotes/1.0)"}
+    current = url
+    for _hop in range(4):  # original request + up to 3 redirects
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(422, "Only http(s) URLs are allowed.")
+        if not parsed.hostname or not _host_resolves_public(parsed.hostname):
+            raise HTTPException(
+                422, "This URL points at a private or unreachable address and can't be fetched."
+            )
+
+        resp = _requests.get(
+            current, timeout=20, headers=headers, stream=True, allow_redirects=False
+        )
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location")
+            resp.close()
+            if not location:
+                raise HTTPException(422, "URL redirected without a destination.")
+            current = urljoin(current, location)
+            continue
+
+        resp.raise_for_status()
+        # Stream the body with a hard byte cap.
+        body, total = [], 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > MAX_URL_FETCH_BYTES:
+                resp.close()
+                break
+            body.append(chunk)
+        raw = b"".join(body)
+        encoding = resp.encoding or resp.apparent_encoding or "utf-8"
+        try:
+            resp.safe_text = raw.decode(encoding, errors="replace")
+        except LookupError:
+            resp.safe_text = raw.decode("utf-8", errors="replace")
+        return resp
+
+    raise HTTPException(422, "Too many redirects.")
+
 
 def _groq_configured() -> bool:
     return bool(GROQ_API_KEY) and GROQ_API_KEY != GROQ_PLACEHOLDER
@@ -84,51 +214,55 @@ def _groq_configured() -> bool:
 # ---------------------------------------------------------------------------
 
 class GenerateRequest(BaseModel):
-    text: str = Field(default="")
-    mode: str = Field(default="exam")
-    tone: str = Field(default="academic")
-    length: str = Field(default="medium")
-    format: str = Field(default="bullet")
-    model: str = Field(default="")
-    instructions: str = Field(default="")
+    text: str = Field(default="")  # length checked against MAX_TEXT_CHARS below
+    mode: str = Field(default="exam", max_length=40)
+    tone: str = Field(default="academic", max_length=40)
+    length: str = Field(default="medium", max_length=40)
+    format: str = Field(default="bullet", max_length=40)
+    model: str = Field(default="", max_length=100)
+    instructions: str = Field(default="", max_length=5000)
+    # Quiz and flashcards are generated on demand from the UI (separate
+    # /api/quiz and /api/flashcards calls), not with the notes.
+    include_quiz: bool = Field(default=False)
+    include_flashcards: bool = Field(default=False)
 
 
 class ChatRequest(BaseModel):
-    notes: str = Field(default="")
-    question: str = Field(default="")
-    history: list = Field(default_factory=list)
-    model: str = Field(default="")
+    notes: str = Field(default="", max_length=300000)
+    question: str = Field(default="", max_length=4000)
+    history: list = Field(default_factory=list, max_length=24)
+    model: str = Field(default="", max_length=100)
 
 
 class UrlRequest(BaseModel):
-    url: str = Field(default="")
+    url: str = Field(default="", max_length=2000)
 
 
 class EditSelectionRequest(BaseModel):
-    notes: str = Field(default="")
-    selection: str = Field(default="")
-    instruction: str = Field(default="")
-    model: str = Field(default="")
+    notes: str = Field(default="", max_length=300000)
+    selection: str = Field(default="", max_length=20000)
+    instruction: str = Field(default="", max_length=2000)
+    model: str = Field(default="", max_length=100)
 
 
 class ExportRequest(BaseModel):
-    notes: str = Field(default="")
-    quiz: str = Field(default="")
-    flashcards: str = Field(default="")
+    notes: str = Field(default="", max_length=300000)
+    quiz: str = Field(default="", max_length=100000)
+    flashcards: str = Field(default="", max_length=100000)
 
 
 class RegenRequest(BaseModel):
-    notes: str = Field(default="")
-    model: str = Field(default="")
+    notes: str = Field(default="", max_length=300000)
+    model: str = Field(default="", max_length=100)
 
 
 class RewriteRequest(BaseModel):
-    notes: str = Field(default="")
-    direction: str = Field(default="shorter")  # shorter | longer
-    mode: str = Field(default="exam")
-    tone: str = Field(default="academic")
-    format: str = Field(default="bullet")
-    model: str = Field(default="")
+    notes: str = Field(default="", max_length=300000)
+    direction: str = Field(default="shorter", max_length=20)  # shorter | longer | clarity
+    mode: str = Field(default="exam", max_length=40)
+    tone: str = Field(default="academic", max_length=40)
+    format: str = Field(default="bullet", max_length=40)
+    model: str = Field(default="", max_length=100)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +283,8 @@ async def health():
 @app.get("/api/eval-report")
 async def eval_report():
     """Serve the latest eval report (eval/report.json) for the dashboard."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "report.json")
+    path = os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "eval", "report.json")
     if not os.path.isfile(path):
         return {"available": False}
     try:
@@ -174,7 +309,7 @@ async def list_models():
 # ---------------------------------------------------------------------------
 
 @app.post("/api/generate")
-async def generate(req: GenerateRequest):
+async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600))):
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="`text` is required.")
@@ -184,7 +319,16 @@ async def generate(req: GenerateRequest):
             detail=f"`text` exceeds the {MAX_TEXT_CHARS} character limit.",
         )
 
+    # Reject immediately (don't queue invisibly) when the server is already
+    # running its maximum number of pipelines.
+    if _generation_slots.locked():
+        raise HTTPException(
+            status_code=503,
+            detail="The server is at capacity right now — please try again in a minute.",
+        )
+
     async def event_generator():
+      async with _generation_slots:
         loop = asyncio.get_event_loop()
 
         # run_agent is a synchronous generator; step through it in an executor
@@ -197,6 +341,8 @@ async def generate(req: GenerateRequest):
             req.format,
             model=req.model,
             instructions=req.instructions,
+            include_quiz=req.include_quiz,
+            include_flashcards=req.include_flashcards,
         )
         sentinel = object()
 
@@ -204,7 +350,7 @@ async def generate(req: GenerateRequest):
             return next(gen, sentinel)
 
         while True:
-            event = await loop.run_in_executor(None, _next)
+            event = await loop.run_in_executor(EXECUTOR, _next)
             if event is sentinel:
                 break
             yield {"data": json.dumps(event)}
@@ -221,24 +367,27 @@ async def generate(req: GenerateRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-pdf")
-async def extract_pdf(file: UploadFile = File(...)):
+async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
     from pypdf import PdfReader
 
-    raw = await file.read()
-    try:
+    raw = await _read_upload(file, MAX_PDF_BYTES, "PDF")
+    def _parse() -> tuple:
         reader = PdfReader(BytesIO(raw))
+        n_pages = len(reader.pages)
+        parts = []
+        for page in reader.pages:
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:  # noqa: BLE001
+                parts.append("")
+        return n_pages, "\n\n".join(c.strip() for c in parts if c.strip()).strip()
+
+    loop = asyncio.get_event_loop()
+    try:
+        pages, text = await loop.run_in_executor(EXECUTOR, _parse)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not read PDF: {exc}")
-
-    pages = len(reader.pages)
-    chunks = []
-    for page in reader.pages:
-        try:
-            chunks.append(page.extract_text() or "")
-        except Exception:  # noqa: BLE001
-            chunks.append("")
-
-    text = "\n\n".join(c.strip() for c in chunks if c.strip()).strip()
+        raise HTTPException(
+            status_code=422, detail=f"Could not read PDF: {exc}")
 
     if not text:
         raise HTTPException(
@@ -254,7 +403,7 @@ async def extract_pdf(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-image")
-async def extract_image(file: UploadFile = File(...)):
+async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
     """OCR a photo of study material (textbook page, slides, handwriting) via Gemini vision."""
     if not gemini_available():
         raise HTTPException(
@@ -262,11 +411,11 @@ async def extract_image(file: UploadFile = File(...)):
             detail="Image text extraction requires a GEMINI_API_KEY. Set it in backend/.env.",
         )
 
-    raw = await file.read()
+    raw = await _read_upload(file, MAX_IMAGE_BYTES, "Image")
     mime = file.content_type or "image/jpeg"
     loop = asyncio.get_event_loop()
     try:
-        text = await loop.run_in_executor(None, lambda: extract_text_from_image(raw, mime))
+        text = await loop.run_in_executor(EXECUTOR, lambda: extract_text_from_image(raw, mime))
     except Exception:  # noqa: BLE001 - message kept generic so the API key never leaks
         raise HTTPException(
             status_code=502,
@@ -276,12 +425,13 @@ async def extract_image(file: UploadFile = File(...)):
 
     text = (text or "").strip()[:MAX_TEXT_CHARS]
     if len(text) < 5:
-        raise HTTPException(status_code=422, detail="No readable text found in this image.")
+        raise HTTPException(
+            status_code=422, detail="No readable text found in this image.")
     return {"text": text, "chars": len(text)}
 
 
 @app.post("/api/transcribe")
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
     if not _groq_configured():
         raise HTTPException(
             status_code=503,
@@ -291,7 +441,7 @@ async def transcribe(file: UploadFile = File(...)):
 
     from groq import Groq
 
-    raw = await file.read()
+    raw = await _read_upload(file, MAX_AUDIO_BYTES, "Audio file")
     filename = file.filename or "audio.webm"
 
     try:
@@ -302,7 +452,8 @@ async def transcribe(file: UploadFile = File(...)):
         )
         text = getattr(result, "text", "") or ""
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}")
+        raise HTTPException(
+            status_code=502, detail=f"Transcription failed: {exc}")
 
     return {"text": text.strip()}
 
@@ -312,40 +463,42 @@ async def transcribe(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/quiz")
-async def regen_quiz(req: RegenRequest):
+async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
     loop = asyncio.get_event_loop()
-    quiz = await loop.run_in_executor(None, lambda: generate_quiz(notes, 5, req.model))
+    quiz = await loop.run_in_executor(EXECUTOR, lambda: generate_quiz(notes, 5, req.model))
     return {"quiz": quiz}
 
 
 @app.post("/api/flashcards")
-async def regen_flashcards(req: RegenRequest):
+async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 600))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
     loop = asyncio.get_event_loop()
-    cards = await loop.run_in_executor(None, lambda: generate_flashcards(notes, 8, req.model))
+    cards = await loop.run_in_executor(EXECUTOR, lambda: generate_flashcards(notes, 8, req.model))
     return {"flashcards": cards}
 
 
 @app.post("/api/edit-selection")
-async def edit_selection_endpoint(req: EditSelectionRequest):
+async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limiter("regen", 20, 600))):
     notes = (req.notes or "").strip()
     selection = (req.selection or "").strip()
     if not notes or not selection:
-        raise HTTPException(status_code=422, detail="`notes` and `selection` are required.")
+        raise HTTPException(
+            status_code=422, detail="`notes` and `selection` are required.")
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None, lambda: edit_selection(notes, selection, req.instruction, req.model)
+        EXECUTOR, lambda: edit_selection(
+            notes, selection, req.instruction, req.model)
     )
     return {"notes": result}
 
 
 @app.post("/api/rewrite")
-async def rewrite(req: RewriteRequest):
+async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -353,8 +506,9 @@ async def rewrite(req: RewriteRequest):
         raise HTTPException(status_code=422, detail="Invalid `direction`.")
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None,
-        lambda: rewrite_notes(notes, req.direction, req.mode, req.tone, req.format, req.model),
+        EXECUTOR,
+        lambda: rewrite_notes(notes, req.direction, req.mode,
+                              req.tone, req.format, req.model),
     )
     return {"notes": result}
 
@@ -364,24 +518,26 @@ async def rewrite(req: RewriteRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600))):
     notes = (req.notes or "").strip()
     question = (req.question or "").strip()
     if not notes:
-        raise HTTPException(status_code=422, detail="Generate notes first to chat about them.")
+        raise HTTPException(
+            status_code=422, detail="Generate notes first to chat about them.")
     if not question:
         raise HTTPException(status_code=422, detail="`question` is required.")
 
     async def token_generator():
         loop = asyncio.get_event_loop()
-        gen = chat_about_notes_stream(notes, question, req.history, model=req.model)
+        gen = chat_about_notes_stream(
+            notes, question, req.history, model=req.model)
         sentinel = object()
 
         def _next():
             return next(gen, sentinel)
 
         while True:
-            piece = await loop.run_in_executor(None, _next)
+            piece = await loop.run_in_executor(EXECUTOR, _next)
             if piece is sentinel:
                 break
             yield piece
@@ -437,7 +593,8 @@ def _youtube_transcript(video_id: str) -> str:
 
     # Old API (0.6.x): classmethods
     try:
-        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
+        segments = YouTubeTranscriptApi.get_transcript(
+            video_id, languages=langs)
     except Exception:
         listing = YouTubeTranscriptApi.list_transcripts(video_id)
         segments = next(iter(listing)).fetch()
@@ -445,7 +602,7 @@ def _youtube_transcript(video_id: str) -> str:
 
 
 @app.post("/api/extract-url")
-async def extract_url(req: UrlRequest):
+async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600))):
     import requests as _requests
     from bs4 import BeautifulSoup
 
@@ -467,24 +624,24 @@ async def extract_url(req: UrlRequest):
                 f"captions disabled). Try a video with subtitles. ({exc})",
             )
         if len(transcript) < 50:
-            raise HTTPException(status_code=422, detail="This video has no usable transcript.")
+            raise HTTPException(
+                status_code=422, detail="This video has no usable transcript.")
         return {
             "text": transcript[:MAX_TEXT_CHARS],
             "title": "YouTube transcript",
             "chars": min(len(transcript), MAX_TEXT_CHARS),
         }
 
+    loop = asyncio.get_event_loop()
     try:
-        resp = _requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; AgenticNotes/1.0)"},
-        )
-        resp.raise_for_status()
+        resp = await loop.run_in_executor(EXECUTOR, lambda: _fetch_url_safely(url))
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {exc}")
+        raise HTTPException(
+            status_code=422, detail=f"Could not fetch URL: {exc}")
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(resp.safe_text, "html.parser")
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         tag.decompose()
 
@@ -503,7 +660,8 @@ async def extract_url(req: UrlRequest):
 
     text = text[:MAX_TEXT_CHARS]
     if not text:
-        raise HTTPException(status_code=422, detail="No readable text found at that URL.")
+        raise HTTPException(
+            status_code=422, detail="No readable text found at that URL.")
 
     title = soup.title.get_text(strip=True) if soup.title else url
     return {"text": text, "title": title, "chars": len(text)}
@@ -514,7 +672,7 @@ async def extract_url(req: UrlRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/export/pdf")
-async def export_pdf(req: ExportRequest):
+async def export_pdf(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
     pdf_bytes = notes_to_pdf(req.notes, req.quiz, req.flashcards)
     return StreamingResponse(
         BytesIO(pdf_bytes),
@@ -524,7 +682,7 @@ async def export_pdf(req: ExportRequest):
 
 
 @app.post("/api/export/markdown")
-async def export_markdown(req: ExportRequest):
+async def export_markdown(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
     md = notes_to_markdown(req.notes, req.quiz, req.flashcards)
     return StreamingResponse(
         BytesIO(md.encode("utf-8")),
@@ -534,7 +692,7 @@ async def export_markdown(req: ExportRequest):
 
 
 @app.post("/api/export/docx")
-async def export_docx(req: ExportRequest):
+async def export_docx(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
     data = notes_to_docx(req.notes, req.quiz, req.flashcards)
     return StreamingResponse(
         BytesIO(data),
@@ -544,7 +702,7 @@ async def export_docx(req: ExportRequest):
 
 
 @app.post("/api/export/flashcards-csv")
-async def export_flashcards_csv(req: ExportRequest):
+async def export_flashcards_csv(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
     csv_text = flashcards_to_csv(req.flashcards)
     return StreamingResponse(
         BytesIO(csv_text.encode("utf-8")),
