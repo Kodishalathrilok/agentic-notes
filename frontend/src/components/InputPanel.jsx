@@ -52,17 +52,36 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
   const [recording, setRecording] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')      // "Learn anything" bar value
+  // The original document, shown as-is. The text the model reads is extracted
+  // in the background and deliberately never rendered.
+  const [preview, setPreview] = useState(null) // { kind: 'pdf', url, name }
+  const [showText, setShowText] = useState(false)
   const fileInputRef = useRef(null)
   const barRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
+  const previewUrlRef = useRef(null)
 
-  const hasSource = !!inputText.trim()
+  const hasSource = !!inputText.trim() || !!preview
 
   // If the source is cleared elsewhere (e.g. loading a history session), exit edit mode.
   useEffect(() => {
     if (!hasSource) setEditing(false)
   }, [hasSource])
+
+  // Object URLs are leaked memory until revoked, so drop the last one on unmount.
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+  }, [])
+
+  const showPreview = (file, name) => {
+    const url = URL.createObjectURL(file)
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    previewUrlRef.current = url
+    setPreview({ kind: 'pdf', url, name })
+    setShowText(false)
+    setEditing(false)
+  }
 
   // Auto-grow the bar with its content, up to a cap.
   useEffect(() => {
@@ -100,7 +119,12 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
     const name = file.name || ''
     const type = file.type || ''
     if (type === 'application/pdf' || /\.pdf$/i.test(name)) {
-      return extractFile('/api/extract-pdf', file, `Extracting ${name}…`, (d) => `${name} · ${d.pages} page${d.pages === 1 ? '' : 's'}`)
+      // Put the document on screen straight away, then read it in the
+      // background — the user looks at their PDF, not at a wall of
+      // extracted characters.
+      showPreview(file, name)
+      setInputText('')
+      return extractFile('/api/extract-pdf', file, `Reading ${name}…`, (d) => `${name} · ${d.pages} page${d.pages === 1 ? '' : 's'}`)
     }
     if (type.startsWith('image/')) {
       return extractFile('/api/extract-image', file, `Reading text from ${name || 'image'}…`, () => `${name || 'Pasted image'}`)
@@ -220,6 +244,12 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
   // ----- replace the loaded source ------------------------------------------
   const replaceSource = () => {
     if (isStreaming) return
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreview(null)
+    setShowText(false)
     setInputText('')
     setInfo(null)
     setError(null)
@@ -282,19 +312,37 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
             </span>
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-neutral-900" title={info?.label || 'Your source'}>
-                {info?.label || 'Your source'}
+              <p className="truncate text-sm font-medium text-neutral-900" title={preview?.name || info?.label || 'Your source'}>
+                {preview?.name || info?.label || 'Your source'}
               </p>
               <p className="mt-0.5 text-xs text-neutral-400">
-                {inputText.length.toLocaleString()} characters · {words.toLocaleString()} words
-                {atLimit && (
-                  <span className="text-amber-600"> · trimmed to the {MAX_CHARS.toLocaleString()}-character limit</span>
+                {busy ? (
+                  <span className="text-neutral-500">Reading it in the background…</span>
+                ) : (
+                  <>
+                    {inputText.length.toLocaleString()} characters · {words.toLocaleString()} words
+                    {atLimit && (
+                      <span className="text-amber-600"> · trimmed to the {MAX_CHARS.toLocaleString()}-character limit</span>
+                    )}
+                  </>
                 )}
               </p>
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
-              {editing ? (
+              {preview ? (
+                // No Edit for a rendered document — you can't type into a PDF.
+                // Offer a look at what the model will actually read instead.
+                <button
+                  onClick={() => setShowText((v) => !v)}
+                  className={actionBtn}
+                  disabled={locked || !inputText}
+                  title="See the text the model will read"
+                >
+                  <Icon.Type className="h-3.5 w-3.5" />
+                  {showText ? 'Document' : 'Text'}
+                </button>
+              ) : editing ? (
                 <button onClick={() => setEditing(false)} className={actionBtn} disabled={isStreaming}>
                   <Icon.Check className="h-3.5 w-3.5" />
                   Done
@@ -312,8 +360,16 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
             </div>
           </div>
 
-          {/* body — read-only by default, editable in place */}
-          {editing ? (
+          {/* body — the document itself when we have one, else the text */}
+          {preview && !showText ? (
+            <div className={`min-h-0 flex-1 bg-neutral-100 ${fill ? '' : 'h-[32rem]'}`}>
+              <iframe
+                src={`${preview.url}#view=FitH&navpanes=0`}
+                title={preview.name}
+                className="h-full w-full border-0"
+              />
+            </div>
+          ) : editing ? (
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value.slice(0, MAX_CHARS))}
