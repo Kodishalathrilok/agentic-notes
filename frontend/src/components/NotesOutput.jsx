@@ -418,6 +418,12 @@ export default function NotesOutput({
                   }`}
                 >
                   <span className="mr-2 font-bold text-brand-600 dark:text-brand-600">[{s.id}]</span>
+                  {/* Only PDFs carry pages; pasted text and transcripts don't. */}
+                  {s.page && (
+                    <span className="mr-2 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-500 dark:bg-slate-700 dark:text-slate-300">
+                      p. {s.page}
+                    </span>
+                  )}
                   <span className="text-slate-600 dark:text-slate-300">{s.text}</span>
                 </div>
               ))}

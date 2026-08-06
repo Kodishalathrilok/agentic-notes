@@ -44,7 +44,7 @@ function SourceCard({ icon: Glyph, title, sub, badge, onClick, disabled }) {
   )
 }
 
-export default function InputPanel({ inputText, setInputText, isStreaming, fill = false }) {
+export default function InputPanel({ inputText, setInputText, setPageSpans = () => {}, isStreaming, fill = false }) {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(null)      // string label while extracting
   const [info, setInfo] = useState(null)      // { label } -> doubles as the source title
@@ -107,6 +107,9 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
       }
       const data = await res.json()
       setInputText((data.text || '').slice(0, MAX_CHARS))
+      // Only /api/extract-pdf returns these; every other source clears them,
+      // so a PDF's pages can never be attributed to the text that replaced it.
+      setPageSpans(data.page_spans || [])
       done(describe(data))
     } catch (err) {
       fail(err.message)
@@ -136,6 +139,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
       setBusy(`Reading ${name}…`)
       file.text().then((t) => {
         setInputText(t.slice(0, MAX_CHARS))
+        setPageSpans([])
         done(name)
       }).catch(() => fail(`Could not read ${name}.`))
       return
@@ -162,6 +166,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
       }
       const data = await res.json()
       setInputText((data.text || '').slice(0, MAX_CHARS))
+      setPageSpans([])
       setDraft('')
       done(data.title || target)
     } catch (err) {
@@ -175,6 +180,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
     if (!t || isStreaming || busy) return
     if (looksLikeUrl(t)) return fetchUrl(t)
     setInputText(t.slice(0, MAX_CHARS))
+    setPageSpans([])
     setDraft('')
     done('Pasted text')
   }
@@ -192,6 +198,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
       if (t && t.trim()) {
         if (looksLikeUrl(t)) return fetchUrl(t)
         setInputText(t.slice(0, MAX_CHARS))
+        setPageSpans([])
         done('Pasted text')
       } else {
         barRef.current?.focus()
@@ -251,6 +258,7 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
     setPreview(null)
     setShowText(false)
     setInputText('')
+    setPageSpans([])
     setInfo(null)
     setError(null)
     setDraft('')

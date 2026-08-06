@@ -38,7 +38,7 @@ from agent import (
     edit_selection,
 )
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
-from retriever import active_embedding_backend
+from retriever import active_embedding_backend, page_spans
 from models import (
     get_active_provider,
     OLLAMA_URL,
@@ -237,6 +237,10 @@ class GenerateRequest(BaseModel):
     # /api/quiz and /api/flashcards calls), not with the notes.
     include_quiz: bool = Field(default=False)
     include_flashcards: bool = Field(default=False)
+    # [{page, start, end}] from /api/extract-pdf, so citations can name the
+    # page they came from. Absent for pasted text, URLs and transcripts,
+    # which have no pages — those simply cite without one.
+    page_spans: list = Field(default_factory=list, max_length=5000)
 
 
 class ChatRequest(BaseModel):
@@ -358,6 +362,7 @@ async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600
             instructions=req.instructions,
             include_quiz=req.include_quiz,
             include_flashcards=req.include_flashcards,
+            page_spans=req.page_spans,
         )
         sentinel = object()
 
@@ -395,11 +400,16 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
                 parts.append(page.extract_text() or "")
             except Exception:  # noqa: BLE001
                 parts.append("")
-        return n_pages, "\n\n".join(c.strip() for c in parts if c.strip()).strip()
+        joined = "\n\n".join(c.strip() for c in parts if c.strip()).strip()
+        # Page boundaries measured in the same normalized space the chunker
+        # uses, so a citation can later be traced back to the page it came
+        # from. Computed here because this is the only place page structure
+        # still exists — joining throws it away.
+        return n_pages, joined, page_spans(parts)
 
     loop = asyncio.get_event_loop()
     try:
-        pages, text = await loop.run_in_executor(EXECUTOR, _parse)
+        pages, text, spans = await loop.run_in_executor(EXECUTOR, _parse)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=422, detail=f"Could not read PDF: {exc}")
@@ -410,7 +420,7 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
             detail="No extractable text found in this PDF (it may be scanned/image-only).",
         )
 
-    return {"text": text, "pages": pages}
+    return {"text": text, "pages": pages, "page_spans": spans}
 
 
 # ---------------------------------------------------------------------------

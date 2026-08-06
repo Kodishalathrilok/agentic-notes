@@ -43,11 +43,57 @@ def active_embedding_backend() -> str:
 # Chunking (with character offsets in the normalized text)
 # ---------------------------------------------------------------------------
 
+def normalize(text) -> str:
+    """The one definition of the text that chunk offsets are measured against.
+
+    Anything that needs to locate something inside a document — page spans,
+    highlighting, citation verification — must measure in this same space, or
+    it drifts by however much whitespace got collapsed.
+    """
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def page_spans(page_texts):
+    """Where each page lands in the NORMALIZED document.
+
+    Pages that normalize to nothing (blank, or image-only with no text layer)
+    get a zero-width span and do not advance the cursor — matching the
+    extractor, which drops empty pages before joining. The +1 is the single
+    space each join collapses to.
+    """
+    spans, cursor = [], 0
+    for number, raw in enumerate(page_texts, start=1):
+        norm = normalize(raw)
+        if not norm:
+            spans.append({"page": number, "start": cursor, "end": cursor})
+            continue
+        spans.append({"page": number, "start": cursor, "end": cursor + len(norm)})
+        cursor += len(norm) + 1
+    return spans
+
+
+def page_for_offset(spans, offset):
+    """Which page a normalized-text offset falls on, or None if unknowable.
+
+    Falls back to the last page that starts at or before the offset, so an
+    offset landing in the join between two pages still resolves.
+    """
+    if not spans:
+        return None
+    best = None
+    for span in spans:
+        if span["start"] <= offset < span["end"]:
+            return span["page"]
+        if span["start"] <= offset:
+            best = span["page"]
+    return best
+
+
 def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120):
     """Split into ~target_chars passages with overlap. Returns metadata dicts:
     {chunk_id, text, start_offset, end_offset}. Offsets index the whitespace-
     normalized text (used later for highlighting/citation verification)."""
-    norm = re.sub(r"\s+", " ", (text or "").strip())
+    norm = normalize(text)
     if not norm:
         return []
 

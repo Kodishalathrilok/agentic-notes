@@ -73,6 +73,10 @@ export default function App() {
   const setSetting = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }))
 
   const [inputText, setInputText] = useState(() => localStorage.getItem(INPUT_KEY) || '')
+  // [{page, start, end}] when the source is a PDF, so citations can name the
+  // page they came from. Deliberately not persisted: it describes a file the
+  // browser no longer has after a reload.
+  const [pageSpans, setPageSpans] = useState([])
 
   const [models, setModels] = useState([])
 
@@ -255,7 +259,7 @@ export default function App() {
     let latestSources = []
 
     stream(
-      { text: inputText, mode, tone, length, format, model, instructions },
+      { text: inputText, mode, tone, length, format, model, instructions, page_spans: pageSpans },
       {
         onStatus: (step, message) => {
           if (step === 'gate') return // pre-pipeline gatekeeper, no visible step
@@ -326,7 +330,7 @@ export default function App() {
         },
       }
     )
-  }, [inputText, isStreaming, mode, tone, length, format, model, instructions, stream, setStep, markActive, saveToHistory])
+  }, [inputText, pageSpans, isStreaming, mode, tone, length, format, model, instructions, stream, setStep, markActive, saveToHistory])
 
   // ----- Ctrl/Cmd+Enter to generate ---------------------------------------
   useEffect(() => {
@@ -551,7 +555,7 @@ export default function App() {
             )}
 
             <div className="mx-auto w-full max-w-[672px]">
-              <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} />
+              <InputPanel inputText={inputText} setInputText={setInputText} setPageSpans={setPageSpans} isStreaming={isStreaming} />
             </div>
 
             {/* Generate appears once a source is loaded */}
@@ -646,7 +650,7 @@ export default function App() {
           <div className="grid grid-cols-1 items-stretch gap-6 lg:h-[calc(100vh-11rem)] lg:grid-cols-2">
             {/* Left: the source — fills the viewport, scrolls inside */}
             <div className="lg:h-full lg:min-h-0">
-              <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} fill />
+              <InputPanel inputText={inputText} setInputText={setInputText} setPageSpans={setPageSpans} isStreaming={isStreaming} fill />
             </div>
 
             {/* Right: OUTPUT PANEL — pinned to the viewport, scrolls inside */}

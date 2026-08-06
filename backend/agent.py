@@ -15,7 +15,7 @@ import queue as _queue
 from concurrent.futures import ThreadPoolExecutor
 
 from models import call_model, call_model_stream, safe_json, helper_model
-from retriever import Retriever
+from retriever import Retriever, page_for_offset
 
 # Quality thresholds for the self-improvement loop
 REVISE_THRESHOLD = 8  # revise until score reaches this (1-10)
@@ -978,8 +978,31 @@ def _emit(type_, step, content="", data=None):
     return {"type": type_, "step": step, "content": content, "data": data}
 
 
+def _page_tagger(retriever, spans):
+    """Return a function that stamps each chunk with its source page.
+
+    Chunk offsets index the whitespace-normalized document, and `spans` were
+    measured in that same space by retriever.page_spans — comparing against
+    raw-text positions would drift by every run of whitespace the chunker
+    collapsed.
+    """
+    if not spans:
+        return lambda chunks: chunks
+
+    starts = {c["chunk_id"]: c["start_offset"] for c in retriever.chunks_meta}
+
+    def tag(chunks):
+        out = []
+        for chunk in chunks:
+            page = page_for_offset(spans, starts.get(chunk["id"], 0))
+            out.append({**chunk, "page": page} if page else chunk)
+        return out
+
+    return tag
+
+
 def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
-              include_quiz=True, include_flashcards=True):
+              include_quiz=True, include_flashcards=True, page_spans=None):
     """
     Drive the full pipeline, yielding event dicts as each stage progresses.
 
@@ -1014,6 +1037,12 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
 
         # Build the retrieval index over the source (RAG)
         retriever = Retriever(text)
+
+        # Trace each retrieved chunk back to the page it came from, so a
+        # citation can point at the document rather than at an opaque passage
+        # number. A no-op for sources with no pages (pasted text, URLs,
+        # transcripts) — they keep citing exactly as before.
+        _with_pages = _page_tagger(retriever, page_spans)
 
         # 1-2. Plan. For very large documents the even sample alone covers too
         # little (a topic on only a few pages can be invisible in it), so first
@@ -1059,7 +1088,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                     chunk_map[c["id"]] = c
             all_chunks = [chunk_map[i] for i in sorted(chunk_map)]
             context = _format_context(all_chunks)
-            yield _emit("sources", "write", "", all_chunks)
+            yield _emit("sources", "write", "", _with_pages(all_chunks))
 
             # 3-4. Write sections CONCURRENTLY (each has independent context),
             # but stream them to the client strictly IN ORDER: every section's
@@ -1121,7 +1150,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             chunks = retriever.retrieve(query, k=single_k)
             chunk_map = {c["id"]: c for c in chunks}
             context = _format_context(chunks)
-            yield _emit("sources", "write", "", chunks)
+            yield _emit("sources", "write", "", _with_pages(chunks))
 
             yield _emit("status", "write", "Writing notes...")
             parts = []
@@ -1194,7 +1223,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 if added:
                     merged = [chunk_map[i] for i in sorted(chunk_map)]
                     context = _format_context(merged)
-                    yield _emit("sources", "revise", "", merged)
+                    yield _emit("sources", "revise", "", _with_pages(merged))
                     yield _emit(
                         "status", "revise",
                         f"Retrieved extra context for {min(len(missing), CORRECTIVE_TOPICS_MAX)} missing topic(s)…",
