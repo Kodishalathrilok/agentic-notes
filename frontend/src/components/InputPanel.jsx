@@ -292,6 +292,52 @@ export default function InputPanel({ inputText, setInputText, isStreaming, fill 
   // LOADED STATE — source viewer (also the workspace's left pane)
   // ==========================================================================
   if (hasSource) {
+    // ---- Phase 1: a document is just an attachment ------------------------
+    // Before Generate, the entry page should stay a clean composer — so a PDF
+    // reads as a chip (icon + name + status), the way attaching a file to a
+    // chat message does. The document itself belongs in the workspace, where
+    // there is room to actually read it.
+    if (preview && !fill) {
+      return (
+        <div className="relative mx-auto w-full max-w-[672px]" {...dragProps}>
+          <DropOverlay />
+          <div className="flex items-center gap-3 rounded-3xl border border-neutral-200 bg-white px-4 py-3 shadow-[0_4px_10px_rgba(0,0,0,0.04)]">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-500">
+              <Icon.FileText className="h-5 w-5" />
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-neutral-900" title={preview.name}>
+                {preview.name}
+              </p>
+              <p className="mt-0.5 truncate text-xs text-neutral-400">
+                {busy ? (
+                  <span className="inline-flex items-center gap-1.5 text-neutral-500">
+                    <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-neutral-400 border-t-transparent" />
+                    Reading it…
+                  </span>
+                ) : error ? (
+                  <span className="text-red-600">{error}</span>
+                ) : (
+                  <>PDF · {words.toLocaleString()} words ready</>
+                )}
+              </p>
+            </div>
+
+            <button
+              onClick={replaceSource}
+              disabled={locked}
+              aria-label="Remove this file"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Icon.X className="h-4 w-4" />
+            </button>
+          </div>
+          {fileInput}
+        </div>
+      )
+    }
+
     const actionBtn =
       'inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-xs ' +
       'font-medium text-neutral-600 transition-colors hover:border-neutral-300 hover:bg-neutral-50 ' +
