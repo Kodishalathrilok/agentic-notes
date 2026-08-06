@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { supabase, supabaseConfigError, friendlyAuthError } from '../lib/supabase'
+import { supabase, supabaseConfigError, friendlyAuthError, providerEnabled } from '../lib/supabase'
 
 export default function AuthModal({ onClose }) {
   const [mode, setMode] = useState('signin') // 'signin' | 'signup'
@@ -15,6 +15,12 @@ export default function AuthModal({ onClose }) {
       return
     }
     setError(null)
+    // Check before navigating — a disabled provider would otherwise dump the
+    // user on GoTrue's raw JSON error, where nothing here can catch it.
+    if (!(await providerEnabled('google'))) {
+      setError(friendlyAuthError({ message: 'Unsupported provider: provider is not enabled' }))
+      return
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: window.location.origin },

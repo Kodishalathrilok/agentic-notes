@@ -222,7 +222,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
       const rect = el.getBoundingClientRect()
       tgt.x = e.clientX - rect.left
       tgt.y = e.clientY - rect.top
-      tr = 300
+      tr = 400
       // instant vars for the existing spotlight glow
       el.style.setProperty('--mx', `${tgt.x}px`)
       el.style.setProperty('--my', `${tgt.y}px`)

@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from dotenv import load_dotenv
 
-from auth import limiter
+from auth import limiter, auth_required, verify_auth_config
 from agent import (
     run_agent,
     generate_quiz,
@@ -62,6 +62,10 @@ if not _retrieval_logger.handlers:
     _retrieval_logger.setLevel(logging.INFO)
     _retrieval_logger.propagate = False
 
+# Fail fast if this is a production start with authentication switched off.
+# Must run before the app accepts a single request.
+verify_auth_config()
+
 app = FastAPI(title="Agentic AI Notes Generator", version="1.0.0")
 
 app.add_middleware(
@@ -78,6 +82,14 @@ app.add_middleware(
 )
 
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "300000"))
+
+# Per-account DAILY caps on the endpoints that spend model tokens. The short
+# sliding windows below stop bursts but reset forever, so one enthusiastic
+# visitor could still drain a free tier's daily token quota. Tune via env.
+DAILY_GENERATIONS = int(os.getenv("DAILY_GENERATIONS", "10"))
+DAILY_EXTRACTS = int(os.getenv("DAILY_EXTRACTS", "40"))
+DAILY_REGENS = int(os.getenv("DAILY_REGENS", "40"))
+DAILY_CHATS = int(os.getenv("DAILY_CHATS", "60"))
 
 # ---------------------------------------------------------------------------
 # Server hardening: dedicated thread pool + size limits + SSRF-safe fetching
@@ -277,6 +289,9 @@ async def health():
         "groq_configured": _groq_configured(),
         "ollama_url": OLLAMA_URL,
         "embeddings": active_embedding_backend(),
+        # So a misconfigured deploy is visible at a glance instead of only
+        # discoverable by noticing that unauthenticated calls succeed.
+        "auth_required": auth_required(),
     }
 
 
@@ -309,7 +324,7 @@ async def list_models():
 # ---------------------------------------------------------------------------
 
 @app.post("/api/generate")
-async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600))):
+async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600, daily=DAILY_GENERATIONS))):
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="`text` is required.")
@@ -367,7 +382,7 @@ async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-pdf")
-async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
+async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600, daily=DAILY_EXTRACTS))):
     from pypdf import PdfReader
 
     raw = await _read_upload(file, MAX_PDF_BYTES, "PDF")
@@ -403,7 +418,7 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-image")
-async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
+async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600, daily=DAILY_EXTRACTS))):
     """OCR a photo of study material (textbook page, slides, handwriting) via Gemini vision."""
     if not gemini_available():
         raise HTTPException(
@@ -431,7 +446,7 @@ async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extr
 
 
 @app.post("/api/transcribe")
-async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600))):
+async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600, daily=DAILY_EXTRACTS))):
     if not _groq_configured():
         raise HTTPException(
             status_code=503,
@@ -463,7 +478,7 @@ async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract
 # ---------------------------------------------------------------------------
 
 @app.post("/api/quiz")
-async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600))):
+async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -473,7 +488,7 @@ async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600)))
 
 
 @app.post("/api/flashcards")
-async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 600))):
+async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -483,7 +498,7 @@ async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 
 
 
 @app.post("/api/edit-selection")
-async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limiter("regen", 20, 600))):
+async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
     notes = (req.notes or "").strip()
     selection = (req.selection or "").strip()
     if not notes or not selection:
@@ -498,7 +513,7 @@ async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limite
 
 
 @app.post("/api/rewrite")
-async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600))):
+async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -518,7 +533,7 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600))):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600))):
+async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAILY_CHATS))):
     notes = (req.notes or "").strip()
     question = (req.question or "").strip()
     if not notes:
@@ -602,7 +617,7 @@ def _youtube_transcript(video_id: str) -> str:
 
 
 @app.post("/api/extract-url")
-async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600))):
+async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, daily=DAILY_EXTRACTS))):
     import requests as _requests
     from bs4 import BeautifulSoup
 

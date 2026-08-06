@@ -33,4 +33,6 @@ ENV DEV=0
 EXPOSE 8000
 
 # Single uvicorn worker keeps SSE/streaming connections simple and reliable.
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# --proxy-headers so request.client.host is the real caller and not the
+# platform's router — without it every visitor shares one rate-limit bucket.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

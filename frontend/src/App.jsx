@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import useStream from './hooks/useStream'
 import InputPanel from './components/InputPanel'
 import ControlPanel from './components/ControlPanel'
-import AgentStatus from './components/AgentStatus'
+import PipelineStrip from './components/PipelineStrip'
 import PipelineInsights from './components/PipelineInsights'
 import NotesOutput from './components/NotesOutput'
 import QuizPanel from './components/QuizPanel'
@@ -95,6 +95,7 @@ export default function App() {
   const [error, setError] = useState(null)
   const [blocked, setBlocked] = useState(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [showOptions, setShowOptions] = useState(false)
 
   const [rewriting, setRewriting] = useState(null)
   const [quizRegen, setQuizRegen] = useState(false)
@@ -467,54 +468,53 @@ export default function App() {
       </div>
 
       {/* Minimal nav: logo left · Eval + auth + CTA right */}
-      <header className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-        <div className="glass-pill flex w-full flex-wrap items-center justify-between gap-2 rounded-full py-2 pl-3 pr-2 sm:pl-4">
-          <button
-            onClick={() => setShowLanding(true)}
- className="flex items-center gap-3 text-left"
-            title="Back to home"
-          >
-            <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
-              <Icon.Book className="h-5 w-5" />
-            </span>
-            <h1 className="text-base font-extrabold tracking-tight text-espresso-900 sm:text-lg">Agentic Notes</h1>
-          </button>
-          <div className="flex items-center gap-2.5">
-            <button
-              onClick={() => setShowEval(true)}
- className="hidden rounded-full px-4 py-2 text-sm font-semibold text-espresso-600 transition-colors hover:bg-espresso-900/5 hover:text-espresso-900 sm:inline-flex"
-            >
-              Eval
-            </button>
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${providerBadge.cls}`}>
-              <Icon.Zap className="h-3 w-3" />
-              {providerBadge.label}
-            </span>
-            {supabaseEnabled &&
-              (user ? (
-                <div className="flex items-center gap-2">
-                  <span className="hidden max-w-[140px] truncate text-xs text-espresso-500 sm:inline">
-                    {user.email}
-                  </span>
-                  <button onClick={signOut} className="btn-ghost px-4 py-2 text-sm">
-                    Sign out
-                  </button>
-                </div>
-              ) : (
-                <button onClick={() => setAuthOpen(true)} className="btn-primary px-4 py-2 text-sm">
-                  Sign in
-                </button>
-              ))}
-            <button
-              onClick={() => setMenuOpen(true)}
-              aria-label="Open menu"
-              className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
-            >
-              <Icon.Menu className="h-5 w-5" />
-            </button>
-          </div>
+      {/* Floating header: simple fixed buttons, pipeline strip top-center */}
+      <div className="fixed inset-x-0 top-4 z-40 flex items-start justify-between gap-3 px-4">
+        {/* left: logo */}
+        <button
+          onClick={() => setShowLanding(true)}
+          title="Back to home"
+          className="flex items-center gap-2.5 rounded-full border border-espresso-900/10 bg-white py-1.5 pl-2 pr-4 shadow-soft transition-transform hover:scale-[1.03]"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-espresso-900 text-white">
+            <Icon.Book className="h-4 w-4" />
+          </span>
+          <span className="text-sm font-extrabold tracking-tight text-espresso-900">Agentic Notes</span>
+        </button>
+
+        {/* center: THE pipeline — the only one in the app */}
+        <div className="hidden md:block">
+          <PipelineStrip steps={agentSteps} />
         </div>
-      </header>
+
+        {/* right: auth + menu */}
+        <div className="flex items-center gap-2">
+          {supabaseEnabled &&
+            (user ? (
+              <button
+                onClick={signOut}
+                title={user.email}
+                className="rounded-full border border-espresso-900/10 bg-white px-4 py-2 text-sm font-semibold text-espresso-900 shadow-soft transition-transform hover:scale-[1.03]"
+              >
+                Sign out
+              </button>
+            ) : (
+              <button
+                onClick={() => setAuthOpen(true)}
+                className="rounded-full bg-espresso-900 px-4 py-2 text-sm font-semibold text-white shadow-soft transition-transform hover:scale-[1.03]"
+              >
+                Sign in
+              </button>
+            ))}
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open menu"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-espresso-900/10 bg-white text-espresso-900 shadow-soft transition-transform hover:scale-[1.03]"
+          >
+            <Icon.Menu className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
 
       <MenuOverlay
         open={menuOpen}
@@ -532,140 +532,273 @@ export default function App() {
       />
 
       {/* Main */}
-      <main className="mx-auto max-w-7xl px-5 pb-16 pt-28 sm:pt-32">
-        {/* App hero */}
-        <div className="mb-10 max-w-3xl animate-fade-in">
-          <h2 className="font-display text-5xl font-bold leading-[1.05] text-espresso-900 sm:text-7xl">
-            Time to
-            <span className="bg-gradient-to-r from-brand-600 to-rose-500 bg-clip-text text-transparent"> learn.</span>
-          </h2>
-          <p className="mt-3 max-w-xl text-base text-espresso-500">
-            Paste text, drop a PDF or photo, link a video, or record audio — a pipeline of agents
-            turns it into faithful, cited study notes.
-          </p>
+      <main className="mx-auto max-w-7xl px-5 pb-16 pt-24 sm:pt-28">
+        {/* pipeline on mobile (header center is hidden there) */}
+        <div className="mb-6 flex justify-center md:hidden">
+          <PipelineStrip steps={agentSteps} />
         </div>
 
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-5">
-          {/* Left column */}
-          <div className="space-y-8 lg:col-span-2">
-            <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} />
-            <ControlPanel
-              mode={mode}
-              setMode={setSetting('mode')}
-              tone={tone}
-              setTone={setSetting('tone')}
-              length={length}
-              setLength={setSetting('length')}
-              format={format}
-              setFormat={setSetting('format')}
-              model={model}
-              setModel={setSetting('model')}
-              models={models}
-              instructions={instructions}
-              setInstructions={setSetting('instructions')}
-              onGenerate={handleGenerate}
-              isStreaming={isStreaming}
-              canGenerate={!!inputText.trim()}
-            />
-            <p className="text-center text-xs text-espresso-500">
-              Tip: press{' '}
-              <kbd className="rounded-md border border-espresso-900/15 bg-latte-200 px-1.5 py-0.5 font-mono text-[10px]">
-                Ctrl
-              </kbd>{' '}
-              +{' '}
-              <kbd className="rounded-md border border-espresso-900/15 bg-latte-200 px-1.5 py-0.5 font-mono text-[10px]">
-                Enter
-              </kbd>{' '}
-              to generate
-            </p>
-            {isStreaming && (
-              <button
-                onClick={cancel}
- className="w-full animate-slide-up rounded-full border border-red-300 bg-red-50/80 px-4 py-2.5 text-sm font-semibold text-red-600 backdrop-blur-sm transition-all hover:bg-red-100 hover:shadow-soft"
-              >
-                Cancel generation
-              </button>
+        {!notes && !isStreaming ? (
+          /* ------------------------------------------------------------------
+             PHASE 1 — input only. Upload/paste a source, then Generate.
+             The output panel does not exist yet.
+          ------------------------------------------------------------------ */
+          <div className="animate-fade-in pt-6 sm:pt-16">
+            {!inputText.trim() && (
+              <h2 className="mb-5 text-center font-display text-[1.75rem] font-normal leading-tight tracking-tight text-neutral-900 sm:text-4xl">
+                What do you want to learn?
+              </h2>
             )}
-          </div>
 
-          {/* Right column */}
-          <div className="space-y-8 lg:col-span-3">
-            <AgentStatus steps={agentSteps} critique={critique} />
-            <PipelineInsights plan={plan} critique={critique} />
+            <div className="mx-auto w-full max-w-[672px]">
+              <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} />
+            </div>
 
-            {error && (
-              <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-300">
-                {error}
+            {/* Generate appears once a source is loaded */}
+            {inputText.trim() && (
+              <div className="mx-auto mt-3 w-full max-w-[672px] animate-slide-up">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleGenerate}
+                    disabled={isStreaming}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-full bg-neutral-900 px-6 py-3 text-sm font-medium text-white transition-opacity hover:opacity-85 disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    <Icon.Zap className="h-4 w-4" />
+                    Generate notes
+                  </button>
+                  <button
+                    onClick={() => setShowOptions((v) => !v)}
+                    className={`rounded-full border px-5 py-3 text-sm font-medium transition-colors ${
+                      showOptions
+                        ? 'border-neutral-900 bg-neutral-900 text-white'
+                        : 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50'
+                    }`}
+                  >
+                    Options
+                  </button>
+                </div>
+
+                {showOptions && (
+                  <div className="mt-4 animate-fade-in">
+                    <ControlPanel
+                      mode={mode}
+                      setMode={setSetting('mode')}
+                      tone={tone}
+                      setTone={setSetting('tone')}
+                      length={length}
+                      setLength={setSetting('length')}
+                      format={format}
+                      setFormat={setSetting('format')}
+                      model={model}
+                      setModel={setSetting('model')}
+                      models={models}
+                      instructions={instructions}
+                      setInstructions={setSetting('instructions')}
+                      onGenerate={handleGenerate}
+                      isStreaming={isStreaming}
+                      canGenerate={!!inputText.trim()}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
+            {error && (
+              <div className="mx-auto mt-4 w-full max-w-[672px] rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {error}
+              </div>
+            )}
             {blocked && (
-              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
+              <div className="mx-auto mt-4 w-full max-w-[672px] rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 🎓 <span className="font-semibold">This tool is for academic study material only.</span>{' '}
                 {blocked.message} Try a study topic or source — e.g. Biology, History, Computer
                 Science, or Economics.
               </div>
             )}
 
-            {/* Tab bar — pill group */}
-            <div className="scroll-area glass-pill flex w-full gap-1.5 overflow-x-auto rounded-full p-1.5">
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setActiveTab(t.id)}
- className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
-                    activeTab === t.id
-                      ? 'bg-gradient-to-br from-espresso-800 to-espresso-900 text-cream shadow-soft scale-[1.02]'
-                      : 'text-espresso-600 hover:bg-espresso-900/5 hover:text-espresso-900'
-                  }`}
-                >
-                  {t.label}
-                  {t.id === 'history' && history.length > 0 && (
-                    <span className="ml-1 text-xs opacity-70">({history.length})</span>
-                  )}
-                </button>
-              ))}
+            {/* Recents on the empty home only */}
+            {!inputText.trim() && history.length > 0 && (
+              <div className="mx-auto mt-12 w-full max-w-[672px]">
+                <h3 className="mb-3 text-sm font-medium text-neutral-500">Recents</h3>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {history.slice(0, 3).map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => loadSession(s)}
+                      className="group rounded-3xl border border-neutral-200 bg-white p-4 text-left shadow-[0_4px_10px_rgba(0,0,0,0.04)] transition-colors duration-200 hover:border-neutral-300 hover:bg-neutral-50"
+                    >
+                      <Icon.Clock className="mb-3 h-5 w-5 text-neutral-400 transition-colors group-hover:text-neutral-900" />
+                      <p className="truncate text-sm font-medium text-neutral-900">{s.title || 'Untitled notes'}</p>
+                      <p className="mt-0.5 text-xs text-neutral-400">
+                        {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : 'Saved session'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ------------------------------------------------------------------
+             PHASE 2 — after Generate: input left, output slides in from the
+             right with the Learning tab on top.
+          ------------------------------------------------------------------ */
+          <div className="grid grid-cols-1 items-stretch gap-6 lg:h-[calc(100vh-11rem)] lg:grid-cols-2">
+            {/* Left: the source — fills the viewport, scrolls inside */}
+            <div className="lg:h-full lg:min-h-0">
+              <InputPanel inputText={inputText} setInputText={setInputText} isStreaming={isStreaming} fill />
             </div>
 
-            {/* Tab content */}
-            <div className="animate-fade-in" key={activeTab}>
-              {activeTab === 'notes' && (
-                <NotesOutput
-                  notes={notes}
-                  setNotes={setNotes}
-                  quiz={quiz}
-                  flashcards={flashcards}
-                  notesBefore={notesBefore}
-                  onRewrite={rewriteNotes}
-                  rewriting={rewriting}
-                  sources={sources}
-                  onEditSelection={editSelection}
-                  streaming={isStreaming}
+            {/* Right: OUTPUT PANEL — pinned to the viewport, scrolls inside */}
+            <div className="flex min-h-[420px] animate-slide-in-right flex-col gap-3 lg:h-full lg:min-h-0">
+              {/* Learning tab on top */}
+              <div className="shrink-0 rounded-3xl border border-espresso-900/10 bg-white p-2 shadow-card">
+                <div className="flex items-center justify-between gap-3 px-3 pb-1 pt-2">
+                  <span className="inline-flex items-center gap-2 text-xs font-bold text-espresso-900">
+                    <span className={`h-1.5 w-1.5 rounded-full ${isStreaming ? 'animate-pulse bg-amber-500' : 'bg-green-500'}`} />
+                    Learning tab
+                  </span>
+                  {isStreaming ? (
+                    <button
+                      onClick={cancel}
+                      className="rounded-full border border-red-300 bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-100"
+                    >
+                      Cancel
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setShowOptions((v) => !v)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                        showOptions ? 'bg-espresso-900 text-white' : 'text-espresso-600 hover:bg-espresso-900/5'
+                      }`}
+                    >
+                      Options
+                    </button>
+                  )}
+                </div>
+                <div className="scroll-area flex w-full gap-1.5 overflow-x-auto p-1.5">
+                  {TABS.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setActiveTab(t.id)}
+                      className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
+                        activeTab === t.id
+                          ? 'bg-espresso-900 text-cream shadow-soft'
+                          : 'text-espresso-600 hover:bg-espresso-900/5 hover:text-espresso-900'
+                      }`}
+                    >
+                      {t.label}
+                      {t.id === 'history' && history.length > 0 && (
+                        <span className="ml-1 text-xs opacity-70">({history.length})</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* everything below the Learning tab scrolls inside the column */}
+              <div className="scroll-area flex flex-1 flex-col gap-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+              {showOptions && !isStreaming && (
+                <div className="animate-fade-in">
+                  <ControlPanel
+                    mode={mode}
+                    setMode={setSetting('mode')}
+                    tone={tone}
+                    setTone={setSetting('tone')}
+                    length={length}
+                    setLength={setSetting('length')}
+                    format={format}
+                    setFormat={setSetting('format')}
+                    model={model}
+                    setModel={setSetting('model')}
+                    models={models}
+                    instructions={instructions}
+                    setInstructions={setSetting('instructions')}
+                    onGenerate={handleGenerate}
+                    isStreaming={isStreaming}
+                    canGenerate={!!inputText.trim()}
+                  />
+                </div>
+              )}
+
+              <PipelineInsights plan={plan} critique={critique} />
+
+              {error && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                  {error}
+                </div>
+              )}
+              {blocked && (
+                <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  🎓 <span className="font-semibold">This tool is for academic study material only.</span>{' '}
+                  {blocked.message}
+                </div>
+              )}
+
+              {/* Tab content */}
+              <div className="animate-fade-in" key={activeTab}>
+                {activeTab === 'notes' && (
+                  <NotesOutput
+                    notes={notes}
+                    setNotes={setNotes}
+                    quiz={quiz}
+                    flashcards={flashcards}
+                    notesBefore={notesBefore}
+                    onRewrite={rewriteNotes}
+                    rewriting={rewriting}
+                    sources={sources}
+                    onEditSelection={editSelection}
+                    streaming={isStreaming}
+                  />
+                )}
+                {activeTab === 'quiz' && (
+                  <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
+                )}
+                {activeTab === 'flashcards' && (
+                  <FlashcardPanel
+                    flashcards={flashcards}
+                    onRegenerate={notes ? regenFlashcards : null}
+                    regenerating={cardsRegen}
+                  />
+                )}
+                {activeTab === 'history' && (
+                  <HistoryPanel
+                    history={history}
+                    onLoad={loadSession}
+                    onDelete={deleteSession}
+                    onUpdate={updateSession}
+                    onShare={cloud ? shareLink : null}
+                    cloud={cloud}
+                  />
+                )}
+              </div>
+
+              </div>
+
+              {/* Ask anything — pinned at the bottom of the output panel */}
+              <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-espresso-900/15 bg-white py-2 pl-5 pr-2 shadow-soft transition-all focus-within:border-espresso-900/40 focus-within:shadow-card">
+                <input
+                  value={instructions}
+                  onChange={(e) => setSetting('instructions')(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && inputText.trim() && !isStreaming) handleGenerate()
+                  }}
+                  disabled={isStreaming}
+                  placeholder="Ask anything — e.g. focus on definitions, add examples…"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-espresso-800 placeholder:text-espresso-400/80 focus:outline-none"
                 />
-              )}
-              {activeTab === 'quiz' && (
-                <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
-              )}
-              {activeTab === 'flashcards' && (
-                <FlashcardPanel
-                  flashcards={flashcards}
-                  onRegenerate={notes ? regenFlashcards : null}
-                  regenerating={cardsRegen}
-                />
-              )}
-              {activeTab === 'history' && (
-                <HistoryPanel
-                  history={history}
-                  onLoad={loadSession}
-                  onDelete={deleteSession}
-                  onUpdate={updateSession}
-                  onShare={cloud ? shareLink : null}
-                  cloud={cloud}
-                />
-              )}
+                <button
+                  onClick={handleGenerate}
+                  disabled={isStreaming || !inputText.trim()}
+                  aria-label="Generate with these instructions"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-espresso-900 text-white transition-transform hover:scale-105 disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <Icon.Send className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </main>
 
       {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}

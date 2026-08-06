@@ -25,8 +25,36 @@ This app deploys as a **single service**: the FastAPI backend serves both the
 | --- | --- | --- |
 | `GROQ_API_KEY` | yes | Your `gsk_...` key from console.groq.com |
 | `GROQ_MODEL` | no | Defaults to `llama-3.3-70b-versatile` |
-| `MAX_TEXT_CHARS` | no | Defaults to `50000` |
+| `MAX_TEXT_CHARS` | no | Defaults to `300000` |
 | `PORT` | auto | Most hosts set this for you |
+| `SUPABASE_URL` | **yes** | Server-side auth — see below |
+| `SUPABASE_ANON_KEY` | **yes** | Server-side auth — see below |
+| `SUPABASE_JWT_SECRET` | no | Alternative to the two above: verifies tokens locally, no network call |
+| `ALLOWED_EMAILS` | no | Comma-separated allowlist. Empty = any signed-in user |
+| `ALLOW_ANONYMOUS` | no | Set `true` only to deliberately run with no auth |
+
+### Server-side auth is not optional
+
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` here are **separate from** the
+`VITE_SUPABASE_*` variables in the section below. The `VITE_` ones are baked
+into the frontend at build time; these are read by the server at runtime.
+
+Setting only the `VITE_` ones gives you a sign-in button that does nothing:
+the frontend sends an access token with every request, but the server never
+verifies it and serves all callers as anonymous — so anyone with the URL can
+spend your model credits. Since v1.1 a production start in that state refuses
+to boot rather than failing silently.
+
+Verify a deploy with:
+
+```bash
+curl -s https://<your-host>/api/health          # expect "auth_required": true
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<your-host>/api/generate \
+  -H 'Content-Type: application/json' -d '{"text":""}'
+```
+
+The second call must return **401**. A **422** means auth is off — the request
+got past the auth check and only then failed input validation.
 
 Never commit `.env` — it's gitignored and excluded from the image.
 
@@ -75,12 +103,19 @@ Docker Space. Streaming works, and no payment info is required.
 3. In the Space → **Settings → Variables and secrets**, add **secrets**:
    - `GROQ_API_KEY` (required)
    - `GEMINI_API_KEY` (optional — embeddings, vision, LLM failover)
+   - `SUPABASE_URL` and `SUPABASE_ANON_KEY` (**required** — this is what makes
+     the server verify sign-ins; see "Server-side auth is not optional" above)
 
-   And, if using Supabase accounts, add these as **Variables** (public — the
-   anon key is safe; it's protected by row-level security). They must be
-   Variables, not Secrets, because Vite inlines them at *build* time:
+   And add these as **Variables** (public — the anon key is safe; it's
+   protected by row-level security). They must be Variables, not Secrets,
+   because Vite inlines them at *build* time:
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
+
+   Yes, the Supabase URL and anon key go in **twice** — once as a runtime
+   secret for the server, once as a build-time variable for the frontend.
+   Missing the first pair is the single most common way to end up with an
+   unauthenticated deployment.
 4. Create a **write** access token at <https://huggingface.co/settings/tokens>.
 5. From the repo root, add the Space as a remote and push (use your HF username
    and the token as the password when prompted):

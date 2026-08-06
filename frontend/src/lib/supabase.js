@@ -21,6 +21,30 @@ export const supabaseConfigError = supabase
       : 'Sign-in is misconfigured: VITE_SUPABASE_ANON_KEY is missing from the build.'
 
 /**
+ * Is an OAuth provider actually enabled on this Supabase project?
+ *
+ * `signInWithOAuth` navigates the browser away before it can return an error,
+ * so a disabled provider dumps the user on GoTrue's raw JSON 400 instead of
+ * anything this app can catch. GoTrue's public /auth/v1/settings lists the
+ * enabled providers, so ask first and keep the user on our page.
+ *
+ * Fails OPEN: if the check itself can't run, return true and let the normal
+ * sign-in attempt proceed — never block a working setup on a failed probe.
+ */
+let _settingsPromise = null
+export async function providerEnabled(name) {
+  if (!supabase) return false
+  if (!_settingsPromise) {
+    _settingsPromise = fetch(`${url}/auth/v1/settings`, { headers: { apikey: anonKey } })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+  }
+  const settings = await _settingsPromise
+  if (!settings?.external) return true
+  return !!settings.external[name]
+}
+
+/**
  * Translate raw Supabase auth errors into messages that say what to actually
  * do about them. Falls back to the original message.
  */

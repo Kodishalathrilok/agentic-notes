@@ -59,6 +59,47 @@ REQUIRE_AUTH = (os.getenv("REQUIRE_AUTH") or ("true" if _default_require else "f
     "yes",
 )
 
+# Running with no authentication at all must be asked for by name.
+ALLOW_ANONYMOUS = (os.getenv("ALLOW_ANONYMOUS") or "false").lower() in (
+    "1", "true", "yes")
+
+# The Dockerfile sets DEV=0, so a container start is always treated as production.
+_IS_DEV = (os.getenv("DEV") or "1").lower() in ("1", "true", "yes")
+
+
+def auth_required() -> bool:
+    """Whether tokens are actually being verified. Surfaced on /api/health."""
+    return REQUIRE_AUTH
+
+
+def verify_auth_config() -> None:
+    """Refuse to start an unauthenticated production server.
+
+    This used to fail OPEN: with no Supabase settings REQUIRE_AUTH became
+    False, `require_user` waved every caller through as anonymous, and the
+    frontend's sign-in gate was decorative — anyone who knew the URL could
+    spend model credits. The failure was silent, which is what made it
+    dangerous. In production it is now loud and fatal.
+    """
+    if REQUIRE_AUTH or _IS_DEV or ALLOW_ANONYMOUS:
+        return
+    raise RuntimeError(
+        "Refusing to start: authentication is OFF in a production build.\n"
+        "\n"
+        "  Every endpoint would serve anonymous callers, so anyone who knows\n"
+        "  this URL could spend your model credits. The frontend's sign-in\n"
+        "  button would have no effect.\n"
+        "\n"
+        "  Fix it by setting these on the host (they are SEPARATE from the\n"
+        "  VITE_-prefixed variables the frontend is built with):\n"
+        "      SUPABASE_URL=https://<project>.supabase.co\n"
+        "      SUPABASE_ANON_KEY=<anon key>\n"
+        "  or, to verify tokens locally without a network call:\n"
+        "      SUPABASE_JWT_SECRET=<JWT secret>\n"
+        "\n"
+        "  To genuinely run this open to the public, set ALLOW_ANONYMOUS=true."
+    )
+
 # ---------------------------------------------------------------------------
 # Token verification
 # ---------------------------------------------------------------------------
@@ -154,27 +195,56 @@ async def require_user(
 # Rate limiting (sliding window, in-memory)
 # ---------------------------------------------------------------------------
 
-_hits: dict = {}  # (bucket, identity) -> [timestamps]
+_hits: dict = {}  # (bucket, window_sec, identity) -> [timestamps]
 _hits_lock = threading.Lock()
 
+DAY_SEC = 86400
 
-def limiter(bucket: str, limit: int, window_sec: int):
-    """Return a dependency allowing `limit` calls per `window_sec` per user."""
+
+def _retry_message(seconds: int) -> str:
+    if seconds >= 3600:
+        return f"Daily limit reached — this resets in about {seconds // 3600}h."
+    if seconds >= 120:
+        return f"Rate limit reached — try again in about {seconds // 60} minutes."
+    return f"Rate limit reached — try again in about {seconds}s."
+
+
+def limiter(bucket: str, limit: int, window_sec: int, daily: int = 0):
+    """Return a dependency allowing `limit` calls per `window_sec` per user.
+
+    `daily` adds a second 24-hour window on the same bucket. The short window
+    stops bursts; the daily one stops one account from draining the provider's
+    daily token quota over the course of a day — the free tiers cap on tokens
+    per DAY, which a short sliding window does nothing to protect.
+    """
+    windows = [(limit, window_sec)]
+    if daily:
+        windows.append((daily, DAY_SEC))
 
     async def _dep(request: Request, authorization: str = Header(default="")):
         user = await require_user(request, authorization)
-        key = (bucket, user["id"])
         now = time.time()
         with _hits_lock:
-            stamps = [t for t in _hits.get(key, []) if now - t < window_sec]
-            if len(stamps) >= limit:
-                retry = int(window_sec - (now - stamps[0])) + 1
-                raise HTTPException(
-                    429,
-                    f"Rate limit reached — try again in about {retry}s.",
-                )
-            stamps.append(now)
-            _hits[key] = stamps
+            # Check every window before recording anything, so a call that gets
+            # rejected doesn't also count against the other windows.
+            pruned = []
+            for lim, win in windows:
+                key = (bucket, win, user["id"])
+                stamps = [t for t in _hits.get(key, []) if now - t < win]
+                pruned.append((key, stamps))
+                if len(stamps) >= lim:
+                    _hits[key] = stamps
+                    raise HTTPException(
+                        429, _retry_message(int(win - (now - stamps[0])) + 1)
+                    )
+            for key, stamps in pruned:
+                stamps.append(now)
+                _hits[key] = stamps
+            # Opportunistic cleanup — daily windows keep keys alive for 24h, so
+            # without this the dict grows with every identity ever seen.
+            if len(_hits) > 5000:
+                for key in [k for k, v in _hits.items() if not v]:
+                    del _hits[key]
         return user
 
     return _dep
