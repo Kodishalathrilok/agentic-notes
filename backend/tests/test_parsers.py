@@ -1,8 +1,53 @@
 """Pure-function tests: JSON recovery, flashcard parsing, prompt helpers."""
 
+import main
 from models import safe_json
 from pdf_export import parse_flashcards, flashcards_to_csv
 from agent import _max_tokens, _format_instructions, _instr_block
+
+
+# ---------------------------------------------------------------------------
+# YouTube transcript errors
+#
+# youtube-transcript-api >= 1.0 dropped the .get_transcript/.list_transcripts
+# classmethods. The old fallback still called them, so every failure surfaced
+# as `AttributeError: no attribute 'list_transcripts'` instead of the real
+# reason (captions disabled, video unavailable, IP blocked).
+# ---------------------------------------------------------------------------
+
+def test_legacy_classmethods_are_gone():
+    """Pins the assumption behind the rewrite — if this fails, revisit it."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    assert not hasattr(YouTubeTranscriptApi, "list_transcripts")
+    assert hasattr(YouTubeTranscriptApi(), "fetch")
+
+
+def test_failure_reason_is_specific_per_error():
+    class TranscriptsDisabled(Exception):
+        pass
+
+    class VideoUnavailable(Exception):
+        pass
+
+    assert "captions turned off" in main._youtube_failure_reason(TranscriptsDisabled())
+    assert "isn't available" in main._youtube_failure_reason(VideoUnavailable())
+
+
+def test_failure_reason_falls_back_for_unknown_errors():
+    reason = main._youtube_failure_reason(RuntimeError("boom"))
+    assert "Couldn't read" in reason
+    # Never echo the raw exception — the library's messages run to hundreds
+    # of characters of GitHub-issue boilerplate.
+    assert "boom" not in reason
+
+
+def test_youtube_id_parsing():
+    parse = main._youtube_id
+    assert parse("https://www.youtube.com/watch?v=lG-tM_4iKOg") == "lG-tM_4iKOg"
+    assert parse("https://youtu.be/lG-tM_4iKOg") == "lG-tM_4iKOg"
+    assert parse("https://www.youtube.com/shorts/lG-tM_4iKOg") == "lG-tM_4iKOg"
+    assert parse("https://example.com/watch?v=lG-tM_4iKOg") is None
 
 
 def test_safe_json_plain():

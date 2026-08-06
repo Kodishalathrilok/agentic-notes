@@ -587,32 +587,58 @@ def _seg_text(seg) -> str:
     return getattr(seg, "text", "")
 
 
+# Why a transcript fetch failed, in words a user can act on. Keyed by the
+# library's exception class name so we don't parse its (very long) messages.
+_YT_REASONS = {
+    "TranscriptsDisabled": "This video has captions turned off.",
+    "NoTranscriptFound": "This video has no English captions.",
+    "NoTranscriptAvailable": "This video has no captions at all.",
+    "VideoUnavailable": "This video isn't available — it may be private, deleted, or region-locked.",
+    "VideoUnplayable": "YouTube won't play this video, so its captions can't be read.",
+    "AgeRestricted": "This video is age-restricted, so its captions can't be read.",
+    "IpBlocked": "YouTube is blocking requests from this server's network.",
+    "RequestBlocked": "YouTube is blocking requests from this server's network.",
+}
+
+
+def _youtube_failure_reason(exc: Exception) -> str:
+    return _YT_REASONS.get(
+        type(exc).__name__,
+        "Couldn't read this video's captions.",
+    )
+
+
 def _youtube_transcript(video_id: str) -> str:
+    """Fetch a video's caption text.
+
+    youtube-transcript-api >= 1.0 replaced the YouTubeTranscriptApi
+    .get_transcript() / .list_transcripts() CLASSMETHODS with instance
+    .fetch() / .list(). The previous fallback here still called the
+    classmethods, so on any failure it raised
+    `AttributeError: no attribute 'list_transcripts'` — burying the real
+    reason (captions disabled, video unavailable, IP blocked) under a
+    meaningless one. Let the library's own exception propagate instead;
+    the caller turns it into a message that says what actually happened.
+    """
     from youtube_transcript_api import YouTubeTranscriptApi
 
     langs = ["en", "en-US", "en-GB"]
+    api = YouTubeTranscriptApi()
 
-    # New API (>= 1.0): instance-based .fetch() / .list()
-    try:
-        api = YouTubeTranscriptApi()
-        if hasattr(api, "fetch"):
-            try:
-                fetched = api.fetch(video_id, languages=langs)
-            except Exception:
-                # any available transcript
-                listing = api.list(video_id)
-                fetched = next(iter(listing)).fetch()
-            return " ".join(_seg_text(s) for s in fetched if _seg_text(s))
-    except Exception:
-        pass
+    if hasattr(api, "fetch"):  # >= 1.0
+        try:
+            fetched = api.fetch(video_id, languages=langs)
+        except Exception:
+            # No English track — fall back to whatever the video does have,
+            # but let a hard failure (unavailable/blocked) surface as itself.
+            fetched = next(iter(api.list(video_id))).fetch()
+        return " ".join(_seg_text(s) for s in fetched if _seg_text(s))
 
-    # Old API (0.6.x): classmethods
+    # Legacy 0.6.x
     try:
-        segments = YouTubeTranscriptApi.get_transcript(
-            video_id, languages=langs)
+        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
     except Exception:
-        listing = YouTubeTranscriptApi.list_transcripts(video_id)
-        segments = next(iter(listing)).fetch()
+        segments = next(iter(YouTubeTranscriptApi.list_transcripts(video_id))).fetch()
     return " ".join(_seg_text(s) for s in segments if _seg_text(s))
 
 
@@ -635,8 +661,8 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
-                detail="Couldn't get a transcript for this video (it may have "
-                f"captions disabled). Try a video with subtitles. ({exc})",
+                detail=f"{_youtube_failure_reason(exc)} Try another video, or "
+                "paste the text in directly.",
             )
         if len(transcript) < 50:
             raise HTTPException(
