@@ -39,9 +39,22 @@ try:
 except ImportError:  # pragma: no cover
     _pyjwt = None
 
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or ""
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or ""
+def _clean_env(name: str) -> str:
+    """Read an env var, stripping surrounding whitespace.
+
+    Pasting a key into a hosting provider's secret box very easily picks up a
+    trailing newline. It is invisible in every UI, and it made EVERY
+    authenticated request fail with a bare 500: the anon key goes into an HTTP
+    header, and http.client rejects header values containing newlines (header
+    injection defence) with a ValueError — not a RequestException, so the
+    handler below never caught it.
+    """
+    return (os.getenv(name) or "").strip()
+
+
+SUPABASE_URL = _clean_env("SUPABASE_URL").rstrip("/")
+SUPABASE_ANON_KEY = _clean_env("SUPABASE_ANON_KEY")
+SUPABASE_JWT_SECRET = _clean_env("SUPABASE_JWT_SECRET")
 
 # Comma-separated list of emails allowed to use the app. Empty = any
 # authenticated Supabase user is allowed.
@@ -147,11 +160,24 @@ def _verify_remote(token: str):
     except _requests.RequestException:
         raise HTTPException(
             503, "Could not reach the auth service — try again shortly.")
+    except ValueError:
+        # A malformed SUPABASE_URL or ANON_KEY (stray newline, control char)
+        # never reaches the network — it dies building the request. Report it
+        # as the server misconfiguration it is instead of a bare 500.
+        raise HTTPException(
+            503,
+            "The auth service is misconfigured on the server "
+            "(check SUPABASE_URL and SUPABASE_ANON_KEY).",
+        )
     if r.status_code != 200:
         raise HTTPException(
             401, "Invalid or expired session — please sign in again.")
 
-    body = r.json()
+    try:
+        body = r.json()
+    except ValueError:
+        raise HTTPException(
+            502, "The auth service returned an unreadable response.")
     user = {"id": body.get("id"), "email": (body.get("email") or "").lower()}
     with _cache_lock:
         # Opportunistic cleanup so the cache can't grow unbounded.

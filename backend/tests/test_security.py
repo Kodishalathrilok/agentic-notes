@@ -187,6 +187,48 @@ async def test_rejected_call_does_not_consume_other_windows(clean_hits):
 
 
 @pytest.mark.asyncio
+async def test_config_values_are_stripped(monkeypatch):
+    """A pasted secret picks up a trailing newline far too easily.
+
+    The anon key is sent as an HTTP header; http.client raises ValueError on
+    header values containing newlines, which is not a RequestException — so it
+    escaped the handler and every authenticated request 500'd.
+    """
+    mod = _auth_with(
+        monkeypatch,
+        DEV="0",
+        SUPABASE_URL="https://example.supabase.co/\n",
+        SUPABASE_ANON_KEY="anon-key\n",
+        SUPABASE_JWT_SECRET="  secret  ",
+    )
+    assert mod.SUPABASE_URL == "https://example.supabase.co"
+    assert mod.SUPABASE_ANON_KEY == "anon-key"
+    assert mod.SUPABASE_JWT_SECRET == "secret"
+    assert "\n" not in mod.SUPABASE_ANON_KEY
+
+
+@pytest.mark.asyncio
+async def test_malformed_config_reports_503_not_500(monkeypatch):
+    """Never leak a bare 500 when the credentials themselves are unusable.
+
+    Depending on where the newline sits, requests raises InvalidHeader (a
+    RequestException) or lets http.client raise a plain ValueError. Both must
+    surface as a handled 503 — the ValueError path is what escaped in
+    production and 500'd every authenticated request.
+    """
+    mod = _auth_with(
+        monkeypatch,
+        DEV="0",
+        SUPABASE_URL="https://example.supabase.co",
+        SUPABASE_ANON_KEY="anon-key",
+    )
+    monkeypatch.setattr(mod, "SUPABASE_ANON_KEY", "bad\nkey")
+    with pytest.raises(HTTPException) as exc:
+        mod._verify_remote("some-token")
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_limits_are_per_identity(clean_hits):
     dep = auth.limiter("t-peruser", 1, 600, daily=1)
     await _call(dep, ip="1.1.1.1")
