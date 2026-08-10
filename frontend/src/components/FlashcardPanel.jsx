@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { apiFetch } from '../lib/api'
+import { SRS_KEY, readJSON, writeJSON } from '../lib/storage'
 import Icon from './Icons'
 
 // Parse "CARD n / Front: / Back:" format into { front, back } objects.
@@ -52,17 +53,14 @@ function shuffleArray(arr) {
 }
 
 // ---- Spaced repetition (lightweight, localStorage-backed) -----------------
-const SRS_KEY = 'agentic-notes-srs'
-
-function loadSRS() {
-  try {
-    return JSON.parse(localStorage.getItem(SRS_KEY) || '{}')
-  } catch {
-    return {}
-  }
+// Scoped per account: cards are keyed by their front text, so a shared store
+// let one user's review schedule drive another user's "due" counts.
+function loadSRS(accountId) {
+  const data = readJSON(SRS_KEY, accountId, {})
+  return data && typeof data === 'object' ? data : {}
 }
-function saveSRS(data) {
-  localStorage.setItem(SRS_KEY, JSON.stringify(data))
+function saveSRS(accountId, data) {
+  writeJSON(SRS_KEY, accountId, data)
 }
 function cardKey(card) {
   return (card.front || '').slice(0, 80)
@@ -101,13 +99,17 @@ const RATE_STYLES = {
   easy: 'bg-green-500/15 text-green-300 hover:bg-green-500/25',
 }
 
-export default function FlashcardPanel({ flashcards, onRegenerate, regenerating }) {
+export default function FlashcardPanel({ flashcards, onRegenerate, regenerating, accountId }) {
   const parsed = useMemo(() => parseFlashcards(flashcards), [flashcards])
   const [order, setOrder] = useState(parsed)
   const [flippedIds, setFlippedIds] = useState(() => new Set())
   const [exporting, setExporting] = useState(false)
-  const [srs, setSrs] = useState(loadSRS)
+  const [srs, setSrs] = useState(() => loadSRS(accountId))
   const [dueOnly, setDueOnly] = useState(false)
+
+  useEffect(() => {
+    setSrs(loadSRS(accountId))
+  }, [accountId])
 
   useEffect(() => {
     setOrder(parsed)
@@ -129,7 +131,7 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating 
   const rate = (card, level, i) => {
     const next = { ...srs, [cardKey(card)]: schedule(srs[cardKey(card)], level) }
     setSrs(next)
-    saveSRS(next)
+    saveSRS(accountId, next)
     // unflip the rated card
     setFlippedIds((prev) => {
       const n = new Set(prev)

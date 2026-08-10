@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import Icon from './Icons'
 
 // Parse the plain-text quiz format into structured question objects.
@@ -42,6 +42,13 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
   const questions = useMemo(() => parseQuiz(quiz), [quiz])
   const [picked, setPicked] = useState({}) // { index: 'A' }
   const [resetKey, setResetKey] = useState(0)
+
+  // Answers are keyed by question index, so a new quiz inherited the previous
+  // one's answers — questions showed up pre-answered, right or wrong.
+  useEffect(() => {
+    setPicked({})
+    setResetKey((k) => k + 1)
+  }, [questions])
 
   if (!quiz || questions.length === 0) {
     return (

@@ -17,10 +17,24 @@ import SharedNote from './components/SharedNote'
 import useHistory from './hooks/useHistory'
 import { supabase, supabaseEnabled } from './lib/supabase'
 import { apiFetch } from './lib/api'
+import {
+  INPUT_KEY,
+  SETTINGS_KEY,
+  readJSON,
+  writeJSON,
+  readText,
+  writeText,
+  clearAccountContent,
+  purgeLegacyKeys,
+} from './lib/storage'
 
-const HISTORY_KEY = 'agentic-notes-history'
-const SETTINGS_KEY = 'agentic-notes-settings'
-const INPUT_KEY = 'agentic-notes-input'
+// The account whose data is on screen. Signed-out use has its own namespace.
+const GUEST = 'guest'
+const accountOf = (user) => user?.id || GUEST
+
+// Retire the pre-namespacing keys before anything reads storage, so a document
+// left behind by the previous build can't show up in a fresh sign-in.
+purgeLegacyKeys()
 
 const INITIAL_STEPS = [
   { step: 'plan', message: '', status: 'pending' },
@@ -47,15 +61,6 @@ const DEFAULT_SETTINGS = {
   instructions: '',
 }
 
-function loadJSON(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) : fallback
-  } catch {
-    return fallback
-  }
-}
-
 export default function App() {
   const { stream, isStreaming, cancel } = useStream()
 
@@ -67,12 +72,14 @@ export default function App() {
     document.documentElement.classList.remove('dark')
   }, [])
 
-  // Persisted settings + input
-  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(SETTINGS_KEY, {}) }))
+  // Persisted settings + input. Both start in the guest namespace: the
+  // Supabase session resolves asynchronously, so the account is unknown for
+  // the first render or two. `scopeId` below tracks whose data is loaded.
+  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_KEY, GUEST, {}) }))
   const { mode, tone, length, format, model, instructions } = settings
   const setSetting = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }))
 
-  const [inputText, setInputText] = useState(() => localStorage.getItem(INPUT_KEY) || '')
+  const [inputText, setInputText] = useState(() => readText(INPUT_KEY, GUEST))
   // [{page, start, end}] when the source is a PDF, so citations can name the
   // page they came from. Deliberately not persisted: it describes a file the
   // browser no longer has after a reload.
@@ -108,14 +115,60 @@ export default function App() {
   const bufferRef = useRef('') // accumulates streamed note deltas
   const titleRef = useRef('') // AI-generated session title
 
-  // ----- Persist settings + input -----------------------------------------
+  // ----- Account scoping ----------------------------------------------------
+  // `account` is who is signed in now; `scopeId` is whose data is currently in
+  // state. They differ for exactly one render after the session changes, which
+  // is the window the effect below uses to swap everything over.
+  const account = accountOf(user)
+  const [scopeId, setScopeId] = useState(GUEST)
+
+  // Wipe the workspace and re-read storage whenever the signed-in account
+  // changes. Without this, signing out and signing in as someone else left
+  // their predecessor's source text in the input panel and their notes, quiz,
+  // flashcards and citations on screen — none of it belonged to the new user.
   useEffect(() => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
-  }, [settings])
+    if (scopeId === account) return
+
+    cancel() // a stream started by the previous account must not keep writing
+
+    setSettings({ ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_KEY, account, {}) })
+    setInputText(readText(INPUT_KEY, account))
+    setPageSpans([])
+
+    setNotes('')
+    setNotesBefore(null)
+    setSources([])
+    setQuiz('')
+    setFlashcards('')
+    setCritique(null)
+    setPlan(null)
+    setError(null)
+    setBlocked(null)
+    setAgentSteps(INITIAL_STEPS.map((s) => ({ ...s })))
+    setActiveTab('notes')
+    setShowOptions(false)
+    bufferRef.current = ''
+    titleRef.current = ''
+
+    setScopeId(account)
+  }, [account, scopeId, cancel])
+
+  // ----- Persist settings + input -----------------------------------------
+  // Only once `scopeId` has caught up with the signed-in account. In the
+  // render right after a sign-in, `account` is already the new user while the
+  // state still holds the previous one's — writing then would file account
+  // A's source text under account B.
+  const hydrated = scopeId === account
 
   useEffect(() => {
-    localStorage.setItem(INPUT_KEY, inputText)
-  }, [inputText])
+    if (!hydrated) return
+    writeJSON(SETTINGS_KEY, scopeId, settings)
+  }, [settings, scopeId, hydrated])
+
+  useEffect(() => {
+    if (!hydrated) return
+    writeText(INPUT_KEY, scopeId, inputText)
+  }, [inputText, scopeId, hydrated])
 
   // ----- Health + models ---------------------------------------------------
   useEffect(() => {
@@ -133,10 +186,15 @@ export default function App() {
       .catch(() => setModels([]))
   }, [])
 
+  // One timer at a time: a second toast used to be cut short by the first
+  // one's pending timeout.
+  const toastTimer = useRef(null)
   const showToast = (msg) => {
     setToast(msg)
-    setTimeout(() => setToast(null), 2000)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 2000)
   }
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
 
   // ----- Step helpers ------------------------------------------------------
   const setStep = useCallback((stepName, status, message) => {
@@ -165,7 +223,13 @@ export default function App() {
   }, [])
 
   const signOut = async () => {
-    if (supabase) await supabase.auth.signOut()
+    if (!supabase) return
+    // Drop this account's source text and local history from the browser
+    // before releasing the session — whoever signs in next on this machine
+    // should not be able to read it. Settings (a preference, not content)
+    // stay, still namespaced to the account.
+    clearAccountContent(account)
+    await supabase.auth.signOut()
   }
 
   // Auth gate: with Supabase enabled, only signed-in users may use the app.
@@ -555,7 +619,15 @@ export default function App() {
             )}
 
             <div className="mx-auto w-full max-w-[672px]">
-              <InputPanel inputText={inputText} setInputText={setInputText} setPageSpans={setPageSpans} isStreaming={isStreaming} />
+              {/* keyed on the account: a switch remounts the panel, dropping the
+                  previous user's PDF preview, file name and draft. */}
+              <InputPanel
+                key={scopeId}
+                inputText={inputText}
+                setInputText={setInputText}
+                setPageSpans={setPageSpans}
+                isStreaming={isStreaming}
+              />
             </div>
 
             {/* Generate appears once a source is loaded */}
@@ -634,7 +706,9 @@ export default function App() {
                       <Icon.Clock className="mb-3 h-5 w-5 text-neutral-400 transition-colors group-hover:text-neutral-900" />
                       <p className="truncate text-sm font-medium text-neutral-900">{s.title || 'Untitled notes'}</p>
                       <p className="mt-0.5 text-xs text-neutral-400">
-                        {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : 'Saved session'}
+                        {/* sessions carry `date` (see useHistory); `createdAt`
+                            never existed, so this always read "Saved session". */}
+                        {s.date ? new Date(s.date).toLocaleDateString() : 'Saved session'}
                       </p>
                     </button>
                   ))}
@@ -650,7 +724,14 @@ export default function App() {
           <div className="grid grid-cols-1 items-stretch gap-6 lg:h-[calc(100vh-11rem)] lg:grid-cols-2">
             {/* Left: the source — fills the viewport, scrolls inside */}
             <div className="lg:h-full lg:min-h-0">
-              <InputPanel inputText={inputText} setInputText={setInputText} setPageSpans={setPageSpans} isStreaming={isStreaming} fill />
+              <InputPanel
+                key={scopeId}
+                inputText={inputText}
+                setInputText={setInputText}
+                setPageSpans={setPageSpans}
+                isStreaming={isStreaming}
+                fill
+              />
             </div>
 
             {/* Right: OUTPUT PANEL — pinned to the viewport, scrolls inside */}
@@ -763,6 +844,7 @@ export default function App() {
                     flashcards={flashcards}
                     onRegenerate={notes ? regenFlashcards : null}
                     regenerating={cardsRegen}
+                    accountId={scopeId}
                   />
                 )}
                 {activeTab === 'history' && (

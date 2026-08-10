@@ -3,12 +3,17 @@
 --
 -- WHY THIS FILE EXISTS
 --
--- The frontend asks the database for "all sessions" and "the session with this
--- id" — it never filters by user (see frontend/src/hooks/useHistory.js and the
--- share lookup in App.jsx). That is only safe because Row Level Security makes
--- Postgres apply the filter itself, per caller. If RLS is off, or a policy is
--- written permissively, those same queries return EVERY user's notes to
+-- The frontend looks up "the session with this id" without filtering by user
+-- (the share lookup in App.jsx). That is only safe because Row Level Security
+-- makes Postgres apply the filter itself, per caller. If RLS is off, or a
+-- policy is written permissively, that query returns EVERY user's notes to
 -- ANYONE who is signed in.
+--
+-- Note the asymmetry in the SELECT policies below: "read public sessions"
+-- intentionally lets any caller read an is_public row, which means an
+-- unfiltered `select *` returns your own rows PLUS everybody's shared ones.
+-- History therefore filters on user_id itself (useHistory.js) — RLS is the
+-- boundary, but it is not by itself a per-user listing.
 --
 -- That boundary used to live only in the Supabase dashboard: not in the repo,
 -- not reviewable, not testable, and impossible to rebuild if the project were
