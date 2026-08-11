@@ -82,19 +82,23 @@ export default function AuthCard({ onAuthed, pulse = false }) {
     setError(null)
     setNotice(null)
     try {
+      // Hand the signed-in user straight back to the caller. onAuthStateChange
+      // fires a tick later, and in that gap the app still believes nobody is
+      // signed in — long enough for its auth gate to bounce the new session
+      // back to the landing page.
       if (mode === 'signup') {
         const { data, error } = await supabase.auth.signUp({ email, password })
         if (error) throw error
         if (data.session) {
-          onAuthed && onAuthed()
+          onAuthed && onAuthed(data.user || data.session.user || null)
         } else {
           setNotice('Account created — check your email to confirm, then sign in.')
           setMode('signin')
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
-        onAuthed && onAuthed()
+        onAuthed && onAuthed(data.user || data.session?.user || null)
       }
     } catch (err) {
       setError(friendlyAuthError(err))

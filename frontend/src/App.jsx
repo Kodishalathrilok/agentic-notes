@@ -239,6 +239,15 @@ export default function App() {
     if (authRequired && !showLanding && !sharedView && !showEval) setShowLanding(true)
   }, [authRequired, showLanding, sharedView, showEval])
 
+  // Signing in has to open the workspace and register the user in one go.
+  // Doing only the former let the gate above fire in the render before
+  // onAuthStateChange arrived — `user` was still null, so a fresh sign-in was
+  // thrown straight back to the landing page and had to press Launch again.
+  const handleAuthed = useCallback((signedIn) => {
+    if (signedIn?.id) setUser(signedIn)
+    setShowLanding(false)
+  }, [])
+
   // Load a shared (public) session if the URL has ?share=<id>.
   useEffect(() => {
     if (!supabase) return
@@ -513,6 +522,7 @@ export default function App() {
         <Landing
           authRequired={authRequired}
           onLaunch={() => setShowLanding(false)}
+          onAuthed={handleAuthed}
           onEval={() => {
             setShowLanding(false)
             setShowEval(true)
@@ -522,7 +532,7 @@ export default function App() {
           onSignIn={() => setAuthOpen(true)}
           onSignOut={signOut}
         />
-        {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
+        {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />}
       </>
     )
   }
@@ -887,7 +897,7 @@ export default function App() {
         )}
       </main>
 
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />}
 
       {/* Toast */}
       {toast && (

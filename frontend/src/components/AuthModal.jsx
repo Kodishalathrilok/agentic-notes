@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase, supabaseConfigError, friendlyAuthError, providerEnabled } from '../lib/supabase'
 
-export default function AuthModal({ onClose }) {
+export default function AuthModal({ onClose, onAuthed }) {
   const [mode, setMode] = useState('signin') // 'signin' | 'signup'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -38,17 +38,21 @@ export default function AuthModal({ onClose }) {
     setError(null)
     setNotice(null)
     try {
+      // Pass the user back for the same reason AuthCard does: onAuthStateChange
+      // lands a tick later, and the app's auth gate acts on that gap.
       if (mode === 'signup') {
         const { data, error } = await supabase.auth.signUp({ email, password })
         if (error) throw error
         if (data.session) {
+          onAuthed && onAuthed(data.user || data.session.user || null)
           onClose() // confirmation off -> signed in immediately
         } else {
           setNotice('Account created — check your email to confirm, then sign in.')
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
+        onAuthed && onAuthed(data.user || data.session?.user || null)
         onClose()
       }
     } catch (err) {

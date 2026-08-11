@@ -157,15 +157,14 @@ function RotatingWord({ words }) {
   )
 }
 
-// Bare nav: no glass bar behind it, so the hero artwork runs unbroken to the
-// top of the page. The logo mark and the menu button are solid on their own,
-// so they still read against the art without a surface under them.
-// Launching happens from the hero CTA, the closing CTA and the menu.
+// The glass hugs the two controls instead of spanning the page as one bar, so
+// the hero artwork runs unbroken behind them. Same treatment as the workspace
+// header. Launching happens from the hero CTA, the closing CTA and the menu.
 function Nav({ onMenu }) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-      <div className="flex w-full items-center justify-between py-2 pl-1 pr-0 sm:pl-2">
-        <div className="flex items-center gap-2.5">
+      <div className="flex w-full items-start justify-between">
+        <div className="glass-pill flex items-center gap-2.5 rounded-full py-1.5 pl-2 pr-4">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />
           </span>
@@ -174,7 +173,7 @@ function Nav({ onMenu }) {
         <button
           onClick={onMenu}
           aria-label="Open menu"
-          className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
+          className="glass-pill flex h-12 w-12 items-center justify-center rounded-full text-espresso-900"
         >
           <Icon.Menu className="h-5 w-5" />
         </button>
@@ -183,7 +182,7 @@ function Nav({ onMenu }) {
   )
 }
 
-export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut, authRequired = false }) {
+export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnabled, onSignIn, onSignOut, authRequired = false }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const heroRef = useRef(null)
 
@@ -506,7 +505,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
                   </button>
                 </div>
               ) : (
-                <AuthCard pulse={authPulse} onAuthed={onLaunch} />
+                <AuthCard pulse={authPulse} onAuthed={onAuthed || onLaunch} />
               )}
             </Reveal>
           </div>
