@@ -86,6 +86,36 @@ export default function App() {
   const [pageSpans, setPageSpans] = useState([])
 
   const [models, setModels] = useState([])
+  // Page the left-hand PDF viewer is parked on, driven by citation clicks.
+  const [pdfPage, setPdfPage] = useState(null)
+
+  // The attached document, held here rather than in InputPanel: Generate swaps
+  // the entry page for the workspace, remounting that panel, and the preview
+  // has to outlive the swap — the workspace is the whole point of having it.
+  const [preview, setPreview] = useState(null) // { kind: 'pdf', url, name }
+  const previewUrlRef = useRef(null)
+
+  const openPreview = useCallback((file, name) => {
+    const url = URL.createObjectURL(file)
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    previewUrlRef.current = url
+    setPreview({ kind: 'pdf', url, name })
+    setPdfPage(null)
+  }, [])
+
+  const clearPreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreview(null)
+    setPdfPage(null)
+  }, [])
+
+  // Object URLs leak until revoked.
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+  }, [])
 
   const [agentSteps, setAgentSteps] = useState(INITIAL_STEPS)
   const [plan, setPlan] = useState(null)
@@ -134,6 +164,8 @@ export default function App() {
     setSettings({ ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_KEY, account, {}) })
     setInputText(readText(INPUT_KEY, account))
     setPageSpans([])
+    setPdfPage(null)
+    clearPreview()
 
     setNotes('')
     setNotesBefore(null)
@@ -151,7 +183,7 @@ export default function App() {
     titleRef.current = ''
 
     setScopeId(account)
-  }, [account, scopeId, cancel])
+  }, [account, scopeId, cancel, clearPreview])
 
   // ----- Persist settings + input -----------------------------------------
   // Only once `scopeId` has caught up with the signed-in account. In the
@@ -217,7 +249,17 @@ export default function App() {
   // ----- Auth (Supabase) ---------------------------------------------------
   useEffect(() => {
     if (!supabase) return
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
+    supabase.auth.getSession().then(({ data }) => {
+      const signedIn = data.session?.user ?? null
+      setUser(signedIn)
+      // Already signed in on arrival -> open the app, don't park them on the
+      // marketing page. This is the only path a Google sign-in can take: the
+      // OAuth redirect reloads the page, so handing the user back from the
+      // sign-in call (see handleAuthed) never runs. It also covers simply
+      // returning with a live session. Only on this first resolution, so the
+      // logo's "back to home" keeps working afterwards.
+      if (signedIn) setShowLanding(false)
+    })
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setUser(session?.user ?? null))
     return () => sub.subscription.unsubscribe()
   }, [])
@@ -315,6 +357,7 @@ export default function App() {
     setNotes('')
     setNotesBefore(null)
     setSources([])
+    setPdfPage(null) // citations from the previous run no longer apply
     setQuiz('')
     setFlashcards('')
     setCritique(null)
@@ -637,6 +680,9 @@ export default function App() {
                 setInputText={setInputText}
                 setPageSpans={setPageSpans}
                 isStreaming={isStreaming}
+                preview={preview}
+                onPreview={openPreview}
+                onClearPreview={clearPreview}
               />
             </div>
 
@@ -740,6 +786,10 @@ export default function App() {
                 setInputText={setInputText}
                 setPageSpans={setPageSpans}
                 isStreaming={isStreaming}
+                pdfPage={pdfPage}
+                preview={preview}
+                onPreview={openPreview}
+                onClearPreview={clearPreview}
                 fill
               />
             </div>
@@ -843,6 +893,7 @@ export default function App() {
                     rewriting={rewriting}
                     sources={sources}
                     onEditSelection={editSelection}
+                    onCitePage={setPdfPage}
                     streaming={isStreaming}
                   />
                 )}

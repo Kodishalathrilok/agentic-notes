@@ -44,7 +44,22 @@ function SourceCard({ icon: Glyph, title, sub, badge, onClick, disabled }) {
   )
 }
 
-export default function InputPanel({ inputText, setInputText, setPageSpans = () => {}, isStreaming, fill = false }) {
+// `preview` is owned by App, not by this component. Pressing Generate swaps
+// the whole layout from the entry page to the workspace, which remounts this
+// panel — local preview state died with it (and its unmount handler revoked
+// the blob URL), so the document you attached turned back into a wall of
+// extracted text exactly when the workspace finally had room to show it.
+export default function InputPanel({
+  inputText,
+  setInputText,
+  setPageSpans = () => {},
+  isStreaming,
+  fill = false,
+  pdfPage = null,
+  preview = null,
+  onPreview = () => {},
+  onClearPreview = () => {},
+}) {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(null)      // string label while extracting
   const [info, setInfo] = useState(null)      // { label } -> doubles as the source title
@@ -52,15 +67,11 @@ export default function InputPanel({ inputText, setInputText, setPageSpans = () 
   const [recording, setRecording] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')      // "Learn anything" bar value
-  // The original document, shown as-is. The text the model reads is extracted
-  // in the background and deliberately never rendered.
-  const [preview, setPreview] = useState(null) // { kind: 'pdf', url, name }
   const [showText, setShowText] = useState(false)
   const fileInputRef = useRef(null)
   const barRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const chunksRef = useRef([])
-  const previewUrlRef = useRef(null)
 
   const hasSource = !!inputText.trim() || !!preview
 
@@ -69,16 +80,14 @@ export default function InputPanel({ inputText, setInputText, setPageSpans = () 
     if (!hasSource) setEditing(false)
   }, [hasSource])
 
-  // Object URLs are leaked memory until revoked, so drop the last one on unmount.
-  useEffect(() => () => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
-  }, [])
+  // A citation was clicked in the notes. Make sure the document is what's on
+  // screen — jumping the PDF is pointless while the extracted-text view is up.
+  useEffect(() => {
+    if (pdfPage) setShowText(false)
+  }, [pdfPage])
 
   const showPreview = (file, name) => {
-    const url = URL.createObjectURL(file)
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
-    previewUrlRef.current = url
-    setPreview({ kind: 'pdf', url, name })
+    onPreview(file, name) // App owns the object URL and revokes the old one
     setShowText(false)
     setEditing(false)
   }
@@ -251,11 +260,7 @@ export default function InputPanel({ inputText, setInputText, setPageSpans = () 
   // ----- replace the loaded source ------------------------------------------
   const replaceSource = () => {
     if (isStreaming) return
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current)
-      previewUrlRef.current = null
-    }
-    setPreview(null)
+    onClearPreview()
     setShowText(false)
     setInputText('')
     setPageSpans([])
@@ -417,8 +422,15 @@ export default function InputPanel({ inputText, setInputText, setPageSpans = () 
           {/* body — the document itself when we have one, else the text */}
           {preview && !showText ? (
             <div className={`min-h-0 flex-1 bg-neutral-100 ${fill ? '' : 'h-[32rem]'}`}>
+              {/* Keyed on the page so a citation click remounts the viewer at
+                  that page. Chrome's built-in PDF viewer only reads `#page`
+                  when the document loads — changing the fragment in place is
+                  silently ignored — so a remount is what actually moves it.
+                  Keying on the page alone (not on every click) means clicking
+                  a citation for the page you're already on costs nothing. */}
               <iframe
-                src={`${preview.url}#view=FitH&navpanes=0`}
+                key={pdfPage || 'p1'}
+                src={`${preview.url}#page=${pdfPage || 1}&view=FitH&navpanes=0`}
                 title={preview.name}
                 className="h-full w-full border-0"
               />

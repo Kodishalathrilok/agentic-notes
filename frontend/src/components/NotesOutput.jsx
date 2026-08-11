@@ -23,7 +23,7 @@ function renderInline(text, keyPrefix, onCite) {
           key={`${keyPrefix}-${i}`}
           onClick={() => onCite(n)}
  className="mx-0.5 inline-flex translate-y-[-1px] items-center rounded-md bg-brand-100 px-1.5 text-[10px] font-bold text-brand-700 align-super hover:bg-brand-200 dark:bg-brand-900/40 dark:text-brand-700"
-          title={`Jump to source ${n}`}
+          title={`Show source ${n} in the document`}
         >
           {n}
         </button>
@@ -187,6 +187,7 @@ export default function NotesOutput({
   rewriting,
   sources = [],
   onEditSelection,
+  onCitePage,
   streaming = false,
 }) {
   const [copied, setCopied] = useState(false)
@@ -198,8 +199,22 @@ export default function NotesOutput({
   const [highlight, setHighlight] = useState(null)
   const containerRef = useRef(null)
 
-  // Citation [n] clicked -> open the Sources panel and scroll to passage n.
+  // Citation [n] clicked.
+  //
+  // When the source is a PDF the passage carries the page it came from, so the
+  // useful thing is to move the document itself to that page — the reader gets
+  // the claim in its original context instead of a text excerpt. Only sources
+  // without a page (pasted text, URLs, transcripts) fall back to unfolding the
+  // Sources list, which is a lot of panel to throw open when the answer is
+  // already sitting in the left pane.
   const handleCite = (n) => {
+    const cited = sources.find((s) => s.id === n)
+    if (cited?.page && onCitePage) {
+      onCitePage(cited.page)
+      setHighlight(n)
+      setTimeout(() => setHighlight(null), 2500)
+      return
+    }
     setShowSources(true)
     setHighlight(n)
     setTimeout(() => {
