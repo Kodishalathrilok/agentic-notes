@@ -542,7 +542,7 @@ export default function App() {
         <button
           onClick={() => setShowLanding(true)}
           title="Back to home"
-          className="flex items-center gap-2.5 rounded-full border border-espresso-900/10 bg-white py-1.5 pl-2 pr-4 shadow-soft transition-transform hover:scale-[1.03]"
+          className="glass-pill flex items-center gap-2.5 rounded-full py-1.5 pl-2 pr-4"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-espresso-900 text-white">
             <Icon.Book className="h-4 w-4" />
@@ -562,7 +562,7 @@ export default function App() {
               <button
                 onClick={signOut}
                 title={user.email}
-                className="rounded-full border border-espresso-900/10 bg-white px-4 py-2 text-sm font-semibold text-espresso-900 shadow-soft transition-transform hover:scale-[1.03]"
+                className="glass-pill rounded-full px-4 py-2 text-sm font-semibold text-espresso-900"
               >
                 Sign out
               </button>
@@ -577,7 +577,7 @@ export default function App() {
           <button
             onClick={() => setMenuOpen(true)}
             aria-label="Open menu"
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-espresso-900/10 bg-white text-espresso-900 shadow-soft transition-transform hover:scale-[1.03]"
+            className="glass-pill flex h-10 w-10 items-center justify-center rounded-full text-espresso-900"
           >
             <Icon.Menu className="h-5 w-5" />
           </button>
@@ -737,7 +737,7 @@ export default function App() {
             {/* Right: OUTPUT PANEL — pinned to the viewport, scrolls inside */}
             <div className="flex min-h-[420px] animate-slide-in-right flex-col gap-3 lg:h-full lg:min-h-0">
               {/* Learning tab on top */}
-              <div className="shrink-0 rounded-3xl border border-espresso-900/10 bg-white p-2 shadow-card">
+              <div className="glass-card shrink-0 rounded-3xl p-2">
                 <div className="flex items-center justify-between gap-3 px-3 pb-1 pt-2">
                   <span className="inline-flex items-center gap-2 text-xs font-bold text-espresso-900">
                     <span className={`h-1.5 w-1.5 rounded-full ${isStreaming ? 'animate-pulse bg-amber-500' : 'bg-green-500'}`} />
@@ -862,7 +862,7 @@ export default function App() {
               </div>
 
               {/* Ask anything — pinned at the bottom of the output panel */}
-              <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-espresso-900/15 bg-white py-2 pl-5 pr-2 shadow-soft transition-all focus-within:border-espresso-900/40 focus-within:shadow-card">
+              <div className="glass-card flex shrink-0 items-center gap-2 rounded-2xl py-2 pl-5 pr-2">
                 <input
                   value={instructions}
                   onChange={(e) => setSetting('instructions')(e.target.value)}

@@ -195,6 +195,63 @@
     inset 0 1px 0 rgb(255 255 255 / 0.55);
 }
 
+/*
+ * Hover/press behaviour for a .glass-pill or .glass-card used as a control —
+ * the floating workspace header, the pipeline strip, the tab bar.
+ *
+ * Declared here, unlayered, for the same reason .glass-pill is: unlayered
+ * rules beat Tailwind's @layer utilities, so a `hover:shadow-lift` class
+ * would silently lose to the box-shadow above. Keep the glass look in CSS
+ * and don't fight it from the markup.
+ */
+.glass-pill,
+.glass-card {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.25s ease,
+    background 0.25s ease;
+}
+
+button.glass-pill:hover,
+a.glass-pill:hover,
+.glass-interactive:hover {
+  background: linear-gradient(
+    120deg,
+    rgb(255 253 248 / 0.72),
+    rgb(255 250 242 / 0.52)
+  );
+  box-shadow:
+    0 14px 40px rgb(58 40 30 / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
+  transform: translateY(-2px);
+}
+
+button.glass-pill:active,
+.glass-interactive:active {
+  transform: translateY(0);
+  box-shadow:
+    0 6px 20px rgb(58 40 30 / 0.14),
+    inset 0 1px 0 rgb(255 255 255 / 0.6);
+}
+
+/* Focus ring that reads against glass. */
+button.glass-pill:focus-visible,
+.glass-interactive:focus-visible {
+  outline: 2px solid theme("colors.brand.600");
+  outline-offset: 2px;
+}
+
+/* A glass panel wrapping an input (the "Ask anything" bar) brightens while
+   the field inside has focus — the focus-within utilities it replaced could
+   not override the unlayered box-shadow above. */
+.glass-card:focus-within {
+  border-color: rgb(255 255 255 / 0.85);
+  box-shadow:
+    0 10px 30px rgb(58 40 30 / 0.13),
+    inset 0 1px 0 rgb(255 255 255 / 0.7),
+    0 0 0 3px rgb(58 40 30 / 0.05);
+}
+
 /* ---- Interactive tilt card: 3D tilt + cursor glow (vars set from JS) ---- */
 .tilt-card {
   position: relative;

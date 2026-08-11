@@ -157,29 +157,27 @@ function RotatingWord({ words }) {
   )
 }
 
-function Nav({ onLaunch, onEval, user, supabaseEnabled, onSignIn, onSignOut, onMenu }) {
+// Bare nav: no glass bar behind it, so the hero artwork runs unbroken to the
+// top of the page. The logo mark and the menu button are solid on their own,
+// so they still read against the art without a surface under them.
+// Launching happens from the hero CTA, the closing CTA and the menu.
+function Nav({ onMenu }) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-      <div className="glass-pill flex w-full items-center justify-between rounded-full py-2 pl-3 pr-2 sm:pl-4">
+      <div className="flex w-full items-center justify-between py-2 pl-1 pr-0 sm:pl-2">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />
           </span>
           <span className="text-base font-extrabold tracking-tight text-espresso-900">Agentic Notes</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onLaunch} className="btn-primary rounded-full">
-            Launch App
-            <span aria-hidden>→</span>
-          </button>
-          <button
-            onClick={onMenu}
-            aria-label="Open menu"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
-          >
-            <Icon.Menu className="h-5 w-5" />
-          </button>
-        </div>
+        <button
+          onClick={onMenu}
+          aria-label="Open menu"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-espresso-900 text-cream shadow-soft transition-transform hover:scale-105"
+        >
+          <Icon.Menu className="h-5 w-5" />
+        </button>
       </div>
     </header>
   )
@@ -255,15 +253,7 @@ export default function Landing({ onLaunch, onEval, user, supabaseEnabled, onSig
   }, [])
   return (
     <div className="min-h-screen overflow-x-hidden bg-latte-100 text-espresso-800">
-      <Nav
-        onLaunch={launch}
-        onEval={onEval}
-        user={user}
-        supabaseEnabled={supabaseEnabled}
-        onSignIn={onSignIn}
-        onSignOut={onSignOut}
-        onMenu={() => setMenuOpen(true)}
-      />
+      <Nav onMenu={() => setMenuOpen(true)} />
 
       <MenuOverlay
         open={menuOpen}

@@ -20,7 +20,7 @@ export default function PipelineStrip({ steps = [], compact = false }) {
 
   return (
     <div
-      className={`mx-auto flex w-fit max-w-full items-center overflow-x-auto rounded-full border border-espresso-900/10 bg-white shadow-soft ${
+      className={`glass-pill mx-auto flex w-fit max-w-full items-center overflow-x-auto rounded-full ${
         compact ? 'gap-1 px-3 py-1.5' : 'gap-1.5 px-5 py-2.5'
       }`}
       title="The agent pipeline: plan → write → critique → revise → quiz → flashcards"
@@ -38,8 +38,8 @@ export default function PipelineStrip({ steps = [], compact = false }) {
                   done
                     ? 'border-espresso-900 bg-espresso-900'
                     : active
-                      ? 'animate-pulse border-espresso-900 bg-white'
-                      : 'border-espresso-900/25 bg-white'
+                      ? 'animate-pulse border-espresso-900 bg-white/80'
+                      : 'border-espresso-900/25 bg-white/50'
                 }`}
               >
                 {done && <Icon.Check className={compact ? 'h-2 w-2 text-white' : 'h-3 w-3 text-white'} />}
