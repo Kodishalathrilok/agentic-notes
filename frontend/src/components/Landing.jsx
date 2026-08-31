@@ -283,7 +283,7 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
         </div>
 
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-4 py-28 text-center sm:py-32">
-          <h1 className="mx-auto font-display text-6xl font-bold leading-[1.05] tracking-tight text-espresso-900 sm:text-7xl md:text-8xl">
+          <h1 className="mx-auto font-bodoni text-6xl font-bold leading-[1.05] tracking-[-0.03em] text-espresso-900 sm:text-7xl md:text-8xl">
             <TextEffect per="word" preset="slide" as="span" className="block sm:whitespace-nowrap" stagger={0.08} startDelay={0.05}>
               Generate notes
             </TextEffect>

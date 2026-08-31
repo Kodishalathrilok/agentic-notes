@@ -7,6 +7,9 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         display: ['Questrial', 'Century Gothic', 'sans-serif'],
+        // Landing hero only. Didone serif — the weight axis is loaded as a
+        // 400..700 range so bold is a real cut, not a synthesised one.
+        bodoni: ['"Bodoni Moda"', 'Didot', '"Bodoni MT"', 'Georgia', 'serif'],
         mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
       },
       colors: {
