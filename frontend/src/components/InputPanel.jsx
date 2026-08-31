@@ -2,6 +2,10 @@ import { useState, useRef, useEffect } from 'react'
 import { apiFetch } from '../lib/api'
 import Icon from './Icons'
 
+// Fallback only. The real cap is the server's MAX_TEXT_CHARS, read from
+// /api/health and passed in as `maxChars` — a deploy that lowers it (to hold
+// down token spend, say) has to be able to lower it here too, or the browser
+// happily accepts a source that Generate will reject.
 const MAX_CHARS = 300000
 
 // Source panel, two states.
@@ -59,6 +63,7 @@ export default function InputPanel({
   preview = null,
   onPreview = () => {},
   onClearPreview = () => {},
+  maxChars = MAX_CHARS,
 }) {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(null)      // string label while extracting
@@ -68,6 +73,15 @@ export default function InputPanel({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')      // "Learn anything" bar value
   const [showText, setShowText] = useState(false)
+  // Whether the source lost its tail to the character cap. Can't be inferred
+  // from inputText.length: the server trims on a word boundary, so a trimmed
+  // document lands just *under* the limit, not exactly on it.
+  const [trimmed, setTrimmed] = useState(false)
+  // Page count from the extractor. It was already being computed and thrown
+  // away (it only ever reached info.label, which a PDF's header never shows) —
+  // and "how many pages is this" is the first thing you want to know about a
+  // document you just attached.
+  const [pages, setPages] = useState(null)
   const fileInputRef = useRef(null)
   const barRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -115,7 +129,9 @@ export default function InputPanel({
         throw new Error(body.detail || `Extraction failed (${res.status})`)
       }
       const data = await res.json()
-      setInputText((data.text || '').slice(0, MAX_CHARS))
+      setInputText((data.text || '').slice(0, maxChars))
+      setTrimmed(!!data.truncated || (data.text || '').length > maxChars)
+      setPages(data.pages ?? null)
       // Only /api/extract-pdf returns these; every other source clears them,
       // so a PDF's pages can never be attributed to the text that replaced it.
       setPageSpans(data.page_spans || [])
@@ -147,7 +163,9 @@ export default function InputPanel({
     if (type.startsWith('text/') || /\.(txt|md|csv|json)$/i.test(name)) {
       setBusy(`Reading ${name}…`)
       file.text().then((t) => {
-        setInputText(t.slice(0, MAX_CHARS))
+        setInputText(t.slice(0, maxChars))
+        setTrimmed(t.length > maxChars)
+        setPages(null)
         setPageSpans([])
         done(name)
       }).catch(() => fail(`Could not read ${name}.`))
@@ -174,7 +192,9 @@ export default function InputPanel({
         throw new Error(body.detail || `Fetch failed (${res.status})`)
       }
       const data = await res.json()
-      setInputText((data.text || '').slice(0, MAX_CHARS))
+      setInputText((data.text || '').slice(0, maxChars))
+      setTrimmed(!!data.truncated || (data.text || '').length > maxChars)
+      setPages(null)
       setPageSpans([])
       setDraft('')
       done(data.title || target)
@@ -188,7 +208,9 @@ export default function InputPanel({
     const t = draft.trim()
     if (!t || isStreaming || busy) return
     if (looksLikeUrl(t)) return fetchUrl(t)
-    setInputText(t.slice(0, MAX_CHARS))
+    setInputText(t.slice(0, maxChars))
+    setTrimmed(t.length > maxChars)
+    setPages(null)
     setPageSpans([])
     setDraft('')
     done('Pasted text')
@@ -206,7 +228,9 @@ export default function InputPanel({
       const t = await navigator.clipboard.readText()
       if (t && t.trim()) {
         if (looksLikeUrl(t)) return fetchUrl(t)
-        setInputText(t.slice(0, MAX_CHARS))
+        setInputText(t.slice(0, maxChars))
+        setTrimmed(t.length > maxChars)
+        setPages(null)
         setPageSpans([])
         done('Pasted text')
       } else {
@@ -257,8 +281,11 @@ export default function InputPanel({
     }
   }
 
-  // ----- replace the loaded source ------------------------------------------
-  const replaceSource = () => {
+  // ----- remove / replace the loaded source ---------------------------------
+  // These were one function, which is why "Replace" didn't replace anything:
+  // it emptied the panel and dropped you back on the four cards, and in the
+  // workspace there is no Generate button to press afterwards.
+  const clearSource = () => {
     if (isStreaming) return
     onClearPreview()
     setShowText(false)
@@ -268,11 +295,21 @@ export default function InputPanel({
     setError(null)
     setDraft('')
     setEditing(false)
+    setTrimmed(false)
+    setPages(null)
+  }
+
+  // Straight to the file picker, and deliberately without clearing first:
+  // handleFile overwrites the preview and the text anyway, so cancelling the
+  // dialog leaves the source you already had instead of destroying it.
+  const replaceSource = () => {
+    if (locked) return
+    fileInputRef.current?.click()
   }
 
   // ----- shared bits --------------------------------------------------------
   const locked = isStreaming || !!busy
-  const atLimit = inputText.length >= MAX_CHARS
+  const atLimit = trimmed || inputText.length >= maxChars
   const words = hasSource ? inputText.trim().split(/\s+/).length : 0
 
   const DropOverlay = () =>
@@ -332,13 +369,21 @@ export default function InputPanel({
                 ) : error ? (
                   <span className="text-red-600">{error}</span>
                 ) : (
-                  <>PDF · {words.toLocaleString()} words ready</>
+                  <>
+                    {pages ? `${pages} page${pages === 1 ? '' : 's'} · ` : ''}
+                    {words.toLocaleString()} words ready
+                    {atLimit && (
+                      <span className="text-amber-600">
+                        {' '}· trimmed to the first {maxChars.toLocaleString()} characters
+                      </span>
+                    )}
+                  </>
                 )}
               </p>
             </div>
 
             <button
-              onClick={replaceSource}
+              onClick={clearSource}
               disabled={locked}
               aria-label="Remove this file"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40"
@@ -351,10 +396,30 @@ export default function InputPanel({
       )
     }
 
+    // Labelled action (Edit / Done) — only text sources get one.
     const actionBtn =
       'inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-xs ' +
       'font-medium text-neutral-600 transition-colors hover:border-neutral-300 hover:bg-neutral-50 ' +
       'hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40'
+
+    // Bare icon control. Same shape as the ✕ on the phase-1 chip, so Replace
+    // and Remove read as tools rather than as two more buttons competing with
+    // the view toggle.
+    const iconBtn =
+      'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-neutral-400 ' +
+      'transition-colors hover:bg-neutral-100 hover:text-neutral-900 ' +
+      'disabled:pointer-events-none disabled:opacity-40'
+
+    const sourceName = preview?.name || info?.label || 'Your source'
+
+    // Most useful number first. "How many pages" was being computed by the
+    // extractor and dropped on the floor; character count is the one you look
+    // at last, so it goes last.
+    const meta = [
+      pages ? `${pages} page${pages === 1 ? '' : 's'}` : null,
+      `${words.toLocaleString()} words`,
+      `${inputText.length.toLocaleString()} characters`,
+    ].filter(Boolean).join(' · ')
 
     return (
       <div
@@ -364,57 +429,94 @@ export default function InputPanel({
         <DropOverlay />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-[0_4px_10px_rgba(0,0,0,0.04)]">
-          {/* header — what's loaded, how big, what you can do with it */}
-          <div className="flex shrink-0 items-start gap-3 border-b border-neutral-200/70 px-5 py-4">
-            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-100 text-neutral-500">
+          {/* Header — three zones on one line: what it is, what you're looking
+              at, and the tools. It used to cram the title, the metadata and
+              three same-shaped buttons into one row, so the filename lost the
+              fight for space on every screen narrower than the mockup. */}
+          <div className="flex shrink-0 items-center gap-3 border-b border-neutral-200/70 px-4 py-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-100 text-neutral-500">
               <Icon.FileText className="h-[18px] w-[18px]" />
             </span>
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-neutral-900" title={preview?.name || info?.label || 'Your source'}>
-                {preview?.name || info?.label || 'Your source'}
+              <p className="truncate text-sm font-medium text-neutral-900" title={sourceName}>
+                {sourceName}
               </p>
-              <p className="mt-0.5 text-xs text-neutral-400">
+              <p className="mt-0.5 truncate text-xs text-neutral-400">
                 {busy ? (
-                  <span className="text-neutral-500">Reading it in the background…</span>
+                  <span className="inline-flex items-center gap-1.5 text-neutral-500">
+                    <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-neutral-400 border-t-transparent" />
+                    Reading it…
+                  </span>
                 ) : (
                   <>
-                    {inputText.length.toLocaleString()} characters · {words.toLocaleString()} words
+                    {meta}
                     {atLimit && (
-                      <span className="text-amber-600"> · trimmed to the {MAX_CHARS.toLocaleString()}-character limit</span>
+                      <span className="text-amber-600"> · trimmed to {maxChars.toLocaleString()} chars</span>
                     )}
                   </>
                 )}
               </p>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              {preview ? (
-                // No Edit for a rendered document — you can't type into a PDF.
-                // Offer a look at what the model will actually read instead.
-                <button
-                  onClick={() => setShowText((v) => !v)}
-                  className={actionBtn}
-                  disabled={locked || !inputText}
-                  title="See the text the model will read"
-                >
-                  <Icon.Type className="h-3.5 w-3.5" />
-                  {showText ? 'Document' : 'Text'}
-                </button>
-              ) : editing ? (
-                <button onClick={() => setEditing(false)} className={actionBtn} disabled={isStreaming}>
-                  <Icon.Check className="h-3.5 w-3.5" />
-                  Done
-                </button>
-              ) : (
-                <button onClick={() => setEditing(true)} className={actionBtn} disabled={locked}>
-                  <Icon.Pencil className="h-3.5 w-3.5" />
-                  Edit
-                </button>
-              )}
-              <button onClick={replaceSource} className={actionBtn} disabled={locked}>
-                <Icon.Refresh className="h-3.5 w-3.5" />
-                Replace
+            {/* Switching between the rendered document and the extracted text
+                is a view choice, not an action — so it's a segmented control.
+                As a single button whose label flipped between "Text" and
+                "Document" it never said which one you were currently on. */}
+            {preview ? (
+              <div className="flex shrink-0 items-center rounded-full bg-neutral-100 p-0.5">
+                {[
+                  { id: 'doc', label: 'Document' },
+                  { id: 'text', label: 'Text' },
+                ].map((v) => {
+                  const on = (v.id === 'text') === showText
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setShowText(v.id === 'text')}
+                      disabled={locked || (v.id === 'text' && !inputText)}
+                      title={v.id === 'text' ? 'See the text the model will read' : 'See the document'}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+                        on
+                          ? 'bg-white text-neutral-900 shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
+                          : 'text-neutral-500 hover:text-neutral-900'
+                      }`}
+                    >
+                      {v.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : editing ? (
+              <button onClick={() => setEditing(false)} className={actionBtn} disabled={isStreaming}>
+                <Icon.Check className="h-3.5 w-3.5" />
+                Done
+              </button>
+            ) : (
+              <button onClick={() => setEditing(true)} className={actionBtn} disabled={locked}>
+                <Icon.Pencil className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            )}
+
+            <div className="flex shrink-0 items-center border-l border-neutral-200/70 pl-1">
+              <button
+                onClick={replaceSource}
+                className={iconBtn}
+                disabled={locked}
+                aria-label="Replace with another file"
+                title="Replace with another file"
+              >
+                <Icon.Refresh className="h-4 w-4" />
+              </button>
+              <button
+                onClick={clearSource}
+                className={iconBtn}
+                disabled={locked}
+                aria-label="Remove this source"
+                title="Remove this source"
+              >
+                <Icon.X className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -438,7 +540,7 @@ export default function InputPanel({
           ) : editing ? (
             <textarea
               value={inputText}
-              onChange={(e) => setInputText(e.target.value.slice(0, MAX_CHARS))}
+              onChange={(e) => setInputText(e.target.value.slice(0, maxChars))}
               onPaste={onPaste}
               autoFocus
               disabled={isStreaming}
@@ -454,17 +556,11 @@ export default function InputPanel({
             </div>
           )}
 
-          {/* status — extraction of a dropped replacement, or its failure */}
-          {(busy || error) && (
-            <div className="shrink-0 border-t border-neutral-200/70 px-5 py-2.5">
-              {busy ? (
-                <span className="flex items-center gap-2 truncate text-xs text-neutral-500">
-                  <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-neutral-900 border-t-transparent" />
-                  {busy}
-                </span>
-              ) : (
-                <span className="block truncate text-xs text-red-600">{error}</span>
-              )}
+          {/* Failures only. Progress lives in the header's metadata line now —
+              having both meant "Reading it…" appeared twice at once. */}
+          {error && !busy && (
+            <div className="shrink-0 border-t border-neutral-200/70 bg-red-50/60 px-4 py-2.5">
+              <span className="block text-xs text-red-600">{error}</span>
             </div>
           )}
         </div>
@@ -481,8 +577,11 @@ export default function InputPanel({
     <div className="relative mx-auto flex w-full max-w-[672px] flex-col" {...dragProps}>
       <DropOverlay />
 
-      {/* four ways in */}
-      <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Four ways in. `sm:` is viewport-relative, not container-relative, so
+          on the workspace's half-width column four across squeezed each card
+          to ~140px and the "Popular" badge landed on top of the title. In that
+          column stay at two. */}
+      <div className={`grid w-full grid-cols-2 gap-3 ${fill ? '' : 'sm:grid-cols-4'}`}>
         <SourceCard
           icon={Icon.Paperclip}
           title="Upload"

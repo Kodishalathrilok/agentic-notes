@@ -86,6 +86,9 @@ export default function App() {
   const [pageSpans, setPageSpans] = useState([])
 
   const [models, setModels] = useState([])
+  // The server's MAX_TEXT_CHARS. Until /api/health answers, assume the
+  // documented default; InputPanel holds the source to whatever lands here.
+  const [maxChars, setMaxChars] = useState(300000)
   // Page the left-hand PDF viewer is parked on, driven by citation clicks.
   const [pdfPage, setPdfPage] = useState(null)
 
@@ -120,6 +123,10 @@ export default function App() {
   const [agentSteps, setAgentSteps] = useState(INITIAL_STEPS)
   const [plan, setPlan] = useState(null)
   const [notes, setNotes] = useState('')
+  // The source the notes on screen were built from. Compared against the live
+  // input so the workspace can tell "regenerate the same thing" apart from
+  // "you swapped the document and these notes are now stale".
+  const [generatedFrom, setGeneratedFrom] = useState('')
   const [notesBefore, setNotesBefore] = useState(null)
   const [sources, setSources] = useState([])
   const [critique, setCritique] = useState(null)
@@ -179,6 +186,7 @@ export default function App() {
     setAgentSteps(INITIAL_STEPS.map((s) => ({ ...s })))
     setActiveTab('notes')
     setShowOptions(false)
+    setGeneratedFrom('')
     bufferRef.current = ''
     titleRef.current = ''
 
@@ -206,7 +214,10 @@ export default function App() {
   useEffect(() => {
     fetch('/api/health')
       .then((r) => r.json())
-      .then((d) => setProvider(d.provider))
+      .then((d) => {
+        setProvider(d.provider)
+        if (d.max_text_chars) setMaxChars(d.max_text_chars)
+      })
       .catch(() => setProvider(null))
 
     fetch('/api/models')
@@ -335,6 +346,9 @@ export default function App() {
     setCritique(null)
     setPlan(null)
     setActiveTab('notes')
+    // These notes came out of history, not out of whatever is in the input
+    // panel — so the workspace should offer to generate, not to regenerate.
+    setGeneratedFrom('')
   }
 
   const shareLink = async (id) => {
@@ -365,6 +379,7 @@ export default function App() {
     setError(null)
     setBlocked(null)
     setActiveTab('notes')
+    setGeneratedFrom(inputText)
     bufferRef.current = ''
     titleRef.current = ''
 
@@ -535,9 +550,14 @@ export default function App() {
     }
   }
 
+  // Source in the panel differs from the one the visible notes came from.
+  const sourceChanged = !!inputText.trim() && inputText !== generatedFrom
+
   const providerBadge =
-    provider === 'groq'
-      ? { label: 'Groq', cls: 'bg-orange-50 text-orange-600 ring-1 ring-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:ring-orange-800/50' }
+    provider === 'nvidia'
+      ? { label: 'NVIDIA', cls: 'bg-lime-50 text-lime-700 ring-1 ring-lime-200 dark:bg-lime-900/30 dark:text-lime-300 dark:ring-lime-800/50' }
+      : provider === 'gemini'
+      ? { label: 'Gemini', cls: 'bg-sky-50 text-sky-600 ring-1 ring-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:ring-sky-800/50' }
       : provider === 'ollama'
         ? { label: 'Ollama', cls: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:ring-violet-800/50' }
         : { label: '…', cls: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300' }
@@ -683,6 +703,7 @@ export default function App() {
                 preview={preview}
                 onPreview={openPreview}
                 onClearPreview={clearPreview}
+                maxChars={maxChars}
               />
             </div>
 
@@ -779,65 +800,104 @@ export default function App() {
           ------------------------------------------------------------------ */
           <div className="grid grid-cols-1 items-stretch gap-6 lg:h-[calc(100vh-11rem)] lg:grid-cols-2">
             {/* Left: the source — fills the viewport, scrolls inside */}
-            <div className="lg:h-full lg:min-h-0">
-              <InputPanel
-                key={scopeId}
-                inputText={inputText}
-                setInputText={setInputText}
-                setPageSpans={setPageSpans}
-                isStreaming={isStreaming}
-                pdfPage={pdfPage}
-                preview={preview}
-                onPreview={openPreview}
-                onClearPreview={clearPreview}
-                fill
-              />
+            <div className="flex flex-col gap-3 lg:h-full lg:min-h-0">
+              <div className="min-h-0 flex-1">
+                <InputPanel
+                  key={scopeId}
+                  inputText={inputText}
+                  setInputText={setInputText}
+                  setPageSpans={setPageSpans}
+                  isStreaming={isStreaming}
+                  pdfPage={pdfPage}
+                  preview={preview}
+                  onPreview={openPreview}
+                  onClearPreview={clearPreview}
+                  maxChars={maxChars}
+                  fill
+                />
+              </div>
+
+              {/* Generate belongs here too, not only on the entry page. Once
+                  notes exist the layout never goes back, so replacing the
+                  source in the workspace used to leave a new document loaded
+                  with nothing to press — the only way to run the pipeline
+                  again was the unlabelled arrow in the far panel. */}
+              {inputText.trim() && (
+                <div className="mx-auto w-full max-w-[672px] shrink-0">
+                  <button
+                    onClick={handleGenerate}
+                    disabled={isStreaming}
+                    className={`flex w-full items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-40 ${
+                      sourceChanged
+                        ? 'bg-neutral-900 text-white hover:opacity-85'
+                        : 'border border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50'
+                    }`}
+                  >
+                    <Icon.Zap className="h-4 w-4" />
+                    {isStreaming
+                      ? 'Generating…'
+                      : sourceChanged
+                        ? 'Generate notes from this source'
+                        : 'Regenerate notes'}
+                  </button>
+                  {sourceChanged && !isStreaming && (
+                    <p className="mt-1.5 text-center text-xs text-amber-600">
+                      The notes on the right are from your previous source.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Right: OUTPUT PANEL — pinned to the viewport, scrolls inside */}
             <div className="flex min-h-[420px] animate-slide-in-right flex-col gap-3 lg:h-full lg:min-h-0">
-              {/* Learning tab on top */}
-              <div className="glass-card shrink-0 rounded-3xl p-2">
-                <div className="flex items-center justify-between gap-3 px-3 pb-1 pt-2">
-                  <span className="inline-flex items-center gap-2 text-xs font-bold text-espresso-900">
-                    <span className={`h-1.5 w-1.5 rounded-full ${isStreaming ? 'animate-pulse bg-amber-500' : 'bg-green-500'}`} />
-                    Learning tab
-                  </span>
+              {/* Tabs and the panel's one action, on a single row.
+                  There used to be a "Learning tab" caption above this naming
+                  the container, directly on top of four tabs that already say
+                  what the container is — two rows of chrome to say one thing. */}
+              <div className="shrink-0 rounded-3xl border border-neutral-200 bg-white p-1.5">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`ml-2 h-1.5 w-1.5 shrink-0 rounded-full ${isStreaming ? 'animate-pulse bg-amber-500' : 'bg-green-500'}`}
+                    title={isStreaming ? 'Agents are working' : 'Idle'}
+                  />
+                  <div className="scroll-area flex min-w-0 flex-1 gap-1 overflow-x-auto">
+                    {TABS.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => setActiveTab(t.id)}
+                        className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                          activeTab === t.id
+                            ? 'bg-neutral-900 text-white'
+                            : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
+                        }`}
+                      >
+                        {t.label}
+                        {t.id === 'history' && history.length > 0 && (
+                          <span className="ml-1 text-xs opacity-60">({history.length})</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                   {isStreaming ? (
                     <button
                       onClick={cancel}
-                      className="rounded-full border border-red-300 bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-100"
+                      className="shrink-0 rounded-full border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100"
                     >
                       Cancel
                     </button>
                   ) : (
                     <button
                       onClick={() => setShowOptions((v) => !v)}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
-                        showOptions ? 'bg-espresso-900 text-white' : 'text-espresso-600 hover:bg-espresso-900/5'
+                      className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                        showOptions
+                          ? 'bg-neutral-900 text-white'
+                          : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
                       }`}
                     >
                       Options
                     </button>
                   )}
-                </div>
-                <div className="scroll-area flex w-full gap-1.5 overflow-x-auto p-1.5">
-                  {TABS.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => setActiveTab(t.id)}
-                      className={`flex-1 whitespace-nowrap rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200 ${
-                        activeTab === t.id
-                          ? 'bg-espresso-900 text-cream shadow-soft'
-                          : 'text-espresso-600 hover:bg-espresso-900/5 hover:text-espresso-900'
-                      }`}
-                    >
-                      {t.label}
-                      {t.id === 'history' && history.length > 0 && (
-                        <span className="ml-1 text-xs opacity-70">({history.length})</span>
-                      )}
-                    </button>
-                  ))}
                 </div>
               </div>
 
@@ -923,7 +983,7 @@ export default function App() {
               </div>
 
               {/* Ask anything — pinned at the bottom of the output panel */}
-              <div className="glass-card flex shrink-0 items-center gap-2 rounded-2xl py-2 pl-5 pr-2">
+              <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-neutral-200 bg-white py-2 pl-5 pr-2 transition-colors focus-within:border-neutral-400">
                 <input
                   value={instructions}
                   onChange={(e) => setSetting('instructions')(e.target.value)}
@@ -932,13 +992,13 @@ export default function App() {
                   }}
                   disabled={isStreaming}
                   placeholder="Ask anything — e.g. focus on definitions, add examples…"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-espresso-800 placeholder:text-espresso-400/80 focus:outline-none"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-neutral-800 placeholder:text-neutral-400 focus:outline-none"
                 />
                 <button
                   onClick={handleGenerate}
                   disabled={isStreaming || !inputText.trim()}
                   aria-label="Generate with these instructions"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-espresso-900 text-white transition-transform hover:scale-105 disabled:pointer-events-none disabled:opacity-30"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-900 text-white transition-opacity hover:opacity-85 disabled:pointer-events-none disabled:opacity-30"
                 >
                   <Icon.Send className="h-4 w-4" />
                 </button>

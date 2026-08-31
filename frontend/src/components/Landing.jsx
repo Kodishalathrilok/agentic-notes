@@ -28,12 +28,12 @@ const QUALITY = [
   ['Grounded critique', 'Judges notes against the original source for faithfulness & coverage.'],
   ['Iterative revision', 'Re-critiques after each revision and keeps the best-scoring version.'],
   ['Automated eval suite', 'An LLM-judge harness measures faithfulness, coverage & quiz accuracy.'],
-  ['Multi-provider router', 'Groq → Gemini → Ollama with automatic failover on rate limits.'],
+  ['Multi-provider router', 'NVIDIA → Gemini → Ollama with automatic failover on rate limits.'],
   ['RAG + citations', 'Chunked retrieval (neural or TF-IDF) with clickable source citations.'],
   ['Answer verification', 'Generated quiz keys are re-checked against the notes before display.'],
 ]
 
-const STACK = ['FastAPI', 'SSE Streaming', 'React', 'Vite', 'Tailwind', 'Groq · Llama', 'Gemini', 'Supabase', 'Docker']
+const STACK = ['FastAPI', 'SSE Streaming', 'React', 'Vite', 'Tailwind', 'NVIDIA · Nemotron', 'Gemini', 'Supabase', 'Docker']
 
 const SOURCES = ['lectures', 'PDFs', 'YouTube', 'photos', 'audio']
 
@@ -332,7 +332,7 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
  className="mt-4 animate-slide-up text-xs text-slate-400"
             style={{ animationDelay: '520ms' }}
           >
-            Powered by Llama on Groq, Gemini & local Ollama — with automatic failover
+            Powered by Nemotron on NVIDIA, Gemini & local Ollama — with automatic failover
           </p>
         </div>
       </section>

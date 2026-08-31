@@ -3,37 +3,76 @@ import { apiFetch } from '../lib/api'
 import Icon from './Icons'
 import InlineAssistant from './InlineAssistant'
 
-// Render inline **bold** spans and [n] citation pills within a line.
-function renderInline(text, keyPrefix, onCite) {
-  const parts = text.split(/(\*\*.+?\*\*|\[\d+\])/g)
+// A run of citations, rendered as page chips.
+//
+// The marker the model emits is a PASSAGE index, which meant the notes showed
+// a bare superscript number that read exactly like a page reference — the one
+// question a reader actually has ("where in my document is this?") answered
+// with an internal retrieval id. Where the passage carries a page, show that
+// instead; passage numbers only survive for sources without pages (pasted
+// text, URLs, transcripts) where there is nothing better to show.
+function CiteChips({ ids, cite, keyPrefix }) {
+  const seen = new Set()
+  const items = []
+  for (const n of ids) {
+    const page = cite.pageOf(n)
+    const key = page ? `p${page}` : `s${n}`
+    if (seen.has(key)) continue // the same page cited twice in one sentence
+    seen.add(key)
+    items.push({ n, page, label: page ? `p. ${page}` : `[${n}]` })
+  }
+
+  const shown = items.slice(0, 2)
+  const extra = items.length - shown.length
+
+  return (
+    <span className="ml-1 inline-flex items-center gap-1 align-baseline">
+      {shown.map((it) => (
+        <button
+          key={`${keyPrefix}-c${it.n}`}
+          onClick={() => cite.onCite(it.n)}
+          title={it.page ? `Go to page ${it.page}` : `Show passage ${it.n}`}
+          className="inline-flex items-center rounded-md bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium leading-none text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-900"
+        >
+          {it.label}
+        </button>
+      ))}
+      {extra > 0 && (
+        <button
+          onClick={() => cite.onCite(items[shown.length].n)}
+          title={`${extra} more source${extra === 1 ? '' : 's'}`}
+          className="inline-flex items-center rounded-md bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium leading-none text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-900"
+        >
+          +{extra}
+        </button>
+      )}
+    </span>
+  )
+}
+
+// Render inline **bold** spans and [n] citation runs within a line.
+// Consecutive markers ("[2][5][7]") are captured as ONE token so they can be
+// collapsed into a single chip group rather than three floating numbers.
+function renderInline(text, keyPrefix, cite) {
+  const parts = text.split(/(\*\*.+?\*\*|\[\d+\](?:\s*\[\d+\])*)/g)
   return parts.map((part, i) => {
     const bold = part.match(/^\*\*(.+?)\*\*$/)
     if (bold) {
       return (
-        <strong key={`${keyPrefix}-${i}`} className="font-semibold text-slate-900 dark:text-white">
+        <strong key={`${keyPrefix}-${i}`} className="font-semibold text-neutral-900">
           {bold[1]}
         </strong>
       )
     }
-    const cite = part.match(/^\[(\d+)\]$/)
-    if (cite && onCite) {
-      const n = Number(cite[1])
-      return (
-        <button
-          key={`${keyPrefix}-${i}`}
-          onClick={() => onCite(n)}
- className="mx-0.5 inline-flex translate-y-[-1px] items-center rounded-md bg-brand-100 px-1.5 text-[10px] font-bold text-brand-700 align-super hover:bg-brand-200 dark:bg-brand-900/40 dark:text-brand-700"
-          title={`Show source ${n} in the document`}
-        >
-          {n}
-        </button>
-      )
+    if (cite && /^\[\d+\]/.test(part)) {
+      const ids = [...part.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]))
+      return <CiteChips key={`${keyPrefix}-${i}`} ids={ids} cite={cite} keyPrefix={`${keyPrefix}-${i}`} />
     }
     return <span key={`${keyPrefix}-${i}`}>{part}</span>
   })
 }
 
-function renderNotes(notes, onCite) {
+function renderNotes(notes, cite) {
   const lines = notes.split('\n')
   const out = []
 
@@ -75,7 +114,7 @@ function renderNotes(notes, onCite) {
     const headerMatch = trimmed.match(/^\*\*(.+?):?\*\*$/)
     if (headerMatch) {
       out.push(
-        <h3 key={idx} className="mt-4 mb-1 text-base font-bold text-brand-700 dark:text-brand-600">
+        <h3 key={idx} className="mb-1.5 mt-6 text-[17px] font-bold leading-snug text-neutral-900 first:mt-0">
           {headerMatch[1]}
         </h3>
       )
@@ -84,9 +123,9 @@ function renderNotes(notes, onCite) {
 
     if (trimmed.startsWith('•')) {
       out.push(
-        <div key={idx} className="flex gap-2 py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-          <span className="mt-1.5 h-1.5 w-1.5 rotate-45 shrink-0 bg-brand-500" />
-          <span>{renderInline(trimmed.slice(1).trim(), idx, onCite)}</span>
+        <div key={idx} className="flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-700">
+          <span className="mt-[0.6rem] h-[5px] w-[5px] shrink-0 rounded-full bg-neutral-300" />
+          <span>{renderInline(trimmed.slice(1).trim(), idx, cite)}</span>
         </div>
       )
       return
@@ -94,9 +133,9 @@ function renderNotes(notes, onCite) {
 
     if (trimmed.startsWith('-')) {
       out.push(
-        <div key={idx} className="ml-6 flex gap-2 py-0.5 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
-          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />
-          <span>{renderInline(trimmed.slice(1).trim(), idx, onCite)}</span>
+        <div key={idx} className="ml-5 flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-600">
+          <span className="mt-[0.6rem] h-[5px] w-[5px] shrink-0 rounded-full bg-neutral-200" />
+          <span>{renderInline(trimmed.slice(1).trim(), idx, cite)}</span>
         </div>
       )
       return
@@ -104,16 +143,16 @@ function renderNotes(notes, onCite) {
 
     if (/^\d+[.)]/.test(trimmed)) {
       out.push(
-        <div key={idx} className="py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-          {renderInline(trimmed, idx, onCite)}
+        <div key={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
+          {renderInline(trimmed, idx, cite)}
         </div>
       )
       return
     }
 
     out.push(
-      <p key={idx} className="py-0.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-        {renderInline(trimmed, idx, onCite)}
+      <p key={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
+        {renderInline(trimmed, idx, cite)}
       </p>
     )
   })
@@ -166,6 +205,18 @@ function diffLines(before, after) {
   return result
 }
 
+function MenuItem({ onClick, label, disabled = false }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="block w-full px-4 py-2 text-left text-sm text-neutral-700 transition-colors hover:bg-neutral-50 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40"
+    >
+      {label}
+    </button>
+  )
+}
+
 function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -197,7 +248,27 @@ export default function NotesOutput({
   const [speaking, setSpeaking] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [highlight, setHighlight] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const containerRef = useRef(null)
+  const menuRef = useRef(null)
+
+  // Which page a citation points at, for the p. N chips.
+  const pageOf = (n) => sources.find((s) => s.id === n)?.page ?? null
+
+  // Dismiss the overflow menu on an outside click or Escape.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
+    }
+    const onKey = (e) => e.key === 'Escape' && setMenuOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   // Citation [n] clicked.
   //
@@ -266,7 +337,7 @@ export default function NotesOutput({
 
   if (!notes && !editing) {
     return (
-      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-espresso-900/15 text-sm text-espresso-500">
+      <div className="flex h-56 flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-neutral-300 text-sm text-neutral-500">
         {streaming ? (
           <>
             <span className="relative flex h-2.5 w-2.5">
@@ -311,7 +382,13 @@ export default function NotesOutput({
     }
   }
 
-  const btn = 'pill'
+  // Not the global `.pill` — that styles text with espresso-*, and every
+  // espresso shade in tailwind.config.js is #000000, so "muted" renders solid
+  // black. Muted text has to come from neutral-*.
+  const btn =
+    'inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3.5 py-1.5 ' +
+    'text-xs font-medium text-neutral-600 transition-colors hover:border-neutral-300 ' +
+    'hover:bg-neutral-50 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40'
 
   const diff = showDiff && notesBefore ? diffLines(notesBefore, notes) : null
 
@@ -328,43 +405,83 @@ export default function NotesOutput({
         </div>
       )}
 
-      {/* Action pills */}
-      <div className="mb-4 flex flex-wrap gap-2">
+      {/* Action row.
+          Nine same-shaped pills wrapped to two rows and pushed the notes past
+          the middle of the screen, with nothing to say which of them mattered.
+          Three live controls plus an overflow: the ones you reach for while
+          reading stay out, the ones you use once at the end fold away. */}
+      <div className="mb-4 flex items-center justify-end gap-1.5">
         <button onClick={copy} className={btn}>
-          {copied ? <Icon.Check className="h-3.5 w-3.5 text-green-500" /> : <Icon.Copy className="h-3.5 w-3.5" />}
+          {copied ? <Icon.Check className="h-3.5 w-3.5 text-green-600" /> : <Icon.Copy className="h-3.5 w-3.5" />}
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button onClick={() => exportFile('pdf')} disabled={busy === 'pdf'} className={btn}>
-          {busy === 'pdf' ? 'Exporting…' : 'Export PDF'}
-        </button>
-        <button onClick={() => exportFile('markdown')} disabled={busy === 'markdown'} className={btn}>
-          {busy === 'markdown' ? 'Exporting…' : 'Export MD'}
-        </button>
-        <button onClick={() => exportFile('docx')} disabled={busy === 'docx'} className={btn}>
-          {busy === 'docx' ? 'Exporting…' : 'Export DOCX'}
+        <button onClick={() => setEditing((e) => !e)} className={btn}>
+          <Icon.Pencil className="h-3.5 w-3.5" />
+          {editing ? 'Done' : 'Edit'}
         </button>
         <button onClick={toggleSpeak} className={btn}>
           {speaking ? <Icon.Stop className="h-3.5 w-3.5" /> : <Icon.Volume className="h-3.5 w-3.5" />}
-          {speaking ? 'Stop' : 'Read aloud'}
+          {speaking ? 'Stop' : 'Listen'}
         </button>
-        <button onClick={() => setEditing((e) => !e)} className={btn}>
-          {editing ? 'Done editing' : 'Edit'}
-        </button>
-        {onRewrite && (
-          <>
-            <button onClick={() => onRewrite('shorter')} disabled={!!rewriting} className={btn}>
-              {rewriting === 'shorter' ? 'Shortening…' : 'Make shorter'}
-            </button>
-            <button onClick={() => onRewrite('longer')} disabled={!!rewriting} className={btn}>
-              {rewriting === 'longer' ? 'Expanding…' : 'Make longer'}
-            </button>
-          </>
-        )}
-        {notesBefore && (
-          <button onClick={() => setShowDiff((d) => !d)} className={btn}>
-            {showDiff ? 'Hide changes' : 'Show changes'}
+
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-label="More actions"
+            aria-expanded={menuOpen}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
+          >
+            <Icon.More className="h-4 w-4" />
           </button>
-        )}
+
+          {menuOpen && (
+            <div className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-2xl border border-neutral-200 bg-white py-1 shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
+              {onRewrite && (
+                <>
+                  <MenuItem
+                    onClick={() => { onRewrite('shorter'); setMenuOpen(false) }}
+                    disabled={!!rewriting}
+                    label={rewriting === 'shorter' ? 'Shortening…' : 'Make shorter'}
+                  />
+                  <MenuItem
+                    onClick={() => { onRewrite('longer'); setMenuOpen(false) }}
+                    disabled={!!rewriting}
+                    label={rewriting === 'longer' ? 'Expanding…' : 'Make longer'}
+                  />
+                  <div className="my-1 border-t border-neutral-100" />
+                </>
+              )}
+              <MenuItem
+                onClick={() => { exportFile('pdf'); setMenuOpen(false) }}
+                disabled={busy === 'pdf'}
+                label={busy === 'pdf' ? 'Exporting…' : 'Export as PDF'}
+              />
+              <MenuItem
+                onClick={() => { exportFile('markdown'); setMenuOpen(false) }}
+                disabled={busy === 'markdown'}
+                label={busy === 'markdown' ? 'Exporting…' : 'Export as Markdown'}
+              />
+              <MenuItem
+                onClick={() => { exportFile('docx'); setMenuOpen(false) }}
+                disabled={busy === 'docx'}
+                label={busy === 'docx' ? 'Exporting…' : 'Export as DOCX'}
+              />
+              {(notesBefore || sources.length > 0) && <div className="my-1 border-t border-neutral-100" />}
+              {notesBefore && (
+                <MenuItem
+                  onClick={() => { setShowDiff((d) => !d); setMenuOpen(false) }}
+                  label={showDiff ? 'Hide changes' : 'Show changes'}
+                />
+              )}
+              {sources.length > 0 && (
+                <MenuItem
+                  onClick={() => { setShowSources((s) => !s); setMenuOpen(false) }}
+                  label={showSources ? 'Hide sources' : `Sources (${sources.length})`}
+                />
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -376,7 +493,7 @@ export default function NotesOutput({
  className="field resize-y rounded-3xl p-5 font-mono text-sm"
         />
       ) : diff ? (
-        <div className="scroll-area max-h-[60vh] overflow-y-auto rounded-3xl border border-espresso-900/10 bg-white/70 p-5 font-mono text-xs leading-relaxed">
+        <div className="rounded-3xl border border-neutral-200 bg-white p-5 font-mono text-xs leading-relaxed">
           {diff.map((d, i) => (
             <div
               key={i}
@@ -397,53 +514,49 @@ export default function NotesOutput({
         </div>
       ) : (
         <>
-          {/* Document-style reading surface */}
+          {/* Reading surface.
+              No max-height and no overflow of its own: the output column above
+              already scrolls, and having both meant two scrollbars side by side
+              with the wheel captured by whichever the pointer happened to be
+              over. One scroll region, and the notes fill the column. */}
           <div
             ref={containerRef}
- className="scroll-area max-h-[65vh] overflow-y-auto rounded-3xl border border-espresso-900/10 bg-white/70 px-6 py-8 sm:px-10 sm:py-10"
+            className="rounded-3xl border border-neutral-200 bg-white px-6 py-7 sm:px-8"
           >
             <div className="mx-auto max-w-3xl">
-              {renderNotes(notes, sources.length ? handleCite : null)}
+              {renderNotes(notes, sources.length ? { onCite: handleCite, pageOf } : null)}
               {streaming && <span className="stream-caret" aria-hidden />}
             </div>
           </div>
-          <p className="mt-2 text-center text-xs text-espresso-500">
-            Tip: select any text in your notes to explain or rewrite it with AI.
-          </p>
           <InlineAssistant containerRef={containerRef} notes={notes} onEditSelection={onEditSelection} />
         </>
       )}
 
-      {/* Citations / sources */}
-      {sources.length > 0 && !editing && !diff && (
-        <div className="mt-3">
-          <button onClick={() => setShowSources((s) => !s)} className={btn}>
-            {showSources ? 'Hide sources' : `Sources (${sources.length})`}
-          </button>
-          {showSources && (
-            <div className="scroll-area mt-2 max-h-[40vh] space-y-2 overflow-y-auto">
-              {sources.map((s) => (
-                <div
-                  id={`src-${s.id}`}
-                  key={s.id}
- className={`rounded-lg border p-3 text-xs leading-relaxed transition-colors ${
-                    highlight === s.id
-                      ? 'border-brand-400 bg-brand-50 dark:border-brand-600 dark:bg-brand-900/20'
-                      : 'border-slate-200 dark:border-slate-700'
-                  }`}
-                >
-                  <span className="mr-2 font-bold text-brand-600 dark:text-brand-600">[{s.id}]</span>
-                  {/* Only PDFs carry pages; pasted text and transcripts don't. */}
-                  {s.page && (
-                    <span className="mr-2 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-500 dark:bg-slate-700 dark:text-slate-300">
-                      p. {s.page}
-                    </span>
-                  )}
-                  <span className="text-slate-600 dark:text-slate-300">{s.text}</span>
-                </div>
-              ))}
+      {/* Citations / sources. The toggle lives in the overflow menu now — a
+          second copy here was the ninth pill competing with the notes. */}
+      {sources.length > 0 && showSources && !editing && !diff && (
+        <div className="mt-3 space-y-2">
+          {sources.map((s) => (
+            <div
+              id={`src-${s.id}`}
+              key={s.id}
+              className={`rounded-xl border p-3 text-xs leading-relaxed transition-colors ${
+                highlight === s.id ? 'border-brand-400 bg-brand-50' : 'border-neutral-200 bg-white'
+              }`}
+            >
+              {/* Only PDFs carry pages; pasted text and transcripts don't. */}
+              {s.page ? (
+                <span className="mr-2 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-500">
+                  p. {s.page}
+                </span>
+              ) : (
+                <span className="mr-2 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] font-medium text-neutral-500">
+                  [{s.id}]
+                </span>
+              )}
+              <span className="text-neutral-600">{s.text}</span>
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
