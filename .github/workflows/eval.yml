@@ -2,7 +2,7 @@ name: Eval (faithfulness gate)
 
 # Runs the LLM-judge eval and FAILS if the full pipeline's faithfulness drops
 # below the threshold. Manual + weekly (not on every push) to control API cost.
-# Requires a repository secret: GROQ_API_KEY.
+# Requires repository secrets: NVIDIA_API_KEY and/or GEMINI_API_KEY.
 
 on:
   workflow_dispatch:
@@ -26,8 +26,11 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run eval and gate on faithfulness
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: llama-3.1-8b-instant
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_MODEL: nvidia/nemotron-3-nano-30b-a3b
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # A small model keeps the weekly gate cheap; the gate measures the
+          # pipeline's faithfulness, not the biggest model's ceiling.
         run: python -m eval.run_eval --variant full --delay 2 --check-faithfulness 7.0
       - name: Upload eval report
         if: always()

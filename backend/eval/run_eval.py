@@ -109,7 +109,7 @@ def main():
     ap = argparse.ArgumentParser(description="Evaluate the notes pipeline.")
     ap.add_argument("--runs", type=int, default=1, help="runs per fixture (averaged)")
     ap.add_argument("--variant", choices=["baseline", "full", "both"], default="both")
-    ap.add_argument("--model", default="", help="Groq model id override")
+    ap.add_argument("--model", default="", help="model id override (e.g. gemini-flash-lite-latest)")
     ap.add_argument("--judge-model", default="", help="model for the judge (defaults to --model)")
     ap.add_argument("--delay", type=float, default=0.0, help="seconds to pause between runs (avoids rate limits)")
     ap.add_argument(
@@ -188,7 +188,7 @@ def main():
         last = next((failures[v]["last"] for v in variants if failures[v]["last"]), "")
         if last:
             print(f"    Last error: {last}")
-        print("    Likely Groq rate limit. Try: --model llama-3.1-8b-instant --delay 2")
+        print("    Likely a provider rate limit. Try: --model gemini-flash-lite-latest --delay 2")
     print()
 
     header = f"{'metric':<22}" + "".join(f"{v:>18}" for v in variants)

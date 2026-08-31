@@ -296,14 +296,14 @@ The app runs on **free-tier API keys**, and free tiers have **daily token limits
 
 The fix: split work across **two separate quotas**.
 
-- **The strong model the user picked** (e.g., Llama 3.3 70B) handles the three steps where output quality is actually decided: **Plan, Write, Critique.**
-- **A cheap helper model** (Llama 3.1 8B, or Gemini Flash-Lite if the user picked a Gemini model) — which has its **own, completely separate** daily token budget — handles the mechanical steps: **Gatekeeper, Title, Quiz, Flashcards.**
+- **The strong model the user picked** (e.g., a Nemotron Ultra on NVIDIA) handles the three steps where output quality is actually decided: **Plan, Write, Critique.**
+- **A cheap helper model** (a small Nemotron via `HELPER_NVIDIA_MODEL`, or Gemini Flash-Lite if the user picked a Gemini model) — which has its **own, completely separate** daily token budget — handles the mechanical steps: **Gatekeeper, Title, Quiz, Flashcards.**
 
-Because Groq's daily limits are tracked *per model*, this isn't just a cost optimization — it roughly doubles how many documents the app can process per day before hitting a wall, since half the pipeline's calls now draw from a quota that was previously sitting completely unused.
+Because free-tier daily limits are tracked *per model*, this isn't just a cost optimization — it roughly doubles how many documents the app can process per day before hitting a wall, since half the pipeline's calls now draw from a quota that was previously sitting completely unused. (The NVIDIA split only kicks in once `HELPER_NVIDIA_MODEL` names a small catalog id; unset, the helper agents fall back to the main model.)
 
 **Strengths:** Free, effective, and doesn't compromise quality where it matters — the tasks moved to the helper model (checking if something's an academic topic, naming a session, formatting quiz questions) genuinely don't need a large, expensive model to do well.
 
-**Limitations:** If the user's chosen strong model's daily quota is exhausted, the app has no way to automatically switch them to a fresh model — they have to manually pick a different one from the dropdown (e.g., switch from the 70B model to the 8B model, which has never been touched that day). There's also a system-wide failover chain (Groq -> Gemini -> Ollama) for outright errors, but it doesn't currently protect against *both* configured providers being out of daily quota on the same day — which is exactly what happened when this was diagnosed: Groq's 70B daily limit and Gemini's daily limit were both exhausted at once.
+**Limitations:** If the user's chosen strong model's daily quota is exhausted, the app has no way to automatically switch them to a fresh model — they have to manually pick a different one from the dropdown (e.g., switch from the 70B model to the 8B model, which has never been touched that day). There's also a system-wide failover chain (NVIDIA -> Gemini -> Ollama) for outright errors, but it doesn't currently protect against *both* configured providers being out of daily quota on the same day — which is exactly what happened when this was diagnosed: the primary model's daily limit and Gemini's daily limit were both exhausted at once.
 
 ---
 

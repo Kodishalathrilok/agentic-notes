@@ -8,7 +8,10 @@ import logging
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+# Anchored to backend/ (one level up from retrieval/), not the cwd — see the
+# note in models.py.
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 logger = logging.getLogger("retrieval")
 

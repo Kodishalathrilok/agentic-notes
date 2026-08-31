@@ -11,7 +11,11 @@ def test_health_ok():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["provider"] in ("groq", "ollama")
+    # Every provider the router can report. This list had fallen behind
+    # get_active_provider() once already, and only started failing when a
+    # deployment actually configured one of the newer ones.
+    assert body["provider"] in ("nvidia", "gemini", "ollama")
+    assert body["max_text_chars"] > 0
 
 
 def test_models_listed():

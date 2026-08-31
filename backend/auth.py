@@ -31,8 +31,10 @@ from dotenv import load_dotenv
 
 # auth.py is imported before main.py calls load_dotenv(), so load the .env
 # here too — otherwise SUPABASE_* vars from backend/.env are invisible and
-# auth silently stays disabled.
-load_dotenv()
+# auth silently stays disabled. Anchored to backend/, not the cwd — see the
+# note in models.py.
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 try:
     import jwt as _pyjwt  # PyJWT — only needed when SUPABASE_JWT_SECRET is set

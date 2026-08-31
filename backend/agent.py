@@ -1140,6 +1140,12 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 pool.shutdown(wait=False, cancel_futures=True)
 
             notes = "".join(parts).strip()
+            if not notes:
+                raise RuntimeError(
+                    "The model returned an empty draft. That is usually a transient "
+                    "provider hiccup rather than a problem with your source — "
+                    "please try again."
+                )
             yield _emit("notes_done", "write", notes)
         else:
             # Small sources: single-pass write over one retrieval (fast path).
@@ -1160,6 +1166,12 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 parts.append(delta)
                 yield _emit("notes_delta", "write", delta)
             notes = "".join(parts).strip()
+            if not notes:
+                raise RuntimeError(
+                    "The model returned an empty draft. That is usually a transient "
+                    "provider hiccup rather than a problem with your source — "
+                    "please try again."
+                )
             yield _emit("notes_done", "write", notes)
 
         # Critique: FAITHFULNESS is judged against the CONTEXT the writer was
@@ -1232,13 +1244,31 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             yield _emit("status", "revise", f"Revising (round {rounds}/{MAX_REVISION_ROUNDS})...")
             yield _emit("revise_start", "revise", "")
             parts = []
-            for delta in revise_notes_stream(
-                notes, critique, mode, plan, active_fmt, model=model,
-                instructions=instructions, context=context, length=revise_length,
-            ):
-                parts.append(delta)
-                yield _emit("notes_delta", "revise", delta)
-            notes = "".join(parts).strip()
+            try:
+                for delta in revise_notes_stream(
+                    notes, critique, mode, plan, active_fmt, model=model,
+                    instructions=instructions, context=context, length=revise_length,
+                ):
+                    parts.append(delta)
+                    yield _emit("notes_delta", "revise", delta)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[agent] revision round {rounds} failed ({exc}); keeping current notes.")
+                parts = []
+
+            revised = "".join(parts).strip()
+            # A revision that comes back empty is a FAILED revision, never an
+            # instruction to delete the notes. This used to overwrite good
+            # notes with "" — the provider intermittently closes the stream
+            # without emitting anything, and the user watched their notes stop
+            # part-way or vanish. Re-emit what we already have so the client's
+            # accumulated delta buffer is corrected, then stop revising.
+            if not revised:
+                yield _emit("notes_revised", "revise", notes)
+                yield _emit("status", "revise",
+                            "Revision returned nothing — keeping the previous version.")
+                break
+
+            notes = revised
             yield _emit("notes_revised", "revise", notes)
 
             # Re-critique the revised notes (against the possibly augmented context).
@@ -1248,7 +1278,9 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             )
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
-            if critique.get("score", 0) >= best_critique.get("score", 0):
+            # Strictly better only: a revision that merely ties has not earned
+            # the right to replace the version already in hand.
+            if critique.get("score", 0) > best_critique.get("score", 0):
                 best_notes, best_critique = notes, critique
 
         if rounds == 0:

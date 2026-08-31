@@ -38,19 +38,20 @@ from agent import (
     edit_selection,
 )
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
-from retriever import active_embedding_backend, page_spans
+from retriever import active_embedding_backend, page_spans, normalize
 from models import (
     get_active_provider,
     OLLAMA_URL,
-    GROQ_API_KEY,
-    GROQ_PLACEHOLDER,
     available_models,
     default_model,
     gemini_available,
     extract_text_from_image,
+    transcribe_audio,
 )
 
-load_dotenv()
+# Anchored to backend/, not the cwd — see the note in models.py.
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 # Surface retrieval logs (index build, per-retrieval metrics, failure fallbacks)
 # in the console — observability only, doesn't affect behavior.
@@ -110,7 +111,7 @@ _generation_slots = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
 # Upload size caps (bytes). Without these, `await file.read()` loads whatever
 # the client sends straight into RAM.
 MAX_PDF_BYTES = int(os.getenv("MAX_PDF_MB", "20")) * 1024 * 1024
-MAX_AUDIO_BYTES = int(os.getenv("MAX_AUDIO_MB", "25")) * 1024 * 1024  # Groq Whisper limit
+MAX_AUDIO_BYTES = int(os.getenv("MAX_AUDIO_MB", "25")) * 1024 * 1024
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_MB", "10")) * 1024 * 1024
 
 # Cap for server-side URL fetches (/api/extract-url).
@@ -217,10 +218,6 @@ def _fetch_url_safely(url: str) -> "object":
     raise HTTPException(422, "Too many redirects.")
 
 
-def _groq_configured() -> bool:
-    return bool(GROQ_API_KEY) and GROQ_API_KEY != GROQ_PLACEHOLDER
-
-
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
@@ -290,12 +287,19 @@ async def health():
     return {
         "status": "ok",
         "provider": get_active_provider(),
-        "groq_configured": _groq_configured(),
+        # Gemini backs image OCR and audio transcription, so this is what
+        # tells you whether those two endpoints will work at all.
+        "gemini_configured": gemini_available(),
         "ollama_url": OLLAMA_URL,
         "embeddings": active_embedding_backend(),
         # So a misconfigured deploy is visible at a glance instead of only
         # discoverable by noticing that unauthenticated calls succeed.
         "auth_required": auth_required(),
+        # The cap /api/generate enforces. Published so the browser can hold a
+        # source to the same limit at upload time — it used to carry its own
+        # hard-coded 300000 and only discovered the real one by having Generate
+        # rejected, after the user had already picked a file and waited.
+        "max_text_chars": MAX_TEXT_CHARS,
     }
 
 
@@ -420,11 +424,38 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
             detail="No extractable text found in this PDF (it may be scanned/image-only).",
         )
 
-    return {"text": text, "pages": pages, "page_spans": spans}
+    # Never hand back more than /api/generate will accept. extract-url and the
+    # transcript path already clamp here; this one didn't, so a PDF over the
+    # limit extracted fine, reported "N words ready", and then failed at
+    # Generate with a raw 422 — the worst possible moment to find out.
+    truncated = len(text) > MAX_TEXT_CHARS
+    if truncated:
+        # Cut on whitespace so the last word survives intact.
+        head = text[:MAX_TEXT_CHARS]
+        cut = head.rfind(" ")
+        text = head[:cut] if cut > MAX_TEXT_CHARS * 0.9 else head
+        # Spans are measured in normalized space (see page_spans), so clamp
+        # them against the normalized length of what's left. Pages past the
+        # cut have to go: a citation must not name a page whose text the
+        # model was never given.
+        limit = len(normalize(text))
+        spans = [
+            {**s, "end": min(s["end"], limit)}
+            for s in spans
+            if s["start"] < limit
+        ]
+
+    return {
+        "text": text,
+        "pages": pages,
+        "page_spans": spans,
+        "truncated": truncated,
+        "max_chars": MAX_TEXT_CHARS,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Audio transcription (Groq Whisper)
+# Image OCR and audio transcription (Gemini multimodal)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/extract-image")
@@ -457,30 +488,31 @@ async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extr
 
 @app.post("/api/transcribe")
 async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract", 20, 600, daily=DAILY_EXTRACTS))):
-    if not _groq_configured():
+    """Transcribe a lecture recording or voice memo via Gemini."""
+    if not gemini_available():
         raise HTTPException(
             status_code=503,
-            detail="Audio transcription requires a GROQ_API_KEY (Whisper). "
-            "Set it in backend/.env.",
+            detail="Audio transcription requires a GEMINI_API_KEY. Set it in backend/.env.",
         )
-
-    from groq import Groq
 
     raw = await _read_upload(file, MAX_AUDIO_BYTES, "Audio file")
-    filename = file.filename or "audio.webm"
+    mime = file.content_type or "audio/webm"
 
+    loop = asyncio.get_event_loop()
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        result = client.audio.transcriptions.create(
-            file=(filename, raw),
-            model="whisper-large-v3",
-        )
-        text = getattr(result, "text", "") or ""
-    except Exception as exc:  # noqa: BLE001
+        text = await loop.run_in_executor(EXECUTOR, lambda: transcribe_audio(raw, mime))
+    except Exception:  # noqa: BLE001 - message kept generic so the API key never leaks
         raise HTTPException(
-            status_code=502, detail=f"Transcription failed: {exc}")
+            status_code=502,
+            detail="Transcription failed (the audio API may be rate-limited). "
+            "Please try again in a moment.",
+        )
 
-    return {"text": text.strip()}
+    text = (text or "").strip()[:MAX_TEXT_CHARS]
+    if not text:
+        raise HTTPException(
+            status_code=422, detail="No speech was found in this recording.")
+    return {"text": text}
 
 
 # ---------------------------------------------------------------------------

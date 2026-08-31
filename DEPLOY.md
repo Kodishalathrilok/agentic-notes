@@ -23,8 +23,14 @@ This app deploys as a **single service**: the FastAPI backend serves both the
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `GROQ_API_KEY` | yes | Your `gsk_...` key from console.groq.com |
-| `GROQ_MODEL` | no | Defaults to `llama-3.3-70b-versatile` |
+| `NVIDIA_API_KEY` | no | Key from build.nvidia.com. **When set, NVIDIA becomes the primary provider** and other keys act as fallbacks |
+| `NVIDIA_MODEL` | no | Exact catalog id, e.g. `nvidia/llama-3.1-nemotron-ultra-253b-v1`. Required if `NVIDIA_API_KEY` is set |
+| `NVIDIA_MODELS` | no | Extra ids (comma-separated) for the model picker |
+| `HELPER_NVIDIA_MODEL` | no | Cheap model for the mechanical agents. Unset = they run on `NVIDIA_MODEL` |
+| `NVIDIA_BASE_URL` | no | Defaults to `https://integrate.api.nvidia.com/v1` |
+| `GEMINI_API_KEY` | yes¹ | Free key from aistudio.google.com. Also the ONLY provider for image OCR and audio transcription |
+| `GEMINI_MODEL` | no | Defaults to `gemini-3.6-flash`. Retired ids self-heal to `gemini-flash-latest`, with a log line telling you to update the pin |
+| `HELPER_GEMINI_MODEL` | no | Defaults to `gemini-3.5-flash-lite` |
 | `MAX_TEXT_CHARS` | no | Defaults to `300000` |
 | `PORT` | auto | Most hosts set this for you |
 | `SUPABASE_URL` | **yes** | Server-side auth — see below |
@@ -32,6 +38,13 @@ This app deploys as a **single service**: the FastAPI backend serves both the
 | `SUPABASE_JWT_SECRET` | no | Alternative to the two above: verifies tokens locally, no network call |
 | `ALLOWED_EMAILS` | no | Comma-separated allowlist. Empty = any signed-in user |
 | `ALLOW_ANONYMOUS` | no | Set `true` only to deliberately run with no auth |
+
+¹ At least one model provider key is required. `GEMINI_API_KEY` alone, or
+`NVIDIA_API_KEY` alone, both work — setting both gives you NVIDIA as primary
+with automatic failover to Gemini when NVIDIA is rate-limited or down. Note
+that image OCR (`/api/extract-image`) and audio transcription
+(`/api/transcribe`) need `GEMINI_API_KEY` either way; they return 503 without
+it.
 
 ### Server-side auth is not optional
 
@@ -65,7 +78,7 @@ Never commit `.env` — it's gitignored and excluded from the image.
 1. Push the repo to GitHub.
 2. Render → **New → Web Service** → connect the repo.
 3. **Runtime: Docker** (it auto-detects the `Dockerfile`).
-4. Add the env var `GROQ_API_KEY` (and any optional ones).
+4. Add the env vars `NVIDIA_API_KEY` / `NVIDIA_MODEL` and/or `GEMINI_API_KEY`.
 5. Create the service. Render builds the image and gives you a public URL.
 
 Notes: the **free tier spins down when idle** (first request after a pause has a
@@ -75,14 +88,14 @@ Notes: the **free tier spins down when idle** (first request after a pause has a
 
 1. Push to GitHub → Railway → **New Project → Deploy from GitHub repo**.
 2. Railway detects the `Dockerfile` and builds it.
-3. Add `GROQ_API_KEY` under **Variables**. Railway injects `PORT` automatically.
+3. Add `NVIDIA_API_KEY` / `GEMINI_API_KEY` under **Variables**. Railway injects `PORT` automatically.
 4. Deploy → open the generated domain.
 
 ## Option C — Fly.io
 
 ```bash
 fly launch              # detects the Dockerfile, creates fly.toml
-fly secrets set GROQ_API_KEY=gsk_your_key_here
+fly secrets set NVIDIA_API_KEY=nvapi-your_key_here GEMINI_API_KEY=your_key_here
 fly deploy
 ```
 
@@ -101,8 +114,8 @@ Docker Space. Streaming works, and no payment info is required.
    - **SDK:** **Docker** (blank template)
    - **Hardware:** CPU basic (free) · **Visibility:** Public
 3. In the Space → **Settings → Variables and secrets**, add **secrets**:
-   - `GROQ_API_KEY` (required)
-   - `GEMINI_API_KEY` (optional — embeddings, vision, LLM failover)
+   - `GEMINI_API_KEY` (required — failover, embeddings, image OCR, audio)
+   - `NVIDIA_API_KEY` and `NVIDIA_MODEL` (optional — makes NVIDIA primary)
    - `SUPABASE_URL` and `SUPABASE_ANON_KEY` (**required** — this is what makes
      the server verify sign-ins; see "Server-side auth is not optional" above)
 
@@ -135,7 +148,7 @@ From the repo root (`agentic-notes/`):
 
 ```bash
 docker build -t agentic-notes .
-docker run -p 8000:8000 -e GROQ_API_KEY=gsk_your_key_here agentic-notes
+docker run -p 8000:8000 -e GEMINI_API_KEY=your_key_here agentic-notes
 ```
 
 Open <http://localhost:8000> — this is exactly what the host will serve (API +
