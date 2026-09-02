@@ -1,22 +1,34 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import useStream from './hooks/useStream'
 import InputPanel from './components/InputPanel'
 import ControlPanel from './components/ControlPanel'
-import PipelineStrip from './components/PipelineStrip'
+import PipelineStrip, { LABELS as STEP_LABELS } from './components/PipelineStrip'
 import PipelineInsights from './components/PipelineInsights'
 import NotesOutput from './components/NotesOutput'
-import QuizPanel from './components/QuizPanel'
-import FlashcardPanel from './components/FlashcardPanel'
-import HistoryPanel from './components/HistoryPanel'
 import Icon from './components/Icons'
 import Landing from './components/Landing'
-import MenuOverlay from './components/MenuOverlay'
-import EvalDashboard from './components/EvalDashboard'
-import AuthModal from './components/AuthModal'
-import SharedNote from './components/SharedNote'
+import ErrorBoundary from './components/ErrorBoundary'
+
+// Split out of the main bundle: none of these are on the first-paint path, and
+// most visitors never open them at all. Landing, InputPanel and NotesOutput stay
+// eager because they ARE the first paint.
+const QuizPanel = lazy(() => import('./components/QuizPanel'))
+const FlashcardPanel = lazy(() => import('./components/FlashcardPanel'))
+const HistoryPanel = lazy(() => import('./components/HistoryPanel'))
+const MenuOverlay = lazy(() => import('./components/MenuOverlay'))
+const EvalDashboard = lazy(() => import('./components/EvalDashboard'))
+const AuthModal = lazy(() => import('./components/AuthModal'))
+const SharedNote = lazy(() => import('./components/SharedNote'))
+
+// Quiet placeholder. A spinner here would flash and vanish on a warm cache,
+// which reads as a glitch rather than as loading.
+const PanelFallback = () => (
+  <div className="h-40 animate-pulse rounded-3xl border border-neutral-200 bg-neutral-50" />
+)
 import useHistory from './hooks/useHistory'
 import { supabase, supabaseEnabled } from './lib/supabase'
 import { apiFetch } from './lib/api'
+import { recordRun, estimateTotalSeconds, formatClock, formatRemaining } from './lib/timings'
 import {
   INPUT_KEY,
   SETTINGS_KEY,
@@ -246,7 +258,53 @@ export default function App() {
     )
   }, [])
 
+  // Roving-tabindex support for the workspace tablist.
+  const tabRefs = useRef({})
+  const onTabKeyDown = useCallback(
+    (e) => {
+      const ids = TABS.map((t) => t.id)
+      const i = ids.indexOf(activeTab)
+      const next =
+        e.key === 'ArrowRight' ? ids[(i + 1) % ids.length]
+        : e.key === 'ArrowLeft' ? ids[(i - 1 + ids.length) % ids.length]
+        : e.key === 'Home' ? ids[0]
+        : e.key === 'End' ? ids[ids.length - 1]
+        : null
+      if (!next) return
+      e.preventDefault()
+      setActiveTab(next)
+      // Focus has to follow selection or the arrow keys strand the user on a
+      // button that is no longer the active tab.
+      tabRefs.current[next]?.focus()
+    },
+    [activeTab]
+  )
+
+  // ----- Generation progress ----------------------------------------------
+  // Elapsed is ticked here rather than derived during render so the clock
+  // advances while the model is quiet (which, on the 550B, is most of a run).
+  const [elapsed, setElapsed] = useState(0)
+  const startedAtRef = useRef(null)
+  const stepStartRef = useRef(null)   // { step, at } for the step now running
+  const runTimingsRef = useRef({})    // step -> seconds, for this run
+
+  useEffect(() => {
+    if (!isStreaming) return
+    const id = setInterval(() => {
+      setElapsed(startedAtRef.current ? (Date.now() - startedAtRef.current) / 1000 : 0)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [isStreaming])
+
   const markActive = useCallback((stepName, message) => {
+    // A step going active closes out the previous one.
+    const now = Date.now()
+    const prevStep = stepStartRef.current
+    if (prevStep && prevStep.step !== stepName) {
+      runTimingsRef.current[prevStep.step] = (now - prevStep.at) / 1000
+    }
+    if (!prevStep || prevStep.step !== stepName) stepStartRef.current = { step: stepName, at: now }
+
     setAgentSteps((prev) => {
       const idx = prev.findIndex((s) => s.step === stepName)
       return prev.map((s, i) => {
@@ -383,6 +441,11 @@ export default function App() {
     bufferRef.current = ''
     titleRef.current = ''
 
+    startedAtRef.current = Date.now()
+    stepStartRef.current = null
+    runTimingsRef.current = {}
+    setElapsed(0)
+
     setAgentSteps(INITIAL_STEPS.map((s) => ({ ...s })))
 
     let latestQuiz = ''
@@ -453,6 +516,12 @@ export default function App() {
           setAgentSteps((prev) =>
             prev.map((s) => (s.status === 'pending' || s.status === 'active' ? { ...s, status: 'done' } : s))
           )
+          // Close out the step that was still running, then bank the run so the
+          // next generation on this model can estimate its remaining time.
+          const last = stepStartRef.current
+          if (last) runTimingsRef.current[last.step] = (Date.now() - last.at) / 1000
+          stepStartRef.current = null
+          recordRun(model || 'default', runTimingsRef.current)
           saveToHistory(bufferRef.current, latestQuiz, latestCards, latestSources)
         },
         onError: (message) => {
@@ -550,6 +619,29 @@ export default function App() {
     }
   }
 
+  // Progress readout. `estimate` is null until this model has finished a run
+  // on this machine, in which case we show elapsed only rather than guess.
+  const progress = useMemo(() => {
+    const total = agentSteps.length
+    const doneCount = agentSteps.filter((s) => s.status === 'done').length
+    const active = agentSteps.find((s) => s.status === 'active')
+    const estimate = estimateTotalSeconds(model || 'default')
+    return {
+      total,
+      current: Math.min(total, doneCount + (active ? 1 : 0)) || 1,
+      label: active ? STEP_LABELS[active.step] || active.step : null,
+      message: active?.message || '',
+      remaining: estimate != null ? Math.max(0, estimate - elapsed) : null,
+    }
+  }, [agentSteps, elapsed, model])
+
+  // One polite sentence per step change. Deliberately NOT wired to the
+  // streaming note text — announcing every token would make the app unusable
+  // with a screen reader.
+  const liveMessage = isStreaming && progress.label
+    ? `Step ${progress.current} of ${progress.total}: ${progress.label}. ${progress.message}`
+    : ''
+
   // Source in the panel differs from the one the visible notes came from.
   const sourceChanged = !!inputText.trim() && inputText !== generatedFrom
 
@@ -564,6 +656,7 @@ export default function App() {
 
   if (sharedView) {
     return (
+      <Suspense fallback={<PanelFallback />}>
       <SharedNote
         session={sharedView}
         onClose={() => {
@@ -572,11 +665,16 @@ export default function App() {
           setShowLanding(false)
         }}
       />
+      </Suspense>
     )
   }
 
   if (showEval) {
-    return <EvalDashboard onBack={() => setShowEval(false)} />
+    return (
+      <Suspense fallback={<PanelFallback />}>
+        <EvalDashboard onBack={() => setShowEval(false)} />
+      </Suspense>
+    )
   }
 
   if (showLanding) {
@@ -595,7 +693,11 @@ export default function App() {
           onSignIn={() => setAuthOpen(true)}
           onSignOut={signOut}
         />
-        {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />}
+        {authOpen && (
+          <Suspense fallback={null}>
+            <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />
+          </Suspense>
+        )}
       </>
     )
   }
@@ -657,6 +759,14 @@ export default function App() {
         </div>
       </div>
 
+      {/* Screen-reader progress. sr-only + polite: it narrates the pipeline
+          without stealing focus and without reading the notes themselves. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {liveMessage}
+      </div>
+
+      {menuOpen && (
+      <Suspense fallback={null}>
       <MenuOverlay
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -671,6 +781,8 @@ export default function App() {
             : []),
         ]}
       />
+      </Suspense>
+      )}
 
       {/* Main */}
       <main className="mx-auto max-w-7xl px-5 pb-16 pt-24 sm:pt-28">
@@ -861,10 +973,37 @@ export default function App() {
                     className={`ml-2 h-1.5 w-1.5 shrink-0 rounded-full ${isStreaming ? 'animate-pulse bg-amber-500' : 'bg-green-500'}`}
                     title={isStreaming ? 'Agents are working' : 'Idle'}
                   />
-                  <div className="scroll-area flex min-w-0 flex-1 gap-1 overflow-x-auto">
+                  {isStreaming && (
+                    <span className="hidden shrink-0 whitespace-nowrap text-xs text-neutral-500 sm:inline">
+                      {progress.label && (
+                        <span className="font-medium text-neutral-700">
+                          {progress.current}/{progress.total} {progress.label}
+                        </span>
+                      )}
+                      <span className="ml-1.5 tabular-nums">{formatClock(elapsed)}</span>
+                      {progress.remaining != null && (
+                        <span className="ml-1.5">· {formatRemaining(progress.remaining)}</span>
+                      )}
+                    </span>
+                  )}
+                  <div
+                    role="tablist"
+                    aria-label="Workspace"
+                    onKeyDown={onTabKeyDown}
+                    className="scroll-area flex min-w-0 flex-1 gap-1 overflow-x-auto"
+                  >
                     {TABS.map((t) => (
                       <button
                         key={t.id}
+                        id={`tab-${t.id}`}
+                        role="tab"
+                        aria-selected={activeTab === t.id}
+                        aria-controls={`tabpanel-${t.id}`}
+                        // Roving tabindex: one stop for the whole group, then
+                        // the arrow keys move within it. Four separate tab
+                        // stops is what the plain buttons gave before.
+                        tabIndex={activeTab === t.id ? 0 : -1}
+                        ref={(el) => (tabRefs.current[t.id] = el)}
                         onClick={() => setActiveTab(t.id)}
                         className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
                           activeTab === t.id
@@ -940,8 +1079,21 @@ export default function App() {
                 </div>
               )}
 
-              {/* Tab content */}
-              <div className="animate-fade-in" key={activeTab}>
+              {/* Tab content.
+                  The ErrorBoundary sits HERE, not around <App />, because
+                  `notes` lives in this component: a render crash in a panel
+                  now fails just the panel and leaves a finished generation
+                  intact. Keying it on activeTab clears a stuck error when the
+                  user switches away and back. */}
+              <ErrorBoundary key={activeTab} label={TABS.find((t) => t.id === activeTab)?.label}>
+              <div
+                className="animate-fade-in"
+                role="tabpanel"
+                id={`tabpanel-${activeTab}`}
+                aria-labelledby={`tab-${activeTab}`}
+                tabIndex={0}
+                aria-busy={isStreaming}
+              >
                 {activeTab === 'notes' && (
                   <NotesOutput
                     notes={notes}
@@ -958,27 +1110,34 @@ export default function App() {
                   />
                 )}
                 {activeTab === 'quiz' && (
-                  <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
+                  <Suspense fallback={<PanelFallback />}>
+                    <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
+                  </Suspense>
                 )}
                 {activeTab === 'flashcards' && (
-                  <FlashcardPanel
-                    flashcards={flashcards}
-                    onRegenerate={notes ? regenFlashcards : null}
-                    regenerating={cardsRegen}
-                    accountId={scopeId}
-                  />
+                  <Suspense fallback={<PanelFallback />}>
+                    <FlashcardPanel
+                      flashcards={flashcards}
+                      onRegenerate={notes ? regenFlashcards : null}
+                      regenerating={cardsRegen}
+                      accountId={scopeId}
+                    />
+                  </Suspense>
                 )}
                 {activeTab === 'history' && (
-                  <HistoryPanel
-                    history={history}
-                    onLoad={loadSession}
-                    onDelete={deleteSession}
-                    onUpdate={updateSession}
-                    onShare={cloud ? shareLink : null}
-                    cloud={cloud}
-                  />
+                  <Suspense fallback={<PanelFallback />}>
+                    <HistoryPanel
+                      history={history}
+                      onLoad={loadSession}
+                      onDelete={deleteSession}
+                      onUpdate={updateSession}
+                      onShare={cloud ? shareLink : null}
+                      cloud={cloud}
+                    />
+                  </Suspense>
                 )}
               </div>
+              </ErrorBoundary>
 
               </div>
 
@@ -1008,7 +1167,11 @@ export default function App() {
         )}
       </main>
 
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />}
+      {authOpen && (
+        <Suspense fallback={null}>
+          <AuthModal onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} />
+        </Suspense>
+      )}
 
       {/* Toast */}
       {toast && (

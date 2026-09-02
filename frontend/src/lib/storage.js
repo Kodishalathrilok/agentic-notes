@@ -29,6 +29,10 @@ export const INPUT_KEY = 'agentic-notes-input'
 export const SETTINGS_KEY = 'agentic-notes-settings'
 export const HISTORY_KEY = 'agentic-notes-history'
 export const SRS_KEY = 'agentic-notes-srs'
+// Per-model step timings, used to estimate how long a generation has left.
+// Not account-scoped in spirit — it describes the models, not the user —
+// but it goes through the same helpers, so it carries a fixed scope.
+export const TIMINGS_KEY = 'agentic-notes-timings'
 
 /** The storage key `base` resolves to for one account. */
 export function scopedKey(base, accountId) {

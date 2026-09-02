@@ -11,15 +11,27 @@ import InlineAssistant from './InlineAssistant'
 // with an internal retrieval id. Where the passage carries a page, show that
 // instead; passage numbers only survive for sources without pages (pasted
 // text, URLs, transcripts) where there is nothing better to show.
+// A chunk cut against page spans sits on exactly one page. A chunk from the
+// fallback path (spans missing or stale) can cover several, and it reports all
+// of them — "p. 20-22" is coarse but true, where naming just the first was the
+// bug that put every citation 1-3 pages early.
+function pageLabel(pages) {
+  if (!pages || !pages.length) return null
+  if (pages.length === 1) return `p. ${pages[0]}`
+  return `p. ${pages[0]}-${pages[pages.length - 1]}`
+}
+
 function CiteChips({ ids, cite, keyPrefix }) {
   const seen = new Set()
   const items = []
   for (const n of ids) {
-    const page = cite.pageOf(n)
-    const key = page ? `p${page}` : `s${n}`
+    const pages = cite.pagesOf(n)
+    const label = pageLabel(pages)
+    const page = pages && pages.length ? pages[0] : null
+    const key = label ? `p${label}` : `s${n}`
     if (seen.has(key)) continue // the same page cited twice in one sentence
     seen.add(key)
-    items.push({ n, page, label: page ? `p. ${page}` : `[${n}]` })
+    items.push({ n, page, label: label || `[${n}]` })
   }
 
   const shown = items.slice(0, 2)
@@ -73,6 +85,7 @@ function renderInline(text, keyPrefix, cite) {
 }
 
 function renderNotes(notes, cite) {
+
   const lines = notes.split('\n')
   const out = []
 
@@ -208,6 +221,7 @@ function diffLines(before, after) {
 function MenuItem({ onClick, label, disabled = false }) {
   return (
     <button
+      role="menuitem"
       onClick={onClick}
       disabled={disabled}
       className="block w-full px-4 py-2 text-left text-sm text-neutral-700 transition-colors hover:bg-neutral-50 hover:text-neutral-900 disabled:pointer-events-none disabled:opacity-40"
@@ -251,9 +265,17 @@ export default function NotesOutput({
   const [menuOpen, setMenuOpen] = useState(false)
   const containerRef = useRef(null)
   const menuRef = useRef(null)
+  const menuBtnRef = useRef(null)
 
   // Which page a citation points at, for the p. N chips.
-  const pageOf = (n) => sources.find((s) => s.id === n)?.page ?? null
+  // Pages come from the retrieved chunk's metadata, never from the model.
+  const pagesOf = (n) => {
+    const src = sources.find((s) => s.id === n)
+    if (!src) return null
+    if (src.pages && src.pages.length) return src.pages
+    return src.page ? [src.page] : null
+  }
+  const pageOf = (n) => pagesOf(n)?.[0] ?? null
 
   // Dismiss the overflow menu on an outside click or Escape.
   useEffect(() => {
@@ -261,7 +283,11 @@ export default function NotesOutput({
     const onDown = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
     }
-    const onKey = (e) => e.key === 'Escape' && setMenuOpen(false)
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      setMenuOpen(false)
+      menuBtnRef.current?.focus()
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -426,8 +452,10 @@ export default function NotesOutput({
 
         <div className="relative" ref={menuRef}>
           <button
+            ref={menuBtnRef}
             onClick={() => setMenuOpen((o) => !o)}
             aria-label="More actions"
+            aria-haspopup="menu"
             aria-expanded={menuOpen}
             className="flex h-8 w-8 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-900"
           >
@@ -435,7 +463,11 @@ export default function NotesOutput({
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-2xl border border-neutral-200 bg-white py-1 shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
+            <div
+              role="menu"
+              aria-label="More actions"
+              className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-2xl border border-neutral-200 bg-white py-1 shadow-[0_12px_32px_rgba(0,0,0,0.12)]"
+            >
               {onRewrite && (
                 <>
                   <MenuItem
@@ -524,7 +556,7 @@ export default function NotesOutput({
             className="rounded-3xl border border-neutral-200 bg-white px-6 py-7 sm:px-8"
           >
             <div className="mx-auto max-w-3xl">
-              {renderNotes(notes, sources.length ? { onCite: handleCite, pageOf } : null)}
+              {renderNotes(notes, sources.length ? { onCite: handleCite, pageOf, pagesOf } : null)}
               {streaming && <span className="stream-caret" aria-hidden />}
             </div>
           </div>

@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import Icon from './Icons'
 import TextEffect from './TextEffect'
-import MenuOverlay from './MenuOverlay'
+// Lazy here too. A static import in either place pins the module into the
+// main chunk for BOTH, which is what the build warned about.
+const MenuOverlay = lazy(() => import('./MenuOverlay'))
 import AuthCard from './AuthCard'
 
 const GITHUB_URL = 'https://github.com/Kodishalathrilok/agentic-notes'
@@ -254,6 +256,8 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
     <div className="min-h-screen overflow-x-hidden bg-latte-100 text-espresso-800">
       <Nav onMenu={() => setMenuOpen(true)} />
 
+      {menuOpen && (
+      <Suspense fallback={null}>
       <MenuOverlay
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -266,6 +270,8 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
             : []),
         ]}
       />
+      </Suspense>
+      )}
 
       {/* Hero — sketch art base, colored art revealed under the cursor */}
       <section ref={heroRef} className="isolate relative flex min-h-screen items-center overflow-hidden">

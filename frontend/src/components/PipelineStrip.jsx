@@ -4,7 +4,7 @@ import Icon from './Icons'
 // Idle on the home screen; lights up step by step while generating.
 // status per step: 'pending' | 'active' | 'done' (matches App's agentSteps)
 
-const LABELS = {
+export const LABELS = {
   plan: 'Plan',
   write: 'Write',
   critique: 'Critique',
