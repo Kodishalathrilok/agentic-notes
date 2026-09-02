@@ -96,6 +96,208 @@ def enforce_citations(notes: str, valid_ids) -> str:
     return re.sub(r"[ \t]+(\n)", r"\1", cleaned)
 
 
+# Per-claim grounding check before the notes are finalised. On by default;
+# set GROUNDING_CHECK=0 to skip it (one extra helper-model call per 8 claims).
+GROUNDING_CHECK = os.getenv("GROUNDING_CHECK", "1").strip().lower() not in ("0", "false", "no")
+
+# Set CITATION_DEBUG=1 to trace claim -> chunk -> page -> citation on stdout.
+CITATION_DEBUG = os.getenv("CITATION_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def validate_citations(notes: str, chunk_map, page_count: int = 0) -> str:
+    """Drop every [n] that cannot be resolved to real, in-range evidence.
+
+    Extends enforce_citations with the page dimension. A citation survives only
+    if n was actually retrieved AND -- when the document has pages at all --
+    that chunk carries a page inside 1..page_count. The model never supplies a
+    page: it names a passage, and the retriever's metadata decides what page
+    that passage came from. This is the code guarantee behind "never invent a
+    citation".
+    """
+    valid, dropped = set(), {}
+    for cid, chunk in (chunk_map or {}).items():
+        try:
+            n = int(cid)
+        except (TypeError, ValueError):
+            continue
+        page = chunk.get("page") if isinstance(chunk, dict) else None
+        if page_count and page is None:
+            dropped[n] = "no page metadata on a paged document"
+            continue
+        if page is not None and page_count and not 1 <= int(page) <= page_count:
+            dropped[n] = f"page {page} outside 1..{page_count}"
+            continue
+        valid.add(n)
+
+    if CITATION_DEBUG:
+        for n, why in sorted(dropped.items()):
+            print(f"[citation] [{n}] DROPPED: {why}")
+        for n in sorted(valid):
+            chunk = chunk_map.get(n) or {}
+            excerpt = " ".join((chunk.get("text") or "")[:60].split())
+            print(f"[citation] [{n}] -> p.{chunk.get('page')} :: {excerpt}…")
+
+    return enforce_citations(notes, valid)
+
+
+# ---------------------------------------------------------------------------
+# Grounding: does the cited evidence actually SUPPORT the claim?
+# ---------------------------------------------------------------------------
+#
+# validate_citations answers "is this a real, in-range page?". That is a
+# different question from "does this passage say this?", and only the first
+# was being asked -- so a claim could carry a perfectly resolving citation to
+# a page that never makes it.
+
+def _claim_lines(notes):
+    """Notes lines that carry at least one [n] citation, with their ids.
+
+    Returns [(line_index, text, [cited ids])]. Uncited lines are headings and
+    scaffolding — nothing to verify against, so they are left alone.
+    """
+    out = []
+    for i, raw in enumerate((notes or "").split("\n")):
+        ids = [int(m) for m in _CITATION_RE.findall(raw)]
+        if ids:
+            out.append((i, raw, list(dict.fromkeys(ids))))
+    return out
+
+
+def _evidence_block(items, chunk_map):
+    blocks = []
+    for n, (_, text, ids) in enumerate(items, start=1):
+        claim = _CITATION_RE.sub("", text).strip(" -•\t")
+        evidence = "\n".join(
+            f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}" for i in ids
+        )
+        blocks.append(f"CLAIM {n}: {claim}\nEVIDENCE:\n{evidence}")
+    return "\n\n".join(blocks)
+
+
+def _verify_batch(items, chunk_map, model=None):
+    """Rule on a batch of (claim, its own evidence) pairs.
+
+    Done in TWO passes on purpose. Asking one call for a verdict AND a rewritten
+    sentence per claim overruns the output budget on a reasoning model: the JSON
+    truncates and most claims come back unjudged, which silently lets a
+    fabrication through. Verdicts alone are short and reliable; the rewrite is
+    only needed for the rare "partial", so it gets its own small call.
+    """
+    verdict_prompt = f"""You are the GROUNDING agent. For each claim decide whether the
+evidence shown with it actually states or directly entails it.
+
+- "supported": everything the claim asserts is present in its evidence.
+  Paraphrase and summary are fine — wording need not match.
+- "partial": the general point is there, but the claim adds specifics the
+  evidence does not state (invented role names, numbers, steps, examples).
+- "unsupported": the evidence does not state this at all. Evidence merely being
+  ABOUT the topic is not support.
+
+Judge only against the evidence shown. Do not use outside knowledge.
+Return a verdict for EVERY claim.
+
+Respond with ONLY JSON:
+{{"verdicts": [{{"n": 1, "status": "supported"}}]}}
+
+{_evidence_block(items, chunk_map)}"""
+
+    data = safe_json(call_model(verdict_prompt, max_tokens=900, model=model,
+                                temperature=0.0, json_mode=True))
+    out = {}
+    for v in (data.get("verdicts") or []):
+        try:
+            out[int(v.get("n"))] = (str(v.get("status", "")).lower(), "")
+        except (TypeError, ValueError):
+            continue
+
+    # Second pass only for claims that need a rewrite.
+    partial = [n for n, (status, _) in out.items()
+               if status == "partial" and 1 <= n <= len(items)]
+    if partial:
+        wanted = [(n, items[n - 1]) for n in partial]
+        listing = "\n\n".join(
+            f"CLAIM {n}: {items[n - 1][1].strip()}\nEVIDENCE:\n"
+            + "\n".join(f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}"
+                        for i in items[n - 1][2])
+            for n, _ in wanted
+        )
+        fix_prompt = f"""Rewrite each claim so it says ONLY what its evidence supports.
+Remove the unsupported specifics; keep the wording natural and keep the [n]
+citation markers exactly as they appear. Do not add anything new.
+
+Respond with ONLY JSON:
+{{"fixes": [{{"n": 1, "text": "the corrected line"}}]}}
+
+{listing}"""
+        fixes = safe_json(call_model(fix_prompt, max_tokens=1200, model=model,
+                                     temperature=0.0, json_mode=True))
+        for f in (fixes.get("fixes") or []):
+            try:
+                n = int(f.get("n"))
+            except (TypeError, ValueError):
+                continue
+            if n in out:
+                out[n] = (out[n][0], f.get("text") or "")
+    return out
+
+
+def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
+    """Drop or repair claims their own cited evidence does not support.
+
+    This is the difference between "is this citation a valid page?" (which
+    validate_citations already answers) and "does this evidence actually say
+    this?". A citation can resolve perfectly and still be attached to a claim
+    the page never makes.
+
+    Returns (notes, stats). Fails OPEN: if the model call fails or returns
+    nothing usable, the notes are returned untouched rather than gutted.
+    """
+    items = _claim_lines(notes)
+    # `unjudged` is tracked separately on purpose: a model call that fails or
+    # returns nothing must not be indistinguishable from a clean pass.
+    stats = {"checked": len(items), "supported": 0, "rewritten": 0,
+             "removed": 0, "unjudged": 0}
+    if not items:
+        return notes, stats
+
+    verdicts = {}
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
+        try:
+            got = _verify_batch(batch, chunk_map, model=model)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[grounding] batch failed ({exc}); keeping those claims as written.")
+            continue
+        for local_n, verdict in got.items():
+            if 1 <= local_n <= len(batch):
+                verdicts[batch[local_n - 1][0]] = verdict
+
+    lines = notes.split("\n")
+    for line_i, (status, fix) in verdicts.items():
+        original = lines[line_i]
+        if status == "unsupported":
+            lines[line_i] = None
+            stats["removed"] += 1
+            if CITATION_DEBUG:
+                print(f"[grounding] REMOVED unsupported: {original.strip()[:90]}")
+        elif status == "partial" and fix.strip() and _CITATION_RE.search(fix):
+            # Keep the original leading markup (bullet, indent) so the rewrite
+            # doesn't fall out of the surrounding list.
+            prefix = original[:len(original) - len(original.lstrip(" -•\t"))]
+            lines[line_i] = prefix + fix.strip()
+            stats["rewritten"] += 1
+            if CITATION_DEBUG:
+                print(f"[grounding] REWROTE partial: {original.strip()[:70]}")
+                print(f"[grounding]           -> {fix.strip()[:70]}")
+        else:
+            stats["supported"] += 1
+
+    stats["unjudged"] = len(items) - len(verdicts)
+    if stats["unjudged"]:
+        print(f"[grounding] {stats['unjudged']} of {len(items)} claims were not judged "
+              f"(model returned no verdict); those are left exactly as written.")
+    return "\n".join(x for x in lines if x is not None), stats
+
 # ---------------------------------------------------------------------------
 # Notes windowing: never let head-truncation hide the tail of long notes
 # ---------------------------------------------------------------------------
@@ -134,7 +336,21 @@ def _notes_excerpt(notes: str, max_chars: int) -> str:
 _CITE_RULE = (
     "Support each point with a citation to the passage number(s) it came from, "
     "in square brackets right after the point, e.g. [1] or [2][5]. Only cite "
-    "numbers that appear in the CONTEXT. Do not invent citations."
+    "numbers that appear in the CONTEXT. Do not invent citations.\n\n"
+    "GROUNDING — the CONTEXT is the only source of truth:\n"
+    "- Every factual statement must come from the CONTEXT passages. If it is "
+    "not there, leave it out.\n"
+    "- Do NOT add facts from your own knowledge of the subject, however "
+    "standard or obviously true they seem.\n"
+    "- Do NOT invent examples, role names, numbers, steps, processes or "
+    "terminology that the passages do not state.\n"
+    "- Do NOT infer unstated detail. Naming a technique is not licence to "
+    "describe how it usually works.\n"
+    "- A citation means \"this passage states this\", not \"this passage is "
+    "about this topic\". If a passage only mentions the topic, say only what "
+    "it actually says.\n"
+    "- Paraphrasing and summarising ARE wanted: write clearly in your own "
+    "words. Faithful summary, not transcription, and not elaboration."
 )
 
 # ---------------------------------------------------------------------------
@@ -338,10 +554,26 @@ Write high-quality study notes grounded in the CONTEXT passages below.
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
 Length target: {LENGTH_TARGETS.get(length.lower(), '500-700 words')}. Treat this as a
-MINIMUM to reach, not a ceiling — be thorough and comprehensive. Cover every outline
-point in depth with concrete facts, definitions, examples, and explanations drawn from
-the context. Do not pad with filler, but do not stop short: err on the side of MORE
-detail and completeness. It is better to slightly exceed the target than to fall under it.
+SOFT target and aim for the MIDDLE of the range rather than either edge. It ranks below
+the things that matter more — in this order:
+
+  1. Factual faithfulness — every claim supported by the CONTEXT.
+  2. Coverage of the important concepts.
+  3. Concise explanation — say a thing once, clearly.
+  4. Hitting the length.
+
+Never pad, restate or add filler to reach the lower bound. If the source genuinely does
+not contain enough substantive material, finishing below the range is the right answer.
+When it does contain enough, use the room rather than stopping early.
+
+Cover every outline point, but select what earns the space rather than summarising every
+passage you were given.
+
+Prioritise, in this order: core concepts; important definitions; major workflows and
+worked examples; important comparisons; key numbers and results; named design patterns.
+Leave out section-divider slides, decorative material, repeated examples and restatements
+of something you already made. More evidence than you need is supplied on purpose — a
+page-by-page transcript is a worse answer than a well-chosen summary.
 
 Follow this outline:
 {outline_str}
@@ -979,23 +1211,36 @@ def _emit(type_, step, content="", data=None):
 
 
 def _page_tagger(retriever, spans):
-    """Return a function that stamps each chunk with its source page.
+    """Return a function that stamps each chunk with its source page(s).
 
-    Chunk offsets index the whitespace-normalized document, and `spans` were
-    measured in that same space by retriever.page_spans — comparing against
-    raw-text positions would drift by every run of whitespace the chunker
-    collapsed.
+    Chunks cut against page spans already CARRY their page — it is the page
+    they were cut from, not a guess — so the common path just passes it
+    through.
+
+    The offset fallback below only runs for chunks with no page (spans absent
+    or stale). It reports the true RANGE from both offsets rather than the
+    start alone: a chunk that straddles pages used to be labelled with the
+    first of them, which is exactly how citations ended up 1-3 pages early.
     """
     if not spans:
         return lambda chunks: chunks
 
-    starts = {c["chunk_id"]: c["start_offset"] for c in retriever.chunks_meta}
+    meta = {c["chunk_id"]: c for c in retriever.chunks_meta}
 
     def tag(chunks):
         out = []
         for chunk in chunks:
-            page = page_for_offset(spans, starts.get(chunk["id"], 0))
-            out.append({**chunk, "page": page} if page else chunk)
+            if chunk.get("page"):
+                out.append(chunk)
+                continue
+            m = meta.get(chunk["id"], {})
+            first = page_for_offset(spans, m.get("start_offset", 0))
+            last = page_for_offset(spans, max(m.get("start_offset", 0), m.get("end_offset", 1) - 1))
+            if not first:
+                out.append(chunk)
+                continue
+            pages = list(range(first, (last or first) + 1))
+            out.append({**chunk, "page": first, "pages": pages})
         return out
 
     return tag
@@ -1036,7 +1281,9 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             return
 
         # Build the retrieval index over the source (RAG)
-        retriever = Retriever(text)
+        # Spans make chunking page-bounded: a chunk is cut from inside one
+        # page, so its page is a fact rather than an offset lookup.
+        retriever = Retriever(text, spans=page_spans)
 
         # Trace each retrieved chunk back to the page it came from, so a
         # citation can point at the document rather than at an opaque passage
@@ -1153,7 +1400,11 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             # material to hit its word target.
             query = " ".join(outline + checklist + [mode])
             single_k = SINGLE_PASS_K.get((length or "medium").lower(), 14)
-            chunks = retriever.retrieve(query, k=single_k)
+            # Document order for the writer: retrieve() returns relevance
+            # order (its ordering is a measured property), but evidence reads
+            # better in the order the document tells it — and the sectioned
+            # path above already sorts its union the same way.
+            chunks = sorted(retriever.retrieve(query, k=single_k), key=lambda c: c["id"])
             chunk_map = {c["id"]: c for c in chunks}
             context = _format_context(chunks)
             yield _emit("sources", "write", "", _with_pages(chunks))
@@ -1293,11 +1544,33 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         # Citation verification (deterministic, no model call): drop any [n]
-        # citation that doesn't point at a chunk the model was actually shown.
-        cleaned = enforce_citations(notes, chunk_map.keys())
+        # citation that doesn't point at a chunk the model was actually shown,
+        # or whose chunk carries no usable page on a paged document. The page
+        # itself is never something the model supplied.
+        cleaned = validate_citations(notes, chunk_map, page_count=len(page_spans or []))
         if cleaned != notes:
             notes = cleaned
             yield _emit("notes_revised", "revise", notes)
+
+        # Grounding check. The step above proves each citation points at a real
+        # page; this one asks the different question of whether that page
+        # actually says what the claim says. Runs on the helper model — it is a
+        # mechanical per-claim judgement, not the writing that decides quality.
+        if GROUNDING_CHECK and chunk_map:
+            yield _emit("status", "critique", "Checking every claim against its source…")
+            try:
+                grounded, gstats = verify_claim_support(notes, chunk_map, model=helper)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[grounding] check failed ({exc}); notes left as written.")
+                grounded, gstats = notes, None
+            if gstats and (gstats["removed"] or gstats["rewritten"]):
+                notes = grounded
+                yield _emit(
+                    "status", "critique",
+                    f"Grounding: {gstats['rewritten']} claim(s) tightened, "
+                    f"{gstats['removed']} unsupported claim(s) removed.",
+                )
+                yield _emit("notes_revised", "revise", notes)
 
         # Auto-title (best effort)
         try:

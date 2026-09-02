@@ -89,16 +89,32 @@ def page_for_offset(spans, offset):
     return best
 
 
-def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120):
-    """Split into ~target_chars passages with overlap. Returns metadata dicts:
-    {chunk_id, text, start_offset, end_offset}. Offsets index the whitespace-
-    normalized text (used later for highlighting/citation verification)."""
-    norm = normalize(text)
-    if not norm:
-        return []
+def _spans_match(norm: str, spans) -> bool:
+    """Do these page spans actually describe THIS text?
+
+    page_spans lays pages out as `p1 + " " + p2 + …`, so the last page's end is
+    exactly len(norm). If the user edited the extracted text before generating,
+    or it was truncated after the spans were measured, that no longer holds —
+    and silently chunking against stale spans would label every chunk with a
+    confidently wrong page. Better to fall back to unbounded chunking and cite
+    passage numbers than to cite the wrong page.
+    """
+    covered = max((s["end"] for s in spans), default=0)
+    return bool(covered) and abs(covered - len(norm)) <= 2
+
+
+def _walk_chunks(segment, base, target_chars, overlap_chars, page, chunks):
+    """Emit ~target_chars chunks for `segment`, appending to `chunks`.
+
+    `base` is where segment[0] sits in the normalized document, so the offsets
+    recorded stay document-global even when the caller is walking one page at a
+    time.
+    """
+    if not segment:
+        return
 
     words, pos = [], 0
-    for w in norm.split(" "):
+    for w in segment.split(" "):
         words.append((w, pos))
         pos += len(w) + 1
 
@@ -107,15 +123,28 @@ def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120):
         last_word, last_start = group[-1]
         return " ".join(w for w, _ in group), start, last_start + len(last_word)
 
-    chunks = []
+    def _add(body, st, en):
+        if chunks and body == chunks[-1]["text"]:
+            return
+        entry = {
+            "chunk_id": len(chunks) + 1,
+            "text": body,
+            "start_offset": base + st,
+            "end_offset": base + en,
+        }
+        if page is not None:
+            # Authoritative: the chunk was cut from inside this page, so no
+            # offset-to-page inference happens anywhere downstream.
+            entry["page"] = page
+            entry["pages"] = [page]
+        chunks.append(entry)
+
     cur, cur_len = [], 0
     for word, start in words:
         cur.append((word, start))
         cur_len += len(word) + 1
         if cur_len >= target_chars:
-            body, st, en = _emit(cur)
-            if not chunks or body != chunks[-1]["text"]:
-                chunks.append({"chunk_id": len(chunks) + 1, "text": body, "start_offset": st, "end_offset": en})
+            _add(*_emit(cur))
             tail, tl = [], 0
             for pair in reversed(cur):
                 tail.insert(0, pair)
@@ -124,9 +153,42 @@ def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120):
                     break
             cur, cur_len = tail, sum(len(p[0]) + 1 for p in tail)
     if cur:
-        body, st, en = _emit(cur)
-        if not chunks or body != chunks[-1]["text"]:
-            chunks.append({"chunk_id": len(chunks) + 1, "text": body, "start_offset": st, "end_offset": en})
+        _add(*_emit(cur))
+
+
+def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120, spans=None):
+    """Split into ~target_chars passages with overlap. Returns metadata dicts:
+    {chunk_id, text, start_offset, end_offset} plus {page, pages} when `spans`
+    are supplied. Offsets index the whitespace-normalized text.
+
+    With `spans`, chunking is PAGE-BOUNDED: a chunk is cut from within a single
+    page and never straddles a boundary, so its page is a fact rather than
+    something inferred from an offset afterwards.
+
+    That inference is what made citations wrong. Chunks default to 700 chars
+    while a slide averages ~280, so a chunk covered ~3 slides and was labelled
+    with the first of them — every citation landed 1-3 pages early, never late.
+
+    A page longer than target_chars still splits into several chunks; a page
+    shorter than it becomes one chunk. Overlap does not cross pages.
+    """
+    norm = normalize(text)
+    if not norm:
+        return []
+
+    chunks = []
+    if spans and _spans_match(norm, spans):
+        for span in spans:
+            if span["end"] <= span["start"]:
+                continue  # blank or image-only page: no text layer to chunk
+            _walk_chunks(
+                norm[span["start"]:span["end"]], span["start"],
+                target_chars, overlap_chars, span["page"], chunks,
+            )
+        if chunks:
+            return chunks
+
+    _walk_chunks(norm, 0, target_chars, overlap_chars, None, chunks)
     return chunks
 
 
@@ -140,11 +202,16 @@ def chunk_text(text, target_chars: int = 700, overlap_chars: int = 120):
 # ---------------------------------------------------------------------------
 
 class Retriever:
-    def __init__(self, text, mode=None):
+    def __init__(self, text, mode=None, spans=None):
         self.config = RetrievalConfig.from_env()
         if mode:
             self.config = self.config.with_mode(mode)
-        self.chunks_meta = chunk_document(text)
+        # Page spans make chunking page-bounded, which is what makes a chunk's
+        # page authoritative instead of inferred. Without them (pasted text, a
+        # URL, a transcript) chunks simply carry no page and the UI cites
+        # passage numbers, exactly as before.
+        self.spans = spans or []
+        self.chunks_meta = chunk_document(text, spans=self.spans)
         self.texts = [c["text"] for c in self.chunks_meta]
         self.hybrid = HybridRetriever(self.texts, self.config)
         self.last_metrics = {}
@@ -166,7 +233,55 @@ class Retriever:
         candidates, metrics = self.hybrid.search(query)
         candidates = self._process_candidates(candidates)
         final_k = k or self.config.final_context_k
-        selected = candidates[:final_k]
+        # Page-bounded chunks are often far smaller than target_chars (one
+        # short slide each), so a fixed count would hand the writer a fraction
+        # of the evidence it used to get. The budget is expressed in characters
+        # so smaller chunks simply mean more of them.
+        budget = final_k * self.config.chunk_target_chars
+        by_index = {c["index"]: c for c in candidates}
+
+        def entry(i):
+            """Candidate record for chunk i, synthesised if ranking never saw it.
+
+            The fused pool is capped at initial_retrieval_k, so a chunk can be
+            absent from `candidates` while still being needed for coverage.
+            Reading only from the pool is what silently capped the writer's
+            evidence at 30 chunks no matter how much budget was left.
+            """
+            return by_index.get(i, {"index": i, "semantic_score": None,
+                                    "bm25_score": None, "rrf_score": None,
+                                    "source": "coverage"})
+
+        size = lambda i: len(self.chunks_meta[i]["text"])  # noqa: E731
+        all_indices = range(len(self.chunks_meta))
+
+        if sum(size(i) for i in all_indices) <= budget:
+            # The WHOLE document fits in the context we were going to spend.
+            # Ranking can only lose material here: it was dropping substantive
+            # pages purely because one query ranked them low, and WHICH pages
+            # vanished changed with the query. When everything fits, selection
+            # has no job to do.
+            #
+            # Ranked candidates stay FIRST, in relevance order — this is a
+            # retrieval API and its ordering is measured (MRR). The chunks the
+            # pool never saw are appended; the writer re-sorts into document
+            # order itself, as the sectioned path already did.
+            selected = list(candidates) + [entry(i) for i in all_indices if i not in by_index]
+        else:
+            # Too big to send whole, so rank and cut. Above SECTION_DOC_THRESHOLD
+            # the writer runs the sectioned path instead, which issues one query
+            # PER OUTLINE SECTION and unions the results — that, not a spread
+            # heuristic here, is what gives long documents their coverage.
+            order = {c["index"]: rank for rank, c in enumerate(candidates)}
+            chosen, used = set(), 0
+            for cand in candidates:
+                if used >= budget:
+                    break
+                if cand["index"] in chosen:
+                    continue
+                chosen.add(cand["index"])
+                used += size(cand["index"])
+            selected = [entry(i) for i in sorted(chosen, key=order.__getitem__)]
 
         context = []
         for c in selected:
@@ -177,6 +292,8 @@ class Retriever:
                     "text": meta["text"],
                     "start_offset": meta["start_offset"],
                     "end_offset": meta["end_offset"],
+                    "page": meta.get("page"),
+                    "pages": meta.get("pages") or ([meta["page"]] if meta.get("page") else []),
                     "semantic_score": c["semantic_score"],
                     "bm25_score": c["bm25_score"],
                     "rrf_score": c["rrf_score"],
@@ -209,7 +326,10 @@ class Retriever:
 
         # Public shape is unchanged: id + text, in RELEVANCE order (not document
         # order). Citation IDs are chunk identity, independent of ordering.
-        return [{"id": x["chunk_id"], "text": x["text"]} for x in context]
+        return [
+            {"id": x["chunk_id"], "text": x["text"], "page": x["page"], "pages": x["pages"]}
+            for x in context
+        ]
 
     def sample(self, max_chars: int = 16000) -> str:
         """An even spread of chunks across the document (breadth for planning)."""

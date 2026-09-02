@@ -135,7 +135,9 @@ def test_returns_final_context_k(monkeypatch):
     r = Retriever(DOC, mode="bm25")
     out = r.retrieve("photosynthesis")  # default final_context_k = 8
     assert len(out) <= 8
-    assert all(set(item.keys()) == {"id", "text"} for item in out)  # no score leakage
+    # page/pages are part of the contract now: citations resolve through them.
+    assert all(set(item.keys()) == {"id", "text", "page", "pages"} for item in out)
+    assert all("bm25_score" not in item for item in out)  # no score leakage
 
 
 def test_candidate_pool_is_larger_than_context(monkeypatch):

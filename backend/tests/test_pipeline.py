@@ -328,8 +328,9 @@ def test_single_pass_long_retrieves_more_context(monkeypatch):
     captured = {}
 
     class SpyRetriever:
-        def __init__(self, text):
+        def __init__(self, text, spans=None):
             self.texts = ["chunk"] * 30
+            self.chunks_meta = []
         def sample(self, n=16000):
             return "sample text"
         def retrieve(self, query, k=None):

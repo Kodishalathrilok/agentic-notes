@@ -205,3 +205,70 @@ def test_gemini_post_uses_sse_endpoint_when_streaming(monkeypatch):
     assert seen["url"].endswith(":streamGenerateContent")
     assert seen["params"]["alt"] == "sse"
     assert seen["stream"] is True
+
+
+# ---------------------------------------------------------------------------
+# Grounding: does the cited evidence actually support the claim?
+# ---------------------------------------------------------------------------
+
+def test_claim_lines_only_picks_up_cited_lines():
+    import agent
+    notes = "## Heading\n- supported point [3]\n- another [1][2]\nplain prose line\n"
+    got = agent._claim_lines(notes)
+    assert [ids for _, _, ids in got] == [[3], [1, 2]]
+    assert [i for i, _, _ in got] == [1, 2]
+
+
+def test_unsupported_claim_is_removed_and_supported_kept(monkeypatch):
+    """The failure this exists for: a claim whose citation resolves to a real
+    page that does not actually say it."""
+    import agent
+    monkeypatch.setattr(
+        agent, "_verify_batch",
+        lambda items, cm, model=None: {1: ("unsupported", ""), 2: ("supported", "")},
+    )
+    notes = "- invented roles [7]\n- a real result [7]"
+    out, stats = agent.verify_claim_support(notes, {7: {"text": "x", "page": 7}})
+    assert "invented roles" not in out
+    assert "a real result" in out
+    assert stats["removed"] == 1 and stats["unjudged"] == 0
+
+
+def test_partial_claim_is_rewritten_not_deleted(monkeypatch):
+    import agent
+    monkeypatch.setattr(
+        agent, "_verify_batch",
+        lambda items, cm, model=None: {1: ("partial", "- debate improved results [7]")},
+    )
+    out, stats = agent.verify_claim_support(
+        "- debate uses four named roles and improved results [7]",
+        {7: {"text": "x", "page": 7}},
+    )
+    assert "four named roles" not in out and "improved results [7]" in out
+    assert stats["rewritten"] == 1
+
+
+def test_grounding_fails_open_when_the_model_errors(monkeypatch):
+    """A broken check must never silently gut the notes."""
+    import agent
+
+    def boom(*a, **k):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(agent, "_verify_batch", boom)
+    notes = "- a claim [7]\n- another [7]"
+    out, stats = agent.verify_claim_support(notes, {7: {"text": "x", "page": 7}})
+    assert out == notes
+    assert stats["unjudged"] == 2 and stats["removed"] == 0
+
+
+def test_partial_rewrite_without_a_citation_is_ignored(monkeypatch):
+    """A 'fix' that drops the citation would strip provenance, so it is refused."""
+    import agent
+    monkeypatch.setattr(
+        agent, "_verify_batch",
+        lambda items, cm, model=None: {1: ("partial", "no citation here")},
+    )
+    notes = "- a claim [7]"
+    out, _ = agent.verify_claim_support(notes, {7: {"text": "x", "page": 7}})
+    assert out == notes

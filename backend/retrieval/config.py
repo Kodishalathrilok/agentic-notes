@@ -14,6 +14,10 @@ class RetrievalConfig:
     initial_retrieval_k: int = 30  # candidates pulled per method and fused (pool)
     final_context_k: int = 8  # chunks handed to the LLM
     rrf_k: int = 60  # Reciprocal Rank Fusion constant
+    # The chunker's target size. Retrieval multiplies it by final_context_k to
+    # get a CHARACTER budget for the context, so page-bounded chunks (which can
+    # be much smaller than the target) don't shrink the writer's evidence.
+    chunk_target_chars: int = 700
 
     @classmethod
     def from_env(cls) -> "RetrievalConfig":
@@ -31,6 +35,7 @@ class RetrievalConfig:
             initial_retrieval_k=_int("INITIAL_RETRIEVAL_K", 30),
             final_context_k=_int("FINAL_CONTEXT_K", 8),
             rrf_k=_int("RRF_K", 60),
+            chunk_target_chars=_int("CHUNK_TARGET_CHARS", 700),
         )
 
     def with_mode(self, mode: str) -> "RetrievalConfig":
@@ -42,4 +47,5 @@ class RetrievalConfig:
             initial_retrieval_k=self.initial_retrieval_k,
             final_context_k=self.final_context_k,
             rrf_k=self.rrf_k,
+            chunk_target_chars=self.chunk_target_chars,
         )

@@ -102,3 +102,75 @@ def test_chunks_map_back_to_the_page_containing_their_text():
             assert markers[page] in chunk["text"]
             checked += 1
     assert checked > 0, "no single-page chunks were produced to verify"
+
+
+# ---------------------------------------------------------------------------
+# Page-bounded chunking: the fix for citations landing 1-3 pages early
+# ---------------------------------------------------------------------------
+
+def _slide_deck(n=30, words=40):
+    """Short pages, like a slide deck — the shape that exposed the bug. A 700
+    char chunk used to cover ~3 of these and got labelled with the first."""
+    return [f"Slide {i} heading. " + " ".join(f"w{i}x{j}" for j in range(words))
+            for i in range(1, n + 1)]
+
+
+def test_no_chunk_ever_straddles_a_page_boundary():
+    pages = _slide_deck()
+    spans = page_spans(pages)
+    for chunk in chunk_document(_joined(pages), spans=spans):
+        first = page_for_offset(spans, chunk["start_offset"])
+        last = page_for_offset(spans, chunk["end_offset"] - 1)
+        assert first == last == chunk["page"]
+
+
+def test_every_chunk_page_is_the_page_its_text_sits_in():
+    """The regression that mattered: a chunk labelled with a page it only
+    partly overlaps. Each chunk's text must appear inside its own page."""
+    pages = _slide_deck()
+    spans = page_spans(pages)
+    for chunk in chunk_document(_joined(pages), spans=spans):
+        page_text = normalize(pages[chunk["page"] - 1])
+        assert chunk["text"] in page_text
+
+
+def test_all_pages_are_represented():
+    pages = _slide_deck()
+    got = {c["page"] for c in chunk_document(_joined(pages), spans=page_spans(pages))}
+    assert got == set(range(1, len(pages) + 1))
+
+
+def test_long_page_splits_into_several_chunks_on_the_same_page():
+    pages = ["Alpha " * 600, "Beta short page"]
+    chunks = chunk_document(_joined(pages), spans=page_spans(pages))
+    page_one = [c for c in chunks if c["page"] == 1]
+    assert len(page_one) > 1, "a page longer than target_chars should split"
+    assert all(c["page"] == 1 for c in page_one)
+
+
+def test_blank_pages_are_skipped_without_shifting_pages():
+    pages = ["Alpha content here", "   ", "Beta content here", "", "Gamma content here"]
+    chunks = chunk_document(_joined(pages), spans=page_spans(pages))
+    by_page = {c["page"]: c["text"] for c in chunks}
+    assert "Alpha" in by_page[1] and "Beta" in by_page[3] and "Gamma" in by_page[5]
+    assert 2 not in by_page and 4 not in by_page
+
+
+def test_without_spans_behaviour_is_unchanged():
+    """Pasted text / URLs / transcripts have no pages and must not regress."""
+    doc = _joined(_slide_deck())
+    plain = chunk_document(doc)
+    assert all("page" not in c for c in plain)
+    assert [c["text"] for c in plain] == [c["text"] for c in chunk_document(doc, spans=None)]
+
+
+def test_stale_spans_are_ignored_rather_than_mislabelling():
+    """If the user edits the extracted text, the spans no longer describe it.
+    Citing pages from stale spans would be confidently wrong, so the chunker
+    falls back to unpaged chunks and the UI cites passage numbers instead."""
+    pages = _slide_deck(n=5)
+    spans = page_spans(pages)
+    edited = _joined(pages) + " an extra sentence the user typed in later"
+    chunks = chunk_document(edited, spans=spans)
+    assert all("page" not in c for c in chunks)
+
