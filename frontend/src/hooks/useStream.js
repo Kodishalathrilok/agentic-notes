@@ -87,7 +87,7 @@ export default function useStream() {
           onFlashcardsDone && onFlashcardsDone(event.content)
           break
         case 'done':
-          onDone && onDone()
+          onDone && onDone(event.data)
           break
         case 'error':
           setError(event.content)

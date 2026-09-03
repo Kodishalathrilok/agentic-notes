@@ -26,6 +26,9 @@ function rowToSession(r) {
     quiz: r.quiz || '',
     flashcards: r.flashcards || '',
     sources: r.sources || [],
+    // Not a DB column: rows saved server-side carry the incomplete-coverage
+    // notice in `notes` itself, so nothing is lost without a schema change.
+    coverage: r.coverage || null,
     is_public: r.is_public,
   }
 }

@@ -63,7 +63,7 @@ def test_oversized_notes_skip_revision(monkeypatch):
             return '{"academic": true, "subject": "test", "reason": ""}'
         return '{"academic": true, "subject": "test", "reason": ""}'
 
-    def fake_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+    def fake_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
         # Emit enough to exceed NOTES_REWRITE_CAP overall across sections.
         for _ in range(120):
             yield big_chunk

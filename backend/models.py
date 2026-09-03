@@ -674,6 +674,39 @@ def _dispatch_stream(prov, prompt, max_tokens, model, temperature):
         yield from _stream_ollama(prompt, max_tokens, temperature)
 
 
+def _served_model(prov: str, target: str) -> str:
+    """The model id a provider actually sends for `target`."""
+    if prov == "nvidia":
+        return _nvidia_model(target)
+    if prov == "gemini":
+        return _gemini_model(target)
+    return OLLAMA_MODEL
+
+
+def _fallback_reason(errors) -> str:
+    """Short non-secret slug for why the first provider did not serve.
+
+    Built from the exception TYPE and provider only — never the message, which
+    can carry a URL with a key in it.
+    """
+    if not errors:
+        return ""
+    prov, exc = errors[0]
+    kind = type(exc).__name__
+    text = str(exc).lower()
+    if "output" in text and "produc" in text or "empty completion" in text:
+        kind = "empty_response"
+    elif "429" in text:
+        kind = "rate_limited"
+    elif "503" in text:
+        kind = "overloaded"
+    elif "404" in text or "410" in text:
+        kind = "model_unavailable"
+    elif "401" in text or "403" in text:
+        kind = "auth_rejected"
+    return f"{prov}_{kind}".lower()
+
+
 def _providers_failed(errors) -> RuntimeError:
     """Build an actionable error. Reports each configured provider's real reason
     (hosted ones first — a dead local Ollama fallback shouldn't hide the cause)."""
@@ -687,8 +720,15 @@ def _providers_failed(errors) -> RuntimeError:
     return RuntimeError(f"All model providers failed — {detail}")
 
 
-def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
-    """Call the chosen provider, failing over to the next available one on error."""
+def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False,
+               on_serve=None):
+    """Call the chosen provider, failing over to the next available one on error.
+
+    `on_serve(provider, model, fallback_used, reason)` fires once, with the
+    provider that ACTUALLY produced the text. Passed explicitly rather than
+    stored globally because sections are written concurrently — a module-level
+    'last provider' would be a race.
+    """
     target = resolve_model(model)
     errors = []
     for prov in _failover_chain(_provider_for(target)):
@@ -701,6 +741,8 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
             print(f"[models] {prov} call failed ({_safe(exc)}); trying next provider.")
             continue
         if out and out.strip():
+            if on_serve:
+                on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
             return out
         # Same failure mode as the streaming path: an empty completion means
         # the provider gave us nothing usable (overloaded, or a reasoning model
@@ -711,8 +753,12 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
     raise _providers_failed(errors)
 
 
-def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
-    """Stream from the chosen provider; fail over if it errors before any output."""
+def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+    """Stream from the chosen provider; fail over if it errors before any output.
+
+    `on_serve` fires on the FIRST delta — once a provider has emitted output it
+    is the one serving this call, even if it later breaks mid-stream.
+    """
     target = resolve_model(model)
     errors = []
     for prov in _failover_chain(_provider_for(target)):
@@ -721,6 +767,8 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
         yielded = False
         try:
             for delta in _dispatch_stream(prov, prompt, max_tokens, target, temperature):
+                if not yielded and on_serve:
+                    on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
                 yielded = True
                 yield delta
         except Exception as exc:  # noqa: BLE001

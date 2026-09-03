@@ -25,7 +25,10 @@ MAX_REVISION_ROUNDS = 2  # cap revision passes to bound latency
 # (map-reduce) — each outline section gets its own retrieval over the whole
 # document, so no part of a large source is left out.
 SECTION_DOC_THRESHOLD = 12000  # chars
-SECTION_RETRIEVAL_K = 6  # chunks retrieved per section
+# SUPERSEDED by COVERAGE_SUPPLEMENT_K: sections are document windows now, and
+# retrieval supplements a window rather than defining it. Kept so an existing
+# deployment setting it does not break on import.
+SECTION_RETRIEVAL_K = 6
 
 # Single-pass (small-doc) path: how many chunks the writer sees, scaled by the
 # requested length. The old fixed k=8 (~5.6k chars) starved "long" notes — the
@@ -39,6 +42,8 @@ SINGLE_PASS_K = {
 }
 # Cap sections so a very large doc can't fire an unbounded burst of model calls
 # (protects free-tier rate limits). Override with SECTION_MAX_COUNT.
+# SUPERSEDED by COVERAGE_MAX_WINDOWS, which bounds generation calls the same
+# way. Kept for import compatibility.
 SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
 # How many sections are written CONCURRENTLY on the map-reduce path. Sections
 # are independent (each has its own retrieved context), so overlapping the
@@ -61,6 +66,186 @@ CORRECTIVE_K_PER_TOPIC = 3  # chunks retrieved per missing topic
 DIGEST_DOC_THRESHOLD = int(os.getenv("DIGEST_DOC_THRESHOLD", "60000"))
 DIGEST_SEGMENT_CHARS = 25000
 DIGEST_MAX_SEGMENTS = 12  # 12 x 25k = full coverage of the 300k input cap
+
+
+# ---------------------------------------------------------------------------
+# Document coverage: windows that PARTITION the source
+# ---------------------------------------------------------------------------
+#
+# The sectioned writer used to build its context from one retrieval per outline
+# topic, so the most a large document could ever show the writer was
+# SECTION_MAX_COUNT x SECTION_RETRIEVAL_K chunks — 48, whatever the document's
+# size. Measured on synthetic documents: 78% of chunks at 10 pages, 23% at 40,
+# 9% at 100, 4% at 200. Whether a passage was seen depended on how a handful of
+# queries happened to rank it.
+#
+# Windows fix that structurally. Every chunk belongs to exactly one window and
+# every window is written, so covering the document stops being a retrieval
+# outcome and becomes an arithmetic one. Retrieval still runs — it adds
+# cross-section evidence to each window — but it no longer decides what exists.
+
+# Cost is bounded by the NUMBER of windows, not their size: each window is one
+# generation call. A bigger document therefore gets BIGGER windows rather than
+# more of them, which is where a large provider context window actually earns
+# its keep.
+COVERAGE_MAX_WINDOWS = int(os.getenv("COVERAGE_MAX_WINDOWS", "12"))
+COVERAGE_WINDOW_CHARS = int(os.getenv("COVERAGE_WINDOW_CHARS", "6000"))
+# Supplemental retrieval per window: related material from ELSEWHERE in the
+# document (a definition introduced in an earlier section, say).
+COVERAGE_SUPPLEMENT_K = int(os.getenv("COVERAGE_SUPPLEMENT_K", "3"))
+
+# HARD ceiling on the rendered context handed to ONE window write, in chars.
+#
+# This is the budget windows are BUILT to fit, not a slice applied afterwards.
+# The writer used to end its prompt with `context[:16000]`, so a window could be
+# assigned pages 1-17 and forward only pages 1-5 - selection coverage of 100%
+# with writer coverage of 62%. Silent, and invisible to every test because the
+# tests stopped at selection.
+#
+# 40000 is derived, not guessed:
+#   - the single-pass writer has shipped with 40000 chars of context on these
+#     same providers and models, so that much input is proven in production;
+#   - worst-case prompt scaffolding measured at 3600 chars (longest doc-type
+#     rule, full checklist, custom instructions), so a full prompt is ~43600
+#     chars, about 10900 tokens;
+#   - output is reserved separately: SECTION_MAX_TOKENS tops out at 1600 plus
+#     1024 reasoning headroom = 2624 tokens;
+#   - NVIDIA accepted ~400K prompt tokens in testing and Gemini 3.6 Flash
+#     carries 1M, so this uses roughly 2.7% of the smaller proven figure.
+# The headroom is deliberate: the point is that a window NEVER overflows, not
+# that it uses as much of the provider as it can.
+WRITER_CONTEXT_CHARS = int(os.getenv("WRITER_CONTEXT_CHARS", "40000"))
+
+# _format_context renders each chunk as "[id] text" joined by a blank line, so
+# budgeting on raw text alone would under-count. 12 covers a 4-digit id, the
+# brackets, a space and the separator.
+_CHUNK_RENDER_CHARS = 12
+# Supplements are optional extras; reserving room for them keeps them from
+# pushing a window over budget, so a window always fits its OWN pages.
+_SUPPLEMENT_RESERVE = COVERAGE_SUPPLEMENT_K * 1000
+
+
+class _WindowProducedNothing(RuntimeError):
+    """Every provider returned an empty stream for this window."""
+
+
+def _failure_slug(exc) -> str:
+    """Non-secret failure category for the coverage record.
+
+    Derived from the exception TYPE only. Provider messages routinely carry the
+    request URL, which carries an API key, so they must never reach the client.
+    """
+    if isinstance(exc, _WindowProducedNothing):
+        return "empty_output"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return type(exc).__name__.lower()
+
+
+def _page_ranges(pages) -> str:
+    """Render [3,4,6,7,8] as '3-4, 6-8' for a human-readable gap notice."""
+    runs = []
+    for pg in sorted(set(pages)):
+        if runs and pg == runs[-1][1] + 1:
+            runs[-1][1] = pg
+        else:
+            runs.append([pg, pg])
+    return ", ".join(str(a) if a == b else f"{a}\u2013{b}" for a, b in runs)
+
+
+def _window_title(chunks, index, total):
+    """Name a window by the pages it covers — a claim about the document, not
+    about its subject, so it cannot mislabel the content."""
+    pages = sorted({c["page"] for c in chunks if c.get("page")})
+    if not pages:
+        return f"Part {index} of {total}"
+    if pages[0] == pages[-1]:
+        return f"Page {pages[0]}"
+    return f"Pages {pages[0]}–{pages[-1]}"
+
+
+def _document_windows(chunks_meta, max_windows=None, window_chars=None,
+                      max_chars=None):
+    """Partition chunks into contiguous, document-ordered windows.
+
+    Returns [(title, [chunk...])]. Every chunk appears in exactly one window.
+
+    The per-window budget grows with the document so the call count stays
+    bounded: a 200-page source becomes a dozen large windows rather than a
+    hundred small ones.
+    """
+    chunks = sorted(chunks_meta, key=lambda c: c["chunk_id"])
+    if not chunks:
+        return []
+
+    max_windows = max_windows or COVERAGE_MAX_WINDOWS
+    window_chars = window_chars or COVERAGE_WINDOW_CHARS
+    budget = max_chars or (WRITER_CONTEXT_CHARS - _SUPPLEMENT_RESERVE)
+    total = sum(len(c["text"]) + _CHUNK_RENDER_CHARS for c in chunks)
+    target = max(window_chars, -(-total // max(1, max_windows)))
+
+    # The budget is a HARD ceiling. When splitting into max_windows would make
+    # windows larger than the writer can accept, the window COUNT grows instead:
+    # the overflow moves into another window that is actually written, which is
+    # the whole point. Capping the count here is what used to force the last
+    # window to absorb the remainder and then lose it to the prompt slice.
+    bounded = target > budget
+    if bounded:
+        target = budget
+    limit = None if bounded else max_windows
+
+    windows, current, used = [], [], 0
+    for chunk in chunks:
+        size = len(chunk["text"]) + _CHUNK_RENDER_CHARS
+        # Break BEFORE adding when the window is already full, so a single
+        # oversized chunk still gets a window of its own rather than being lost.
+        if current and used + size > target and (limit is None or len(windows) < limit - 1):
+            windows.append(current)
+            current, used = [], 0
+        current.append(chunk)
+        used += size
+    if current:
+        windows.append(current)
+
+    return [(_window_title(w, i, len(windows)), w) for i, w in enumerate(windows, 1)]
+
+
+def _window_context(window_chunks, retriever, mode, supplement_k=None,
+                    max_chars=None):
+    """A window's own chunks (guaranteed) plus related evidence from elsewhere.
+
+    The window's own material is never displaced by retrieval; supplements are
+    appended and de-duplicated. If retrieval fails — a Gemini 429 degrades the
+    hybrid retriever to BM25, and even that could return nothing — the window
+    still has its own chunks, so a section can never vanish because embeddings
+    were unavailable.
+    """
+    supplement_k = COVERAGE_SUPPLEMENT_K if supplement_k is None else supplement_k
+    budget = max_chars or WRITER_CONTEXT_CHARS
+    by_id = {c["chunk_id"]: {"id": c["chunk_id"], "text": c["text"],
+                             "page": c.get("page"), "pages": c.get("pages") or []}
+             for c in window_chunks}
+    own_ids = set(by_id)
+    used = sum(len(c["text"]) + _CHUNK_RENDER_CHARS for c in window_chunks)
+
+    if supplement_k > 0 and retriever is not None:
+        query = " ".join(c["text"][:200] for c in window_chunks[:3])
+        try:
+            for c in retriever.retrieve(f"{query} — {mode}", k=supplement_k) or []:
+                if c["id"] in own_ids:
+                    continue
+                size = len(c["text"]) + _CHUNK_RENDER_CHARS
+                # Supplements are a bonus; the window's own pages are the
+                # contract. Stop adding rather than push the window over budget.
+                if used + size > budget:
+                    break
+                by_id[c["id"]] = c
+                used += size
+        except Exception as exc:  # noqa: BLE001
+            print(f"[coverage] supplemental retrieval failed ({exc}); "
+                  f"window keeps its own chunks.")
+
+    return [by_id[i] for i in sorted(by_id)]
 
 
 def _format_context(chunks) -> str:
@@ -149,29 +334,97 @@ def validate_citations(notes: str, chunk_map, page_count: int = 0) -> str:
 # was being asked -- so a claim could carry a perfectly resolving citation to
 # a page that never makes it.
 
-def _claim_lines(notes):
-    """Notes lines that carry at least one [n] citation, with their ids.
+# A line is checked because it ASSERTS something, not because it happens to
+# carry a citation. Selecting on "[n]" was a hole: an invented claim with no
+# citation was invisible to this check AND to validate_citations, so nothing
+# looked at it at all.
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+_RULE_RE = re.compile(r"^\s*([-*_]\s*){3,}$")
+_ALL_BOLD_RE = re.compile(r"^\*\*[^*]+\*\*:?$")
+_BULLET_PREFIX = " \t-*•>0123456789.)"
 
-    Returns [(line_index, text, [cited ids])]. Uncited lines are headings and
-    scaffolding — nothing to verify against, so they are left alone.
+# Below this, a line is a label or fragment rather than an assertion.
+MIN_CLAIM_WORDS = int(os.getenv("GROUNDING_MIN_CLAIM_WORDS", "5"))
+
+
+def _strip_markup(line: str) -> str:
+    """The claim text: bullet/number prefix, citations and emphasis removed."""
+    body = _CITATION_RE.sub("", line).strip().lstrip(_BULLET_PREFIX).strip()
+    return body.replace("**", "").replace("`", "").strip()
+
+
+def _is_structural(line: str) -> bool:
+    """Headings, rules and short labels carry no factual assertion.
+
+    These are excluded even when they carry a citation — a section title is not
+    a claim, and spending verifier budget on it (or worse, deleting it) is wrong.
+    """
+    raw = line.strip()
+    if not raw:
+        return True
+    if _MD_HEADING_RE.match(raw) or _RULE_RE.match(raw):
+        return True
+    body = _strip_markup(line)
+    if not body:
+        return True
+    # "**Unit 2: Data Structures**" — a fully emphasised line is a heading.
+    if _ALL_BOLD_RE.match(raw.lstrip(_BULLET_PREFIX).strip()):
+        return True
+    # "Lists:" / "Sets & frozensets" — a short label introducing what follows.
+    if len(body.split()) < MIN_CLAIM_WORDS:
+        return True
+    return False
+
+
+def _claim_lines(notes):
+    """Substantive claim lines, with any citation ids they carry.
+
+    Returns [(line_index, text, [cited ids])]; ids may be empty — an uncited
+    line is still checked, against the full source rather than a named passage.
     """
     out = []
     for i, raw in enumerate((notes or "").split("\n")):
         ids = [int(m) for m in _CITATION_RE.findall(raw)]
-        if ids:
-            out.append((i, raw, list(dict.fromkeys(ids))))
+        if _is_structural(raw):
+            continue
+        out.append((i, raw, list(dict.fromkeys(ids))))
     return out
 
 
+# How much of the source is shown for judging UNCITED claims. They name no
+# passage, so the whole retrieved context is the evidence — the same material
+# the writer saw, so anything absent from it was not in the document.
+GROUNDING_SOURCE_CHARS = int(os.getenv("GROUNDING_SOURCE_CHARS", "14000"))
+
+
 def _evidence_block(items, chunk_map):
+    """Per-claim evidence: the passages it cites, or 'the whole source'."""
     blocks = []
     for n, (_, text, ids) in enumerate(items, start=1):
-        claim = _CITATION_RE.sub("", text).strip(" -•\t")
-        evidence = "\n".join(
-            f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}" for i in ids
-        )
+        claim = _strip_markup(text)
+        if ids:
+            evidence = "\n".join(
+                f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}" for i in ids
+            )
+        else:
+            evidence = "  (no passage cited — judge against FULL SOURCE below)"
         blocks.append(f"CLAIM {n}: {claim}\nEVIDENCE:\n{evidence}")
     return "\n\n".join(blocks)
+
+
+def _full_source_block(items, chunk_map):
+    """The whole retrieved context, included only when some claim is uncited."""
+    if all(ids for _, _, ids in items):
+        return ""
+    body = "\n".join(
+        f"[{cid}] {(chunk or {}).get('text', '')}"
+        for cid, chunk in sorted((chunk_map or {}).items(), key=lambda kv: kv[0])
+    )
+    return (
+        "\n\nFULL SOURCE — every passage retrieved from the document. A claim "
+        "with no cited passage must be judged against this, and ONLY this:\n"
+        f"\"\"\"{body[:GROUNDING_SOURCE_CHARS]}\"\"\"\n"
+    )
 
 
 def _verify_batch(items, chunk_map, model=None):
@@ -193,13 +446,18 @@ evidence shown with it actually states or directly entails it.
 - "unsupported": the evidence does not state this at all. Evidence merely being
   ABOUT the topic is not support.
 
+A claim whose EVIDENCE says "no passage cited" is judged against the FULL
+SOURCE. If the source does not contain it, it is "unsupported" — however true
+or standard the statement is. Terminology, syntax, code examples and technique
+names that do not appear in the source are NOT supported by it.
+
 Judge only against the evidence shown. Do not use outside knowledge.
 Return a verdict for EVERY claim.
 
 Respond with ONLY JSON:
 {{"verdicts": [{{"n": 1, "status": "supported"}}]}}
 
-{_evidence_block(items, chunk_map)}"""
+{_evidence_block(items, chunk_map)}{_full_source_block(items, chunk_map)}"""
 
     data = safe_json(call_model(verdict_prompt, max_tokens=900, model=model,
                                 temperature=0.0, json_mode=True))
@@ -241,6 +499,18 @@ Respond with ONLY JSON:
     return out
 
 
+def _keeps_provenance(original: str, fix: str) -> bool:
+    """A repair may not throw away a citation the claim already had.
+
+    Losing provenance is worse than leaving a slightly over-reaching claim,
+    so such a fix is refused. A claim that never carried a citation has none
+    to lose, and its repair is accepted as written.
+    """
+    if not _CITATION_RE.search(original):
+        return True
+    return bool(_CITATION_RE.search(fix))
+
+
 def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
     """Drop or repair claims their own cited evidence does not support.
 
@@ -280,11 +550,11 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
             stats["removed"] += 1
             if CITATION_DEBUG:
                 print(f"[grounding] REMOVED unsupported: {original.strip()[:90]}")
-        elif status == "partial" and fix.strip() and _CITATION_RE.search(fix):
+        elif status == "partial" and fix.strip() and _keeps_provenance(original, fix):
             # Keep the original leading markup (bullet, indent) so the rewrite
             # doesn't fall out of the surrounding list.
             prefix = original[:len(original) - len(original.lstrip(" -•\t"))]
-            lines[line_i] = prefix + fix.strip()
+            lines[line_i] = prefix + fix.strip().lstrip("-•").lstrip()
             stats["rewritten"] += 1
             if CITATION_DEBUG:
                 print(f"[grounding] REWROTE partial: {original.strip()[:70]}")
@@ -331,6 +601,65 @@ def _notes_excerpt(notes: str, max_chars: int) -> str:
     # notes is always represented.
     parts.append(notes[-seg:])
     return "\n[...]\n".join(p for p in parts if p)
+
+
+# Document genre. The gatekeeper already asks "is this academic?"; it now also
+# reports what KIND of document it is, because a question bank and a lecture
+# handout are both academic and must not be written up the same way.
+#
+# The vocabulary is deliberately small at the point where behaviour branches:
+# every task-shaped genre maps to one writing mode. The finer label is kept for
+# display and for future use.
+TASK_DOC_TYPES = frozenset(
+    {"question_bank", "assignment", "exam", "worksheet", "syllabus"}
+)
+KNOWN_DOC_TYPES = frozenset(
+    {"explanatory", "mixed", "other"} | TASK_DOC_TYPES
+)
+
+
+def is_task_document(doc_type: str) -> bool:
+    return (doc_type or "").strip().lower() in TASK_DOC_TYPES
+
+
+_TASK_RULE = """
+DOCUMENT TYPE — this source is a list of TASKS/QUESTIONS, not a set of
+explanations. It tells the learner what to DO; it does not teach the concepts.
+Write accordingly:
+- Organise and group what the document ASKS FOR. Preserve its unit/section
+  structure and numbering where it has one.
+- Name the topic each task covers ("Topic covered: single inheritance"), rather
+  than explaining that topic.
+- Do NOT convert a task into a statement of fact. "Write a program to implement
+  single inheritance" must NOT become "Single inheritance lets one class inherit
+  from another" — true or not, the document did not say it.
+- Do NOT add definitions, worked examples, code snippets, syntax, or technical
+  terminology the document does not itself contain. If a term does not appear in
+  the CONTEXT, do not introduce it.
+- The reader must be able to tell what the DOCUMENT contains from what you
+  write. Never imply it explained something it only asked for.
+"""
+
+_MIXED_RULE = """
+DOCUMENT TYPE — this source MIXES explanation with exercises/questions. Keep the
+two apart:
+- Explanatory passages become normal study notes.
+- Tasks and questions are reported as tasks ("the document asks the learner
+  to…"), never rewritten into statements of fact.
+- Do not use an explanation from your own knowledge to fill in what a task only
+  names.
+"""
+
+
+def _doc_type_rule(doc_type: str) -> str:
+    """Writer instruction for this genre. Explanatory returns "" so the
+    existing behaviour for ordinary lecture/textbook PDFs is byte-identical."""
+    dt = (doc_type or "explanatory").strip().lower()
+    if is_task_document(dt):
+        return _TASK_RULE
+    if dt == "mixed":
+        return _MIXED_RULE
+    return ""
 
 
 _CITE_RULE = (
@@ -541,7 +870,8 @@ SOURCE:
 # Agent: Write (prompt builder + streaming)
 # ---------------------------------------------------------------------------
 
-def _write_prompt(context, mode, tone, length, fmt, plan, instructions="") -> str:
+def _write_prompt(context, mode, tone, length, fmt, plan, instructions="",
+                  doc_type="explanatory") -> str:
     outline = plan.get("outline", [])
     checklist = plan.get("checklist", [])
     outline_str = "\n".join(f"- {o}" for o in outline) if outline else "- (derive a sensible outline)"
@@ -582,6 +912,7 @@ Make sure you cover these points:
 {checklist_str}
 
 {_format_instructions(fmt)}
+{_doc_type_rule(doc_type)}
 {_CITE_RULE}
 {_instr_block(instructions)}
 Write ONLY the notes themselves — no preamble, no closing remarks.
@@ -598,12 +929,14 @@ def write_notes(context, mode, tone, length, fmt, plan, model=None, instructions
     )
 
 
-def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instructions=""):
+def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instructions="",
+                       doc_type="explanatory", on_serve=None):
     yield from call_model_stream(
-        _write_prompt(context, mode, tone, length, fmt, plan, instructions),
+        _write_prompt(context, mode, tone, length, fmt, plan, instructions, doc_type=doc_type),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.5,
+        on_serve=on_serve,
     )
 
 
@@ -611,14 +944,45 @@ def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instr
 # Agent: Section writer (map-reduce path for long documents)
 # ---------------------------------------------------------------------------
 
-def write_section_stream(section, context, mode, tone, length, fmt, checklist=None, model=None, instructions=""):
-    """Write ONE outline section from its own retrieved context (streamed)."""
+def write_section_stream(section, context, mode, tone, length, fmt, checklist=None, model=None,
+                         instructions="", doc_type="explanatory", on_serve=None,
+                         is_part=False):
+    """Write ONE unit of a larger set of notes from its own context (streamed).
+
+    `is_part` distinguishes the two callers. An outline section has a topical
+    title the writer can be told to write about; a coverage window is named by
+    the pages it spans, which is not a topic at all. Telling the model to write
+    'the section titled "Pages 8-10"' made one window narrate its own confusion
+    into the notes ("Now, I need to write the section..."), so a part gets a
+    prompt that describes the actual job.
+    """
     related = "\n".join(f"- {c}" for c in (checklist or [])[:6])
     words = SECTION_WORDS.get((length or "medium").lower(), "120-180 words")
 
-    prompt = f"""You are the WRITING agent producing ONE SECTION of a larger set of
+    # Windows are BUILT to fit WRITER_CONTEXT_CHARS, so this is unreachable by
+    # construction. If it ever fires, say so loudly and send the context in full
+    # anyway: dropping source the window promised to cover is the bug this
+    # replaces, and a silent fallback would reintroduce it.
+    if len(context) > WRITER_CONTEXT_CHARS:
+        print(f"[coverage] WARNING: window context is {len(context)} chars, over "
+              f"the {WRITER_CONTEXT_CHARS} budget; sending in full, not truncating.")
+
+    if is_part:
+        intro = f"""You are the WRITING agent producing ONE PART of a larger set of
+study notes. This part covers {section} of the source document. Write notes on
+the material in the CONTEXT below and nothing else.
+
+Give this part your own short topical headings taken from the material. Do NOT
+mention page numbers, part numbers, or these instructions in the notes, and do
+NOT narrate your own process — no "the passages show", no "I need to", no
+commentary about what you can or cannot find. Write the notes themselves, with
+no preamble."""
+    else:
+        intro = f"""You are the WRITING agent producing ONE SECTION of a larger set of
 study notes. Write ONLY the body of the section titled "{section}" — do NOT
-repeat the section title, do NOT write other sections, no preamble.
+repeat the section title, do NOT write other sections, no preamble."""
+
+    prompt = f"""{intro}
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
@@ -630,16 +994,18 @@ Cover any of these plan points that belong to this section:
 {related or '- (use your judgment)'}
 
 {_format_instructions(fmt)}
+{_doc_type_rule(doc_type)}
 {_CITE_RULE}
 {_instr_block(instructions)}
 CONTEXT (numbered passages retrieved for THIS section — cite these):
-{context[:16000]}"""
+{context}"""
 
     yield from call_model_stream(
         prompt,
         max_tokens=SECTION_MAX_TOKENS.get((length or "medium").lower(), 750),
         model=model,
         temperature=0.5,
+        on_serve=on_serve,
     )
 
 
@@ -801,12 +1167,14 @@ def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", 
     )
 
 
-def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium"):
+def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", context="",
+                        length="medium", on_serve=None):
     yield from call_model_stream(
         _revise_prompt(notes, critique, mode, plan, fmt, context, instructions),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.4,
+        on_serve=on_serve,
     )
 
 
@@ -1184,8 +1552,24 @@ REJECT material that is primarily: celebrity or entertainment trivia, gossip,
 sports results, product marketing/advertising, personal or casual content, or
 anything not intended for serious study.
 
+Also report what KIND of document it is, judged from the SOURCE itself:
+- "explanatory": teaches — definitions, explanations, worked examples (lecture
+  notes, textbook chapter, slides, article)
+- "question_bank": a list of questions/problems to solve
+- "assignment": tasks to complete and submit
+- "exam": an exam or test paper
+- "worksheet": practice exercises
+- "syllabus": a course/topic outline with no teaching
+- "mixed": substantial explanation AND substantial tasks/questions
+- "other": none of the above
+
+A document dominated by imperatives — "Write a program to…", "Define…",
+"Answer the following…", numbered tasks — is task-shaped, NOT explanatory,
+even when the subject matter is academic.
+
 Respond with ONLY a JSON object:
-{{"academic": true|false, "subject": "<subject or 'n/a'>", "reason": "<one short sentence>"}}
+{{"academic": true|false, "subject": "<subject or 'n/a'>",
+  "doc_type": "<one of the types above>", "reason": "<one short sentence>"}}
 
 SOURCE:
 \"\"\"{text[:4000]}\"\"\""""
@@ -1193,11 +1577,18 @@ SOURCE:
     data = safe_json(call_model(prompt, max_tokens=200, model=model, temperature=0.0, json_mode=True))
 
     # Permissive on parse failure — don't block legitimate content over a glitch.
+    # "explanatory" is the safe default for doc_type for the same reason: it is
+    # the behaviour that shipped before, so a classifier glitch cannot silently
+    # downgrade an ordinary lecture PDF.
     if not isinstance(data, dict) or "academic" not in data:
-        return {"academic": True, "subject": "n/a", "reason": ""}
+        return {"academic": True, "subject": "n/a", "doc_type": "explanatory", "reason": ""}
+    doc_type = str(data.get("doc_type", "explanatory") or "explanatory").strip().lower()
+    if doc_type not in KNOWN_DOC_TYPES:
+        doc_type = "explanatory"
     return {
         "academic": bool(data.get("academic", True)),
         "subject": data.get("subject", "n/a") or "n/a",
+        "doc_type": doc_type,
         "reason": data.get("reason", "") or "",
     }
 
@@ -1271,6 +1662,22 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
         # 0. Academic gatekeeper — this tool only handles study material.
         yield _emit("status", "gate", "Checking topic…")
         gate = classify_academic(text, model=helper)
+        doc_type = gate.get("doc_type", "explanatory")
+
+        # Which provider ACTUALLY produced the notes. Recorded from the writer
+        # and revise calls, so a silent failover to Gemini is visible instead of
+        # being indistinguishable from an NVIDIA success.
+        served = {}
+
+        def _record_serve(provider, served_model, fallback_used, reason):
+            served.update({
+                "provider": provider,
+                "model": served_model,
+                "fallback_used": bool(fallback_used),
+            })
+            if fallback_used and reason:
+                served["fallback_reason"] = reason
+
         if not gate.get("academic", True):
             yield _emit(
                 "blocked",
@@ -1279,6 +1686,9 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 gate,
             )
             return
+
+        if doc_type != "explanatory":
+            yield _emit("status", "gate", f"Detected document type: {doc_type.replace('_', ' ')}.")
 
         # Build the retrieval index over the source (RAG)
         # Spans make chunking page-bounded: a chunk is cut from inside one
@@ -1312,6 +1722,13 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
         )
         yield _emit("plan_done", "plan", "", plan)
 
+        # Coverage starts complete and is narrowed only by real failures, so
+        # every path - single-pass included - carries a definite answer.
+        _total_pages = len(page_spans or [])
+        coverage = {"complete": True, "total_pages": _total_pages,
+                    "processed_pages": _total_pages, "failed_pages": [],
+                    "failed_windows": []}
+
         active_fmt = fmt or plan.get("suggested_format", "bullet")
         outline = plan.get("outline", []) or ["Overview", "Key Concepts", "Summary"]
         checklist = plan.get("checklist", []) or []
@@ -1319,21 +1736,38 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
         # Long documents: MAP-REDUCE. Each outline section gets its OWN
         # retrieval across the whole document and is written from its own
         # context — so no part of a large source is left out.
-        sectioned = len(text) > SECTION_DOC_THRESHOLD and len(outline) >= 3
+        # Size alone decides. This used to also require len(outline) >= 3,
+        # which meant a terse plan could drop a 100-page document into the
+        # single-pass path and lose most of it. Windows no longer come from
+        # the outline, so the outline no longer gates coverage.
+        sectioned = len(text) > SECTION_DOC_THRESHOLD
 
         if sectioned:
-            # Bound the number of sections to keep model-call volume sane on
-            # free-tier providers (the writer still covers the whole doc).
-            write_outline = outline[:SECTION_MAX_COUNT]
-            # Retrieve per-section context up front; expose the union as sources.
+            # COVERAGE FIRST. Windows partition the document, so every chunk
+            # is written about exactly once; retrieval then ADDS related
+            # evidence from elsewhere. Previously each outline topic ran its own
+            # retrieval and the union was the writer's entire view of the
+            # source — capped at SECTION_MAX_COUNT x SECTION_RETRIEVAL_K chunks
+            # however large the document was (9% of a 100-page source, 4% of a
+            # 200-page one), and a passage no query ranked highly was simply
+            # never written about.
+            windows = _document_windows(retriever.chunks_meta)
             section_ctx = []
             chunk_map = {}
-            for sec in write_outline:
-                sec_chunks = retriever.retrieve(f"{sec} — {mode} study notes", k=SECTION_RETRIEVAL_K)
-                section_ctx.append((sec, sec_chunks))
-                for c in sec_chunks:
+            for title, win_chunks in windows:
+                ctx_chunks = _window_context(win_chunks, retriever, mode)
+                # The window's OWN pages - not the supplements, which belong to
+                # other windows - are what this window is responsible for, and
+                # therefore what is lost if it fails.
+                own_pages = sorted({c["page"] for c in win_chunks if c.get("page")})
+                section_ctx.append((title, ctx_chunks, own_pages))
+                for c in ctx_chunks:
                     chunk_map[c["id"]] = c
             all_chunks = [chunk_map[i] for i in sorted(chunk_map)]
+            yield _emit(
+                "status", "write",
+                f"Covering the whole document in {len(windows)} part(s)…",
+            )
             context = _format_context(all_chunks)
             yield _emit("sources", "write", "", _with_pages(all_chunks))
 
@@ -1349,42 +1783,118 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 return _emit("notes_delta", "write", s)
 
             def _write_worker(sec, ctx, out_q):
-                try:
-                    for delta in write_section_stream(
-                        sec, ctx, mode, tone, length, active_fmt,
-                        checklist=checklist, model=model, instructions=instructions,
-                    ):
-                        out_q.put(("delta", delta))
-                except Exception as exc:  # noqa: BLE001
-                    out_q.put(("error", exc))
-                finally:
-                    out_q.put(("end", None))
+                # A window that produces nothing is retried once. call_model_stream
+                # already fails over across providers, so reaching here means the
+                # whole chain came back empty or errored - usually transient (a 503,
+                # a truncated response). Observed live: two of six windows lost that
+                # way in one run, and a lost window is lost coverage, the one thing
+                # this milestone exists to prevent.
+                #
+                # Only a window that emitted NOTHING is retried, so a retry can
+                # never duplicate text the client has already been streamed.
+                err = None
+                for attempt in (1, 2):
+                    sent = False
+                    try:
+                        for delta in write_section_stream(
+                            sec, ctx, mode, tone, length, active_fmt,
+                            checklist=checklist, model=model, instructions=instructions,
+                            doc_type=doc_type, on_serve=_record_serve, is_part=True,
+                        ):
+                            sent = True
+                            out_q.put(("delta", delta))
+                    except Exception as exc:  # noqa: BLE001
+                        err = exc
+                        if sent:
+                            break  # partial output already streamed - do not redo it
+                        continue
+                    if sent:
+                        err = None
+                        break
+                    err = err or _WindowProducedNothing(
+                        f"no provider produced output for {sec}")
+                if err is not None:
+                    out_q.put(("error", err))
+                out_q.put(("end", None))
 
             queues = [_queue.Queue() for _ in section_ctx]
             pool = ThreadPoolExecutor(max_workers=max(1, SECTION_CONCURRENCY))
+            # One window is no longer one run. With up to COVERAGE_MAX_WINDOWS
+            # generation calls the chance that at least one hits a provider
+            # error is that many times higher, and raising would discard every
+            # other window's finished work. A failed window becomes a reported
+            # gap instead: losing one part beats losing all of them, and
+            # staying quiet about it would be worse than either.
+            failed = []
             try:
-                for (sec, sec_chunks), out_q in zip(section_ctx, queues):
+                for (sec, sec_chunks, _pp), out_q in zip(section_ctx, queues):
                     pool.submit(_write_worker, sec, _format_context(sec_chunks), out_q)
 
-                for i, ((sec, _sec_chunks), out_q) in enumerate(zip(section_ctx, queues), 1):
+                for i, ((sec, _sec_chunks, sec_pages), out_q) in enumerate(
+                        zip(section_ctx, queues), 1):
                     yield _emit(
                         "status", "write",
                         f"Writing section {i}/{len(section_ctx)}: {sec}…",
                     )
-                    yield _push(f"**{sec}:**\n")
+                    # No mechanical page-range heading: the writer supplies its
+                    # own topical headings, the status line above already names
+                    # the pages, and the citations carry page provenance.
+                    mark = len(parts)
+                    err = None
                     while True:
                         kind, payload = out_q.get()
                         if kind == "delta":
                             yield _push(payload)
                         elif kind == "error":
-                            raise payload
+                            err = payload
                         else:  # "end"
                             break
+                    if err is not None:
+                        failed.append({"window": sec, "pages": sec_pages,
+                                       "reason": _failure_slug(err)})
+                        print(f"[coverage] section {sec!r} failed to write: "
+                              f"{type(err).__name__}")
+                        if len(parts) == mark:
+                            # Nothing was written for this part at all.
+                            continue
                     yield _push("\n\n")
             finally:
                 # If the client disconnects mid-stream, cancel sections that
                 # haven't started; running ones finish into abandoned queues.
                 pool.shutdown(wait=False, cancel_futures=True)
+
+            # Durable coverage record. Until now a lost window survived only
+            # as a transient status message, so once the stream ended a run
+            # missing four pages was byte-for-byte indistinguishable from a
+            # complete one in history, export and share.
+            failed_titles = {f["window"] for f in failed}
+            done_pages, lost_pages = set(), set()
+            for _t, _c, pp in section_ctx:
+                (lost_pages if _t in failed_titles else done_pages).update(pp)
+            # A page straddling a window boundary can belong to two windows; if
+            # either wrote it, it is not lost.
+            lost_pages -= done_pages
+            coverage = {
+                "complete": not failed,
+                "total_pages": coverage["total_pages"],
+                "processed_pages": len(done_pages),
+                "failed_pages": sorted(lost_pages),
+                "failed_windows": failed,
+            }
+
+            if failed and len(failed) == len(section_ctx):
+                raise RuntimeError(
+                    "Every part of the document failed to generate. That is "
+                    "usually a transient provider problem rather than an issue "
+                    "with your source — please try again."
+                )
+            if failed:
+                yield _emit(
+                    "status", "write",
+                    f"{len(failed)} of {len(section_ctx)} part(s) could not be "
+                    f"completed ({', '.join(f['window'] for f in failed)}); "
+                    f"the rest of the notes are complete.",
+                )
 
             notes = "".join(parts).strip()
             if not notes:
@@ -1412,7 +1922,8 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             yield _emit("status", "write", "Writing notes...")
             parts = []
             for delta in write_notes_stream(
-                context, mode, tone, length, active_fmt, plan, model=model, instructions=instructions
+                context, mode, tone, length, active_fmt, plan, model=model,
+                instructions=instructions, doc_type=doc_type, on_serve=_record_serve,
             ):
                 parts.append(delta)
                 yield _emit("notes_delta", "write", delta)
@@ -1499,6 +2010,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 for delta in revise_notes_stream(
                     notes, critique, mode, plan, active_fmt, model=model,
                     instructions=instructions, context=context, length=revise_length,
+                    on_serve=_record_serve,
                 ):
                     parts.append(delta)
                     yield _emit("notes_delta", "revise", delta)
@@ -1596,7 +2108,32 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             yield _emit("flashcards_done", "flashcards", cards)
 
         # 12. Done
-        yield _emit("done", "complete", "All done!")
+        # Which provider actually served the notes. Only non-secret fields:
+        # provider name, model id, and a coarse reason slug.
+        # The artifact must not present itself as complete when it is not.
+        # This is deliberately the LAST edit to `notes`: the title, quiz and
+        # flashcards above are generated from the clean notes, and the banner
+        # then travels with the text into history, export and share - none of
+        # which carry the event stream.
+        if not coverage["complete"]:
+            where = (f"pages {_page_ranges(coverage['failed_pages'])}"
+                     if coverage["failed_pages"]
+                     else f"{len(coverage['failed_windows'])} part(s)")
+            notes = (
+                f"> **Incomplete coverage** \u2014 {where} could not be generated "
+                f"after retries. These notes cover the rest of the document.\n\n"
+                + notes
+            )
+            yield _emit("notes_revised", "revise", notes)
+
+        yield _emit("done", "complete", "All done!", {
+            "provider": served.get("provider"),
+            "model": served.get("model"),
+            "fallback_used": served.get("fallback_used", False),
+            "fallback_reason": served.get("fallback_reason"),
+            "doc_type": doc_type,
+            "coverage": coverage,
+        })
 
     except Exception as exc:  # noqa: BLE001
         yield _emit("error", "error", f"Pipeline error: {exc}")

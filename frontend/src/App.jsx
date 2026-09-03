@@ -73,6 +73,17 @@ const DEFAULT_SETTINGS = {
   instructions: '',
 }
 
+// Render [1,2,3,7] as "1-3, 7" so a long gap list stays readable.
+function formatPageList(pages) {
+  const runs = []
+  for (const p of [...new Set(pages)].sort((a, b) => a - b)) {
+    const last = runs[runs.length - 1]
+    if (last && p === last[1] + 1) last[1] = p
+    else runs.push([p, p])
+  }
+  return runs.map(([a, b]) => (a === b ? `${a}` : `${a}\u2013${b}`)).join(', ')
+}
+
 export default function App() {
   const { stream, isStreaming, cancel } = useStream()
 
@@ -141,6 +152,10 @@ export default function App() {
   const [generatedFrom, setGeneratedFrom] = useState('')
   const [notesBefore, setNotesBefore] = useState(null)
   const [sources, setSources] = useState([])
+  // Durable record of whether every page of the source was actually
+  // written. A run that lost a window used to be indistinguishable from
+  // a complete one once the status stream ended.
+  const [coverage, setCoverage] = useState(null)
   const [critique, setCritique] = useState(null)
   const [quiz, setQuiz] = useState('')
   const [flashcards, setFlashcards] = useState('')
@@ -376,7 +391,7 @@ export default function App() {
 
   // ----- History -----------------------------------------------------------
   const saveToHistory = useCallback(
-    (finalNotes, finalQuiz, finalCards, finalSources) => {
+    (finalNotes, finalQuiz, finalCards, finalSources, finalCoverage) => {
       if (!finalNotes) return
       addSession({
         id: Date.now().toString(),
@@ -389,6 +404,7 @@ export default function App() {
         quiz: finalQuiz,
         flashcards: finalCards,
         sources: finalSources || [],
+        coverage: finalCoverage || null,
       })
       showToast('Saved to history ✓')
     },
@@ -512,7 +528,9 @@ export default function App() {
           setFlashcards(text)
           setStep('flashcards', 'done')
         },
-        onDone: () => {
+        onDone: (data) => {
+          const cov = data?.coverage || null
+          setCoverage(cov)
           setAgentSteps((prev) =>
             prev.map((s) => (s.status === 'pending' || s.status === 'active' ? { ...s, status: 'done' } : s))
           )
@@ -522,7 +540,7 @@ export default function App() {
           if (last) runTimingsRef.current[last.step] = (Date.now() - last.at) / 1000
           stepStartRef.current = null
           recordRun(model || 'default', runTimingsRef.current)
-          saveToHistory(bufferRef.current, latestQuiz, latestCards, latestSources)
+          saveToHistory(bufferRef.current, latestQuiz, latestCards, latestSources, cov)
         },
         onError: (message) => {
           setError(message)
@@ -1094,6 +1112,20 @@ export default function App() {
                 tabIndex={0}
                 aria-busy={isStreaming}
               >
+                {activeTab === 'notes' && coverage && coverage.complete === false && (
+                  <div
+                    role="status"
+                    className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                  >
+                    <strong>Incomplete coverage.</strong>{' '}
+                    {coverage.processed_pages} of {coverage.total_pages} pages were
+                    written.{' '}
+                    {coverage.failed_pages?.length > 0
+                      ? `Missing: page${coverage.failed_pages.length > 1 ? 's' : ''} ${formatPageList(coverage.failed_pages)}.`
+                      : `${coverage.failed_windows?.length || 0} part(s) could not be generated.`}{' '}
+                    Re-generating usually fixes this.
+                  </div>
+                )}
                 {activeTab === 'notes' && (
                   <NotesOutput
                     notes={notes}

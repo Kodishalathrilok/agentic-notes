@@ -10,7 +10,10 @@ import threading
 import agent
 
 
-def _fake_call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False):
+def _fake_call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False,
+                     on_serve=None):
+    if on_serve:
+        on_serve("nvidia", "test-model", False, "")
     if "PLANNING agent" in prompt:
         return '{"outline":["A","B"],"checklist":["x"],"difficulty":"easy","suggested_format":"bullet"}'
     if "CRITIQUE agent" in prompt:
@@ -28,7 +31,9 @@ def _fake_call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_
     return "stub"
 
 
-def _fake_stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+def _fake_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+    if on_serve:
+        on_serve("nvidia", "test-model", False, "")
     yield "Some "
     yield "notes."
 
@@ -64,7 +69,7 @@ def test_long_document_uses_sectioned_writing(monkeypatch):
     streams = {"n": 0}
     lock = threading.Lock()
 
-    def stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
         with lock:  # sections are now written concurrently
             streams["n"] += 1
             n = streams["n"]
@@ -88,14 +93,23 @@ def test_long_document_uses_sectioned_writing(monkeypatch):
     assert types.count("sources") == 1  # one unified sources event
     notes = next(e["content"] for e in events if e["type"] == "notes_done")
 
-    # every outline section is present as a header, with its own written body
-    for sec in ("Alpha", "Beta", "Gamma"):
-        assert f"**{sec}:**" in notes
-    assert streams["n"] == 3  # one write stream per section
+    # Sections are now DOCUMENT WINDOWS, not outline topics: the writer covers
+    # the whole source by construction instead of by retrieval luck.
+    sources = next(e["data"] for e in events if e["type"] == "sources")
+    windows = [s for s in (e["content"] for e in events if e["type"] == "status")
+               if s.startswith("Writing section ")]
+    assert windows, "expected per-window progress messages"
+    assert streams["n"] == len(windows), "one write stream per window"
+    # Every window's body reaches the notes. (The mechanical page-range
+    # heading was dropped: the writer supplies its own topical headings,
+    # so "**Pages 1-3:**" above "**Pipeline Overview:**" was pure noise.)
+    for n in range(1, streams["n"] + 1):
+        assert f"body-{n}" in notes, f"window {n} missing from the notes"
 
-    # progress messages expose per-section status
+    # Coverage is the point: every chunk of the document reaches the writer.
+    assert len(sources) >= len(windows)
     statuses = [e["content"] for e in events if e["type"] == "status"]
-    assert any("section 2/3" in s for s in statuses)
+    assert any("Covering the whole document" in s for s in statuses)
 
 
 def test_digest_document_scans_every_segment(monkeypatch):
@@ -213,7 +227,7 @@ def test_enforce_citations_strips_invented_ids():
 def test_final_notes_have_invalid_citations_stripped(monkeypatch):
     """A hallucinated [99] in the written notes must not survive the pipeline."""
 
-    def stream(prompt, max_tokens=1400, model=None, temperature=0.4):
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
         yield "A real point [1]. "
         yield "A fabricated citation [99]."
 
@@ -354,3 +368,72 @@ def test_single_pass_long_retrieves_more_context(monkeypatch):
     k_long = captured["k"]
 
     assert k_long > k_short, f"long ({k_long}) should retrieve more than short ({k_short})"
+
+# ---------------------------------------------------------------------------
+# Document intent: a task document must not be written up as if it taught
+# ---------------------------------------------------------------------------
+
+def test_task_doc_types_map_to_the_task_writing_rule():
+    assert agent.is_task_document("question_bank")
+    assert agent.is_task_document("assignment")
+    assert agent.is_task_document("exam")
+    assert agent.is_task_document("worksheet")
+    assert not agent.is_task_document("explanatory")
+    assert not agent.is_task_document("mixed")
+
+
+def test_explanatory_prompt_is_unchanged_by_the_doc_type_feature():
+    """Ordinary lecture/textbook PDFs must behave exactly as before."""
+    plan = {"outline": ["A"], "checklist": ["x"]}
+    base = agent._write_prompt("[1] ctx", "exam", "academic", "medium", "bullet", plan)
+    typed = agent._write_prompt("[1] ctx", "exam", "academic", "medium", "bullet", plan,
+                                doc_type="explanatory")
+    assert base == typed
+    assert "list of TASKS" not in base
+
+
+def test_task_prompt_forbids_turning_tasks_into_facts():
+    plan = {"outline": ["Unit 1"], "checklist": []}
+    prompt = agent._write_prompt("[1] Write a program to implement single inheritance.",
+                                 "exam", "academic", "medium", "bullet", plan,
+                                 doc_type="question_bank")
+    assert "list of TASKS" in prompt
+    assert "Topic covered" in prompt
+    assert "did not say it" in prompt
+
+
+def test_mixed_prompt_keeps_explanation_and_tasks_apart():
+    plan = {"outline": ["A"], "checklist": []}
+    prompt = agent._write_prompt("[1] ctx", "exam", "academic", "medium", "bullet", plan,
+                                 doc_type="mixed")
+    assert "MIXES explanation" in prompt
+
+
+def test_unknown_doc_type_falls_back_to_explanatory(monkeypatch):
+    """A classifier glitch must not silently downgrade a normal PDF."""
+    monkeypatch.setattr(agent, "call_model",
+                        lambda *a, **k: '{"academic": true, "doc_type": "nonsense-value"}')
+    assert agent.classify_academic("text")["doc_type"] == "explanatory"
+
+
+def test_classifier_parse_failure_defaults_to_explanatory(monkeypatch):
+    monkeypatch.setattr(agent, "call_model", lambda *a, **k: "not json at all")
+    gate = agent.classify_academic("text")
+    assert gate["academic"] is True and gate["doc_type"] == "explanatory"
+
+
+def test_done_event_reports_the_serving_provider(monkeypatch):
+    """The done event must name the provider that actually generated the notes."""
+    monkeypatch.setattr(agent, "call_model", _fake_call_model)
+    monkeypatch.setattr(agent, "call_model_stream", _fake_stream)
+    done = [e for e in agent.run_agent("Photosynthesis converts light. " * 40,
+                                       "exam", "academic", "short", "bullet",
+                                       include_quiz=False, include_flashcards=False)
+            if e["type"] == "done"]
+    assert done, "pipeline must emit a done event"
+    data = done[0]["data"] or {}
+    assert data.get("provider") == "nvidia"
+    assert data.get("fallback_used") is False
+    assert "doc_type" in data
+    # No secret-bearing fields.
+    assert not any("key" in k.lower() or "token" in k.lower() for k in data)
