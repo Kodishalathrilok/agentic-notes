@@ -238,29 +238,29 @@ export default function FlashcardPanel({ flashcards, onRegenerate, regenerating,
             <div
               key={`${cardKey(card)}-${i}`}
               onClick={() => toggleFlip(i)}
- className="flip-card h-56 cursor-pointer transition-transform duration-300 hover:-translate-y-1.5"
+ className="flip-card h-56 min-w-0 cursor-pointer transition-transform duration-300 hover:-translate-y-1.5"
             >
               <div className={`flip-card-inner ${flipped ? 'flipped' : ''}`}>
                 {/* Front */}
-                <div className="flip-face rounded-3xl border border-espresso-900/10 bg-white p-6 shadow-card transition-shadow hover:shadow-lift">
-                  <div className="text-center">
+                <div className="flip-face overflow-hidden rounded-3xl border border-espresso-900/10 bg-white p-6 shadow-card transition-shadow hover:shadow-lift">
+                  <div className="scroll-area max-h-full w-full min-w-0 overflow-y-auto text-center">
                     <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-600">
                       Front
                     </div>
-                    <div className="text-lg font-semibold leading-snug text-espresso-900">{card.front}</div>
+                    <div className="break-words text-lg font-semibold leading-snug text-espresso-900">{card.front}</div>
                     <div className="mt-4 text-[11px] text-espresso-500">tap to flip</div>
                   </div>
                 </div>
                 {/* Back */}
-                <div className="flip-face flip-face-back flex-col rounded-3xl border border-espresso-900/30 bg-gradient-to-br from-espresso-700 to-espresso-900 p-6 shadow-card">
-                  <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                    <div>
+                <div className="flip-face flip-face-back flex-col overflow-hidden rounded-3xl border border-espresso-900/30 bg-gradient-to-br from-espresso-700 to-espresso-900 p-6 shadow-card">
+                  <div className="flex h-full w-full min-w-0 flex-col items-center justify-center gap-4 text-center">
+                    <div className="scroll-area w-full min-w-0 overflow-y-auto">
                       <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.25em] text-brand-300">
                         Back
                       </div>
-                      <div className="text-sm leading-relaxed text-latte-100">{card.back}</div>
+                      <div className="break-words text-sm leading-relaxed text-latte-100">{card.back}</div>
                     </div>
-                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
                       {['again', 'good', 'easy'].map((level) => (
                         <button
                           key={level}

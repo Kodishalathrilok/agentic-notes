@@ -190,17 +190,11 @@ export default function App() {
   // changes. Without this, signing out and signing in as someone else left
   // their predecessor's source text in the input panel and their notes, quiz,
   // flashcards and citations on screen — none of it belonged to the new user.
-  useEffect(() => {
-    if (scopeId === account) return
-
-    cancel() // a stream started by the previous account must not keep writing
-
-    setSettings({ ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_KEY, account, {}) })
-    setInputText(readText(INPUT_KEY, account))
-    setPageSpans([])
-    setPdfPage(null)
-    clearPreview()
-
+  // Everything downstream of a source: the notes written from it, the
+  // citations that point into it, and the quiz and cards derived from those.
+  // Kept separate from the source itself because the account switch below
+  // reloads a different source, while "new document" clears it outright.
+  const clearWorkspace = useCallback(() => {
     setNotes('')
     setNotesBefore(null)
     setSources([])
@@ -216,9 +210,40 @@ export default function App() {
     setGeneratedFrom('')
     bufferRef.current = ''
     titleRef.current = ''
+  }, [])
+
+  // Going Home is how you start another document, and it used to reset
+  // nothing: `showLanding` only swaps which view renders, App never unmounts,
+  // and `inputText` is mirrored to localStorage. So the next document began
+  // holding the previous PDF's extracted text, its page spans and its preview
+  // — and pressing Generate would have sent that stale source.
+  //
+  // History is untouched: finished runs were already saved to it, and this
+  // clears only what is currently active.
+  const startNewDocument = useCallback(() => {
+    cancel() // a run still streaming would keep writing into the cleared state
+    setInputText('')
+    setPageSpans([])
+    setPdfPage(null)
+    clearPreview()
+    clearWorkspace()
+    setShowLanding(true)
+  }, [cancel, clearPreview, clearWorkspace])
+
+  useEffect(() => {
+    if (scopeId === account) return
+
+    cancel() // a stream started by the previous account must not keep writing
+
+    setSettings({ ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_KEY, account, {}) })
+    setInputText(readText(INPUT_KEY, account))
+    setPageSpans([])
+    setPdfPage(null)
+    clearPreview()
+    clearWorkspace()
 
     setScopeId(account)
-  }, [account, scopeId, cancel, clearPreview])
+  }, [account, scopeId, cancel, clearPreview, clearWorkspace])
 
   // ----- Persist settings + input -----------------------------------------
   // Only once `scopeId` has caught up with the signed-in account. In the
@@ -733,7 +758,7 @@ export default function App() {
       <div className="fixed inset-x-0 top-4 z-40 flex items-start justify-between gap-3 px-4">
         {/* left: logo */}
         <button
-          onClick={() => setShowLanding(true)}
+          onClick={startNewDocument}
           title="Back to home"
           className="glass-pill flex items-center gap-2.5 rounded-full py-1.5 pl-2 pr-4"
         >
@@ -789,7 +814,7 @@ export default function App() {
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         items={[
-          { label: 'Home', onClick: () => setShowLanding(true) },
+          { label: 'Home', onClick: startNewDocument },
           { label: 'Eval', onClick: () => setShowEval(true) },
           { label: 'GitHub', href: 'https://github.com/Kodishalathrilok/agentic-notes' },
           ...(supabaseEnabled
