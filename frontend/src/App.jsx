@@ -361,13 +361,10 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => {
       const signedIn = data.session?.user ?? null
       setUser(signedIn)
-      // Already signed in on arrival -> open the app, don't park them on the
-      // marketing page. This is the only path a Google sign-in can take: the
-      // OAuth redirect reloads the page, so handing the user back from the
-      // sign-in call (see handleAuthed) never runs. It also covers simply
-      // returning with a live session. Only on this first resolution, so the
-      // logo's "back to home" keeps working afterwards.
-      if (signedIn) setShowLanding(false)
+      // Deliberately no navigation here. Arriving with a live session -- which
+      // includes the reload after a Google OAuth redirect -- leaves the user on
+      // the landing page, where the auth section already offers "Launch the
+      // app" once `user` is set. Entering the workspace stays an explicit act.
     })
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setUser(session?.user ?? null))
     return () => sub.subscription.unsubscribe()
@@ -390,13 +387,13 @@ export default function App() {
     if (authRequired && !showLanding && !sharedView && !showEval) setShowLanding(true)
   }, [authRequired, showLanding, sharedView, showEval])
 
-  // Signing in has to open the workspace and register the user in one go.
-  // Doing only the former let the gate above fire in the render before
-  // onAuthStateChange arrived — `user` was still null, so a fresh sign-in was
-  // thrown straight back to the landing page and had to press Launch again.
+  // Registers the user and nothing else. Setting `user` here rather than
+  // waiting for onAuthStateChange still matters -- the gate above reads it in
+  // the very next render -- but signing in no longer moves the user: they stay
+  // on the landing page, whose auth section swaps to "Launch the app", and
+  // whichever view they were already in is left alone.
   const handleAuthed = useCallback((signedIn) => {
     if (signedIn?.id) setUser(signedIn)
-    setShowLanding(false)
   }, [])
 
   // Load a shared (public) session if the URL has ?share=<id>.
