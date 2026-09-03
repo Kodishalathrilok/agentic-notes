@@ -11,6 +11,7 @@ Endpoints:
 """
 
 import os
+import re
 import json
 import socket
 import asyncio
@@ -804,9 +805,55 @@ async def export_flashcards_csv(req: ExportRequest, user=Depends(limiter("export
 # build is present, so local API-only development still works unchanged.
 # ---------------------------------------------------------------------------
 
+# Starlette's StaticFiles sets ETag and Last-Modified but never Cache-Control,
+# so browsers fall back to HEURISTIC caching and can keep serving an old
+# index.html long after a deploy. A client pinned that way goes on running the
+# previous build's entry bundle and asks for lazy chunk names that no longer
+# exist on the server -- the QuizPanel-*.js / FlashcardPanel-*.js 404s seen in
+# production, with the entry bundle "loading fine" because it came from cache.
+#
+# Vite gives the two kinds of file opposite guarantees, so they get opposite
+# policies. Anything it emits into assets/ carries a content hash: the name
+# changes whenever the bytes do, so it can be cached forever. Files copied
+# through from public/ keep their name across builds, so they must revalidate.
+# index.html is the entry point and must never be cached, or none of the rest
+# matters -- it is what names every hashed file.
+_HASHED_ASSET_RE = re.compile(r"-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
+
+CACHE_ENTRY_HTML = "no-cache, no-store, must-revalidate"
+CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
+CACHE_REVALIDATE = "public, max-age=0, must-revalidate"
+
+
+def cache_policy(full_path: str) -> str:
+    """The Cache-Control for one served file, decided by how it is named."""
+    name = os.path.basename(full_path)
+    if name == "index.html":
+        return CACHE_ENTRY_HTML
+    parts = os.path.normpath(full_path).replace("\\", "/").split("/")
+    if "assets" in parts and _HASHED_ASSET_RE.search(name):
+        return CACHE_IMMUTABLE
+    return CACHE_REVALIDATE
+
+
+class CachedStaticFiles(StaticFiles):
+    """StaticFiles that states its caching intent instead of leaving it to the
+    browser's heuristics.
+
+    The header is applied after super() so it lands on 304 Not Modified too --
+    a revalidation response that omits Cache-Control drops the client straight
+    back onto heuristics, which is the behaviour being fixed.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["cache-control"] = cache_policy(str(full_path))
+        return response
+
+
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 if os.path.isdir(STATIC_DIR):
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
+    app.mount("/", CachedStaticFiles(directory=STATIC_DIR, html=True), name="frontend")
 
 
 if __name__ == "__main__":
