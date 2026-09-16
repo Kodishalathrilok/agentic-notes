@@ -5,6 +5,7 @@ import TextEffect from './TextEffect'
 // main chunk for BOTH, which is what the build warned about.
 const MenuOverlay = lazy(() => import('./MenuOverlay'))
 import AuthCard from './AuthCard'
+import useHeroCursor from '../hooks/useHeroCursor'
 
 const GITHUB_URL = 'https://github.com/Kodishalathrilok/agentic-notes'
 
@@ -206,52 +207,9 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
     return () => clearInterval(t)
   }, [])
 
-  // Liquid hover reveal — lerped cursor position + gentle wobble drives the
-  // mask on the colored art layer (see .hero-art-color in index.css)
-  useEffect(() => {
-    const el = heroRef.current
-    if (!el) return
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    let raf
-    const pos = { x: el.offsetWidth / 2, y: el.offsetHeight * 0.4 }
-    const tgt = { x: pos.x, y: pos.y }
-    let r = 0
-    let tr = 0
-    const onMove = (e) => {
-      const rect = el.getBoundingClientRect()
-      tgt.x = e.clientX - rect.left
-      tgt.y = e.clientY - rect.top
-      tr = 400
-      // instant vars for the existing spotlight glow
-      el.style.setProperty('--mx', `${tgt.x}px`)
-      el.style.setProperty('--my', `${tgt.y}px`)
-    }
-    const onLeave = () => {
-      tr = 0
-    }
-    const tick = (t) => {
-      // trailing lerp = the "liquid" flow; wobble keeps the blob organic
-      pos.x += (tgt.x - pos.x) * 0.095
-      pos.y += (tgt.y - pos.y) * 0.095
-      r += (tr - r) * 0.055
-      const w = t * 0.0016
-      const wob = reduced ? 1 : 1 + 0.05 * Math.sin(w * 2.1)
-      el.style.setProperty('--hx', pos.x.toFixed(1))
-      el.style.setProperty('--hy', pos.y.toFixed(1))
-      el.style.setProperty('--hr', (r * wob).toFixed(1))
-      el.style.setProperty('--ox', (reduced ? 0 : Math.cos(w * 0.9) * r * 0.28).toFixed(1))
-      el.style.setProperty('--oy', (reduced ? 0 : Math.sin(w * 1.3) * r * 0.24).toFixed(1))
-      raf = requestAnimationFrame(tick)
-    }
-    el.addEventListener('mousemove', onMove)
-    el.addEventListener('mouseleave', onLeave)
-    raf = requestAnimationFrame(tick)
-    return () => {
-      cancelAnimationFrame(raf)
-      el.removeEventListener('mousemove', onMove)
-      el.removeEventListener('mouseleave', onLeave)
-    }
-  }, [])
+  // Liquid art reveal + cursor-reactive typography (single rAF loop)
+  useHeroCursor(heroRef)
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-latte-100 text-espresso-800">
       <Nav onMenu={() => setMenuOpen(true)} />
@@ -288,8 +246,8 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
           />
         </div>
 
-        <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-4 py-28 text-center sm:py-32">
-          <h1 className="mx-auto font-bodoni text-6xl font-bold leading-[1.05] tracking-[-0.03em] text-espresso-900 sm:text-7xl md:text-8xl">
+        <div className="hero-3d mx-auto flex w-full max-w-5xl flex-col items-center px-4 py-28 text-center sm:py-32">
+          <h1 data-parallax="1" className="hero-heading mx-auto font-bodoni text-6xl font-bold leading-[1.05] tracking-[-0.03em] text-espresso-900 sm:text-7xl md:text-8xl">
             <TextEffect per="word" preset="slide" as="span" className="block sm:whitespace-nowrap" stagger={0.08} startDelay={0.05}>
               Generate notes
             </TextEffect>
@@ -307,6 +265,7 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
           </h1>
 
           <p
+            data-parallax="0.35"
  className="mt-6 animate-slide-up text-lg text-espresso-600 sm:text-xl"
             style={{ animationDelay: '300ms' }}
           >
@@ -314,6 +273,7 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
           </p>
 
           <div
+            data-parallax="0.1"
  className="mt-9 flex animate-slide-up flex-wrap items-center justify-center gap-3"
             style={{ animationDelay: '420ms' }}
           >
@@ -335,6 +295,7 @@ export default function Landing({ onLaunch, onAuthed, onEval, user, supabaseEnab
             )}
           </div>
           <p
+            data-parallax="0.15"
  className="mt-4 animate-slide-up text-xs text-slate-400"
             style={{ animationDelay: '520ms' }}
           >

@@ -458,3 +458,23 @@ button.glass-pill:focus-visible,
     background-position: 100% 50%;
   }
 }
+
+/* ---- Hero cursor interaction (driven by hooks/useHeroCursor.js) ---- */
+/* the shared vanishing point the heading pivots inside */
+.hero-3d {
+  perspective: 1250px;
+  perspective-origin: 50% 50%;
+}
+.hero-heading {
+  transform-style: preserve-3d;
+  transform-origin: 50% 50%;
+}
+[data-parallax] {
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-parallax] {
+    transform: none !important;
+    will-change: auto;
+  }
+}
