@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { apiFetch } from '../lib/api'
+import { resolveLineAnchors } from '../lib/lineAnchors'
 import Icon from './Icons'
 
 // --- tiny markdown renderer for the answer (bold + bullets) ---
@@ -57,7 +58,10 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
         const range = s.getRangeAt(0)
         const rects = range.getClientRects()
         const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect()
-        setSel({ text, end: { top: last.top, bottom: last.bottom, right: last.right } })
+        // Source lines the highlight covers (null if unresolvable): the text
+        // is rendered, so the server can't reliably find it in the markdown.
+        const anchors = resolveLineAnchors(s.anchorNode, s.focusNode, el)
+        setSel({ text, anchors, end: { top: last.top, bottom: last.bottom, right: last.right } })
       } else if (!open) {
         setSel(null)
       }
@@ -137,7 +141,7 @@ export default function InlineAssistant({ containerRef, notes, onEditSelection }
     if (!sel || !onEditSelection) return
     setLoading(true)
     try {
-      await onEditSelection(sel.text, instruction)
+      await onEditSelection(sel.text, instruction, sel.anchors || undefined)
       close()
     } catch {
       setLoading(false)

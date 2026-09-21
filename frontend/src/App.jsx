@@ -621,14 +621,25 @@ export default function App() {
     }
   }
 
-  const editSelection = async (selection, instruction) => {
+  const editSelection = async (selection, instruction, anchors) => {
     if (!notes || !selection) return
+    // Source-line anchors let the server edit the raw markdown lines the
+    // highlight covers; without them it falls back to matching the text.
+    const lines = anchors ? { line_start: anchors.lineStart, line_end: anchors.lineEnd } : {}
     const res = await apiFetch('/api/edit-selection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes, selection, instruction, model }),
+      body: JSON.stringify({ notes, selection, instruction, model, ...lines }),
     })
-    const data = await res.json()
+    const data = await res.json().catch(() => ({}))
+    // A refused or failed edit must be visible and must leave the notes
+    // alone (the server never returns partial notes). Throwing keeps the
+    // inline assistant open with the instruction, so the user can retry.
+    // (A 422 from request validation carries a list, not a string.)
+    if (!res.ok) {
+      showToast(typeof data.detail === 'string' ? data.detail : "The edit couldn't be completed.")
+      throw new Error('edit-selection failed')
+    }
     if (data.notes) {
       setNotesBefore(notes) // enable the diff view
       setNotes(data.notes)
@@ -646,7 +657,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes, direction, mode, tone, format, model }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // Server refused or a part failed: say so, keep the current notes.
+        showToast(typeof data.detail === 'string' ? data.detail : "The rewrite couldn't be completed.")
+        return
+      }
       if (data.notes) {
         setNotesBefore(notes) // enable diff vs the previous version
         setNotes(data.notes)

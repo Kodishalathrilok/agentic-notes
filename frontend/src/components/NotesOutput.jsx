@@ -93,7 +93,11 @@ function renderNotes(notes, cite) {
   let inCode = false
   let codeBuffer = []
   let codeKey = 0
+  let codeStart = 0
 
+  // data-line / data-line-start+end tag each element with the SOURCE line(s)
+  // it renders, so an inline-edit selection can be mapped back to the raw
+  // markdown (see lib/lineAnchors.js). No visual effect.
   lines.forEach((line, idx) => {
     const trimmed = line.trim()
 
@@ -102,6 +106,8 @@ function renderNotes(notes, cite) {
         out.push(
           <pre
             key={`code-${codeKey++}`}
+            data-line-start={codeStart}
+            data-line-end={idx}
  className="my-2 overflow-x-auto rounded-lg bg-espresso-900 p-3 text-xs text-slate-100 "
           >
             <code>{codeBuffer.join('\n')}</code>
@@ -111,6 +117,7 @@ function renderNotes(notes, cite) {
         inCode = false
       } else {
         inCode = true
+        codeStart = idx
       }
       return
     }
@@ -120,14 +127,14 @@ function renderNotes(notes, cite) {
     }
 
     if (!trimmed) {
-      out.push(<div key={idx} className="h-2" />)
+      out.push(<div key={idx} data-line={idx} className="h-2" />)
       return
     }
 
     const headerMatch = trimmed.match(/^\*\*(.+?):?\*\*$/)
     if (headerMatch) {
       out.push(
-        <h3 key={idx} className="mb-1.5 mt-6 text-[17px] font-bold leading-snug text-neutral-900 first:mt-0">
+        <h3 key={idx} data-line={idx} className="mb-1.5 mt-6 text-[17px] font-bold leading-snug text-neutral-900 first:mt-0">
           {headerMatch[1]}
         </h3>
       )
@@ -136,7 +143,7 @@ function renderNotes(notes, cite) {
 
     if (trimmed.startsWith('•')) {
       out.push(
-        <div key={idx} className="flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-700">
+        <div key={idx} data-line={idx} className="flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-700">
           <span className="mt-[0.6rem] h-[5px] w-[5px] shrink-0 rounded-full bg-neutral-300" />
           <span>{renderInline(trimmed.slice(1).trim(), idx, cite)}</span>
         </div>
@@ -146,7 +153,7 @@ function renderNotes(notes, cite) {
 
     if (trimmed.startsWith('-')) {
       out.push(
-        <div key={idx} className="ml-5 flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-600">
+        <div key={idx} data-line={idx} className="ml-5 flex gap-2.5 py-1 text-[14px] leading-[24px] text-neutral-600">
           <span className="mt-[0.6rem] h-[5px] w-[5px] shrink-0 rounded-full bg-neutral-200" />
           <span>{renderInline(trimmed.slice(1).trim(), idx, cite)}</span>
         </div>
@@ -156,7 +163,7 @@ function renderNotes(notes, cite) {
 
     if (/^\d+[.)]/.test(trimmed)) {
       out.push(
-        <div key={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
+        <div key={idx} data-line={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
           {renderInline(trimmed, idx, cite)}
         </div>
       )
@@ -164,7 +171,7 @@ function renderNotes(notes, cite) {
     }
 
     out.push(
-      <p key={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
+      <p key={idx} data-line={idx} className="py-1 text-[14px] leading-[24px] text-neutral-700">
         {renderInline(trimmed, idx, cite)}
       </p>
     )
@@ -175,6 +182,8 @@ function renderNotes(notes, cite) {
     out.push(
       <pre
         key={`code-${codeKey++}`}
+        data-line-start={codeStart}
+        data-line-end={lines.length - 1}
  className="my-2 overflow-x-auto rounded-lg bg-espresso-900 p-3 text-xs text-slate-100 "
       >
         <code>{codeBuffer.join('\n')}</code>

@@ -130,7 +130,8 @@ class RateLimitError(RuntimeError):
 
 
 class IncompleteStreamError(RuntimeError):
-    """A stream stopped after it had already produced output.
+    """A stream stopped after it had already produced output - or a strict
+    non-streaming call (call_model(strict=True)) stopped at the token cap.
 
     Raised instead of ending quietly because partial output must never be
     mistaken for complete output: a window cut off half-way would count as
@@ -164,6 +165,17 @@ def _check_finish(prov: str, finish) -> None:
     if str(finish).lower() in ("length", "max_tokens"):
         # chars is filled in by call_model_stream, which counts what was yielded.
         raise IncompleteStreamError(prov, "max_tokens")
+
+
+def _strict_finish(prov: str, finish, text: str) -> None:
+    """Non-streaming twin of _check_finish, only used for strict calls.
+
+    Same rule: only the explicit token-cap value counts. A missing finish
+    reason is not logged here - non-strict callers never look, and strict ones
+    only care about a positive "I stopped at the cap".
+    """
+    if finish is not None and str(finish).lower() in ("length", "max_tokens"):
+        raise IncompleteStreamError(prov, "max_tokens", len(text or ""))
 
 
 def _safe(exc) -> str:
@@ -408,12 +420,17 @@ def _gemini_text(data) -> str:
     return "".join(p.get("text", "") for p in parts)
 
 
-def _call_gemini(prompt, max_tokens, model, temperature, json_mode):
+def _call_gemini(prompt, max_tokens, model, temperature, json_mode, strict=False):
     gm = _gemini_model(model)
     resp = _gemini_post(gm, _gemini_body(prompt, max_tokens, temperature, json_mode),
                         "gemini", 180)
     resp.raise_for_status()
-    return _gemini_text(resp.json()).strip()
+    data = resp.json()
+    text = _gemini_text(data).strip()
+    if strict:
+        cand = (data.get("candidates") or [{}])[0]
+        _strict_finish("gemini", cand.get("finishReason"), text)
+    return text
 
 
 def _stream_gemini(prompt, max_tokens, model, temperature):
@@ -618,11 +635,14 @@ def _nvidia_post(body, stream=False):
     return resp
 
 
-def _call_nvidia(prompt, max_tokens, model, temperature, json_mode):
+def _call_nvidia(prompt, max_tokens, model, temperature, json_mode, strict=False):
     resp = _nvidia_post(_nvidia_body(prompt, max_tokens, model, temperature, json_mode, False))
     data = resp.json()
     choice = (data.get("choices") or [{}])[0]
-    return ((choice.get("message") or {}).get("content") or "").strip()
+    text = ((choice.get("message") or {}).get("content") or "").strip()
+    if strict:
+        _strict_finish("nvidia", choice.get("finish_reason"), text)
+    return text
 
 
 def _stream_nvidia(prompt, max_tokens, model, temperature):
@@ -658,7 +678,7 @@ def _stream_nvidia(prompt, max_tokens, model, temperature):
 # Ollama
 # ---------------------------------------------------------------------------
 
-def _call_ollama(prompt, max_tokens, temperature, json_mode):
+def _call_ollama(prompt, max_tokens, temperature, json_mode, strict=False):
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
@@ -669,7 +689,11 @@ def _call_ollama(prompt, max_tokens, temperature, json_mode):
         payload["format"] = "json"
     resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=300)
     resp.raise_for_status()
-    return (resp.json().get("response") or "").strip()
+    data = resp.json()
+    text = (data.get("response") or "").strip()
+    if strict:
+        _strict_finish("ollama", data.get("done_reason"), text)
+    return text
 
 
 def _stream_ollama(prompt, max_tokens, temperature):
@@ -705,12 +729,12 @@ def _stream_ollama(prompt, max_tokens, temperature):
 # Dispatch + public API
 # ---------------------------------------------------------------------------
 
-def _dispatch(prov, prompt, max_tokens, model, temperature, json_mode):
+def _dispatch(prov, prompt, max_tokens, model, temperature, json_mode, strict=False):
     if prov == "nvidia":
-        return _call_nvidia(prompt, max_tokens, model, temperature, json_mode)
+        return _call_nvidia(prompt, max_tokens, model, temperature, json_mode, strict)
     if prov == "gemini":
-        return _call_gemini(prompt, max_tokens, model, temperature, json_mode)
-    return _call_ollama(prompt, max_tokens, temperature, json_mode)
+        return _call_gemini(prompt, max_tokens, model, temperature, json_mode, strict)
+    return _call_ollama(prompt, max_tokens, temperature, json_mode, strict)
 
 
 def _dispatch_stream(prov, prompt, max_tokens, model, temperature):
@@ -769,21 +793,30 @@ def _providers_failed(errors) -> RuntimeError:
 
 
 def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False,
-               on_serve=None):
+               on_serve=None, strict=False):
     """Call the chosen provider, failing over to the next available one on error.
 
     `on_serve(provider, model, fallback_used, reason)` fires once, with the
     provider that ACTUALLY produced the text. Passed explicitly rather than
     stored globally because sections are written concurrently — a module-level
     'last provider' would be a race.
+
+    `strict=True` is for callers whose output REPLACES the user's text (inline
+    edit, rewrite): a completion the provider says it cut at the token cap is
+    treated as a failure instead of being returned as if complete - the
+    non-streaming half of the IncompleteStreamError fix. Default callers keep
+    today's behaviour (a short/JSON answer that hits the cap is still usable).
     """
     target = resolve_model(model)
     errors = []
+    # Only pass the flag when set, so non-strict calls reach _dispatch exactly
+    # as before (tests and any other fakes of _dispatch keep their signature).
+    extra = {"strict": True} if strict else {}
     for prov in _failover_chain(_provider_for(target)):
         if not _provider_ready(prov):
             continue
         try:
-            out = _dispatch(prov, prompt, max_tokens, target, temperature, json_mode)
+            out = _dispatch(prov, prompt, max_tokens, target, temperature, json_mode, **extra)
         except Exception as exc:  # noqa: BLE001
             errors.append((prov, exc))
             print(f"[models] {prov} call failed ({_safe(exc)}); trying next provider.")
@@ -798,6 +831,15 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
         # from a real answer, so fail over rather than hand back "".
         errors.append((prov, RuntimeError("empty completion")))
         print(f"[models] {prov} returned an empty completion; trying next provider.")
+    # A strict truncation fails OVER (via the except above) rather than
+    # failing fast: nothing has reached the user yet - unlike a stream cut
+    # mid-way - so it is the same kind of provider failure as an empty
+    # completion, and another provider/model may fit the answer in the same
+    # budget. If every provider failed and one of them truncated, surface that
+    # typed error so callers can tell "cut off" from "unreachable".
+    cut = strict and next((e for _, e in errors if isinstance(e, IncompleteStreamError)), None)
+    if cut:
+        raise cut from _providers_failed(errors)
     raise _providers_failed(errors)
 
 

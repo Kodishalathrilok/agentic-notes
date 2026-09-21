@@ -398,15 +398,42 @@ def _claim_lines(notes):
 # the writer saw, so anything absent from it was not in the document.
 GROUNDING_SOURCE_CHARS = int(os.getenv("GROUNDING_SOURCE_CHARS", "14000"))
 
+# When the whole context does NOT fit that window (every windowed run on a
+# large source), an uncited claim is judged against the passages retrieved FOR
+# IT instead. The first GROUNDING_SOURCE_CHARS of a 300k-char context is a
+# partial view presented as the whole source - the same class of bug as
+# IncompleteStreamError - and "unsupported" on that view deleted true claims
+# about later pages.
+GROUNDING_RETRIEVE_K = int(os.getenv("GROUNDING_RETRIEVE_K", "4"))
 
-def _evidence_block(items, chunk_map):
-    """Per-claim evidence: the passages it cites, or 'the whole source'."""
+
+def _source_body(chunk_map):
+    """Every passage in the chunk map, in id order, as the judge sees it."""
+    return "\n".join(
+        f"[{cid}] {(chunk or {}).get('text', '')}"
+        for cid, chunk in sorted((chunk_map or {}).items(), key=lambda kv: kv[0])
+    )
+
+
+def _evidence_block(items, chunk_map, uncited_evidence=None):
+    """Per-claim evidence: the passages it cites, or 'the whole source'.
+
+    `uncited_evidence` maps a claim's line index to the passages retrieved for
+    it; it is only supplied when the whole source is too big to show.
+    """
     blocks = []
-    for n, (_, text, ids) in enumerate(items, start=1):
+    for n, (line_i, text, ids) in enumerate(items, start=1):
         claim = _strip_markup(text)
         if ids:
             evidence = "\n".join(
                 f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}" for i in ids
+            )
+        elif uncited_evidence and line_i in uncited_evidence:
+            evidence = (
+                "  (no passage cited — these are the passages from the source "
+                "most relevant to this claim; judge against them)\n"
+                + "\n".join(f"  [{c['id']}] {c.get('text', '')}"
+                            for c in uncited_evidence[line_i])
             )
         else:
             evidence = "  (no passage cited — judge against FULL SOURCE below)"
@@ -414,14 +441,18 @@ def _evidence_block(items, chunk_map):
     return "\n\n".join(blocks)
 
 
-def _full_source_block(items, chunk_map):
-    """The whole retrieved context, included only when some claim is uncited."""
+def _full_source_block(items, chunk_map, uncited_evidence=None):
+    """The whole retrieved context, included only when some claim is uncited.
+
+    Not included when uncited claims carry their own retrieved evidence: that
+    happens only when the source is too big for this block, and a truncated
+    copy labelled "every passage" is exactly the partial view to avoid.
+    """
     if all(ids for _, _, ids in items):
         return ""
-    body = "\n".join(
-        f"[{cid}] {(chunk or {}).get('text', '')}"
-        for cid, chunk in sorted((chunk_map or {}).items(), key=lambda kv: kv[0])
-    )
+    if uncited_evidence is not None:
+        return ""
+    body = _source_body(chunk_map)
     return (
         "\n\nFULL SOURCE — every passage retrieved from the document. A claim "
         "with no cited passage must be judged against this, and ONLY this:\n"
@@ -429,7 +460,7 @@ def _full_source_block(items, chunk_map):
     )
 
 
-def _verify_batch(items, chunk_map, model=None):
+def _verify_batch(items, chunk_map, model=None, uncited_evidence=None):
     """Rule on a batch of (claim, its own evidence) pairs.
 
     Done in TWO passes on purpose. Asking one call for a verdict AND a rewritten
@@ -459,7 +490,7 @@ Return a verdict for EVERY claim.
 Respond with ONLY JSON:
 {{"verdicts": [{{"n": 1, "status": "supported"}}]}}
 
-{_evidence_block(items, chunk_map)}{_full_source_block(items, chunk_map)}"""
+{_evidence_block(items, chunk_map, uncited_evidence)}{_full_source_block(items, chunk_map, uncited_evidence)}"""
 
     data = safe_json(call_model(verdict_prompt, max_tokens=900, model=model,
                                 temperature=0.0, json_mode=True))
@@ -513,7 +544,7 @@ def _keeps_provenance(original: str, fix: str) -> bool:
     return bool(_CITATION_RE.search(fix))
 
 
-def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
+def verify_claim_support(notes, chunk_map, model=None, batch_size=6, retriever=None):
     """Drop or repair claims their own cited evidence does not support.
 
     This is the difference between "is this citation a valid page?" (which
@@ -523,20 +554,68 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
 
     Returns (notes, stats). Fails OPEN: if the model call fails or returns
     nothing usable, the notes are returned untouched rather than gutted.
+
+    UNCITED claims are judged against the whole source when it fits
+    GROUNDING_SOURCE_CHARS. When it does not, a truncated source would be a
+    partial view, so each uncited claim is judged against the passages
+    `retriever` finds for it instead; with no retriever (or nothing found) the
+    claim is left as written and counted in `skipped_partial_view` - deleting
+    on a view known to be partial is how true claims about later pages were
+    lost.
     """
     items = _claim_lines(notes)
     # `unjudged` is tracked separately on purpose: a model call that fails or
     # returns nothing must not be indistinguishable from a clean pass.
     stats = {"checked": len(items), "supported": 0, "rewritten": 0,
-             "removed": 0, "unjudged": 0}
+             "removed": 0, "unjudged": 0, "uncited_retrieved": 0,
+             "skipped_partial_view": 0}
     if not items:
         return notes, stats
+
+    uncited_evidence = None
+    if (any(not ids for _, _, ids in items)
+            and len(_source_body(chunk_map)) > GROUNDING_SOURCE_CHARS):
+        uncited_evidence, kept = {}, []
+        for item in items:
+            line_i, text, ids = item
+            if ids:
+                kept.append(item)
+                continue
+            found = []
+            if retriever is not None:
+                try:
+                    # Only passages in chunk_map: the writer never saw the
+                    # others, so they cannot be what a claim was drawn from.
+                    found = [c for c in (retriever.retrieve(_strip_markup(text),
+                                                            k=GROUNDING_RETRIEVE_K) or [])
+                             if c.get("id") in (chunk_map or {})]
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[grounding] evidence retrieval failed ({exc}).")
+                    found = []
+            if found:
+                uncited_evidence[line_i] = [
+                    {"id": c["id"], "text": (chunk_map[c["id"]] or {}).get("text", "")}
+                    for c in found
+                ]
+                stats["uncited_retrieved"] += 1
+                kept.append(item)
+            else:
+                stats["skipped_partial_view"] += 1
+        if stats["skipped_partial_view"]:
+            print(f"[grounding] {stats['skipped_partial_view']} uncited claim(s) not "
+                  f"judged: the source exceeds the {GROUNDING_SOURCE_CHARS}-char view "
+                  f"and no evidence was retrieved for them; left as written.")
+        items = kept
 
     verdicts = {}
     for start in range(0, len(items), batch_size):
         batch = items[start:start + batch_size]
         try:
-            got = _verify_batch(batch, chunk_map, model=model)
+            if uncited_evidence is None:
+                got = _verify_batch(batch, chunk_map, model=model)
+            else:
+                got = _verify_batch(batch, chunk_map, model=model,
+                                    uncited_evidence=uncited_evidence)
         except Exception as exc:  # noqa: BLE001
             print(f"[grounding] batch failed ({exc}); keeping those claims as written.")
             continue
@@ -564,17 +643,19 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6):
         else:
             stats["supported"] += 1
 
-    stats["unjudged"] = len(items) - len(verdicts)
+    # Claims skipped for a partial view were never sent, so they count here too.
+    stats["unjudged"] = stats["checked"] - len(verdicts)
     if stats["unjudged"]:
-        print(f"[grounding] {stats['unjudged']} of {len(items)} claims were not judged "
-              f"(model returned no verdict); those are left exactly as written.")
+        print(f"[grounding] {stats['unjudged']} of {stats['checked']} claims were not "
+              f"judged; those are left exactly as written.")
     return "\n".join(x for x in lines if x is not None), stats
 
 # ---------------------------------------------------------------------------
 # Notes windowing: never let head-truncation hide the tail of long notes
 # ---------------------------------------------------------------------------
 
-# Hard cap on notes fed to a FULL-REWRITE step (revise / rewrite / edit).
+# Hard cap on notes fed to the in-pipeline FULL-REWRITE step (revise; the
+# standalone rewrite / edit no longer truncate - see rewrite_notes).
 # Sized to fit the largest sectioned output (8 sections x ~500 words ~ 28k
 # chars) with headroom; a rewrite prompt must NEVER see a truncated copy,
 # because the model can only return what it was shown -- truncation here
@@ -1015,7 +1096,52 @@ CONTEXT (numbered passages retrieved for THIS section — cite these):
 # Agent: Critique
 # ---------------------------------------------------------------------------
 
-def critique_notes(notes, plan, mode, source="", model=None, doc_sample="") -> dict:
+# Judge evidence for the critique and the reviser on large sources. The whole
+# context of a windowed run (up to ~300k chars) cannot be shown, and a head
+# slice of it (`source[:12000]`, `context[:40000]`) was a partial view presented
+# as the ground truth - the same class of bug as IncompleteStreamError: true
+# claims about later pages looked "unsupported" because their passages were
+# never shown. Instead the judge is shown the passages the notes CITE, whole.
+CRITIQUE_SOURCE_CHARS = 12000  # head slice kept when no citation-based view applies
+# Same budget as the reviser: both judge the same notes. Notes on a large
+# source routinely cite dozens of passages (40 x ~700 chars ~ 29k); a 24k
+# budget showed only 0.825 of cited evidence on the synthetic long-document
+# test, and these providers have ample context for 40k.
+CRITIQUE_CONTEXT_CHARS = int(os.getenv("CRITIQUE_CONTEXT_CHARS", "40000"))
+REVISE_CONTEXT_CHARS = int(os.getenv("REVISE_CONTEXT_CHARS", "40000"))
+
+_PASSAGE_HEAD_RE = r"(?m)^\[{}\] "
+
+
+def _cited_ids(text, chunk_map):
+    """Citation ids in `text` that name a passage in `chunk_map`, in id order."""
+    return sorted({int(m) for m in _CITATION_RE.findall(text or "")} & set(chunk_map or {}))
+
+
+def _passages_within(ids, chunk_map, budget, priority=()):
+    """Render whole passages for `ids` (id order) within `budget` chars.
+
+    Passages are never cut: a half passage can hide exactly the sentence a
+    claim rests on. What does not fit is returned as `omitted` so the prompt
+    can SAY its view is partial. `priority` ids are admitted first.
+    Returns (context, shown_ids, omitted_ids).
+    """
+    order = list(dict.fromkeys([i for i in priority if i in ids] + list(ids)))
+    shown, used = set(), 0
+    for i in order:
+        size = len(f"[{i}] {(chunk_map.get(i) or {}).get('text', '')}") + 2
+        if used + size > budget:
+            continue  # a smaller passage later may still fit
+        shown.add(i)
+        used += size
+    shown_sorted = sorted(shown)
+    context = _format_context(
+        [{"id": i, "text": (chunk_map.get(i) or {}).get("text", "")} for i in shown_sorted])
+    return context, shown_sorted, sorted(set(ids) - shown)
+
+
+def critique_notes(notes, plan, mode, source="", model=None, doc_sample="",
+                   chunk_map=None) -> dict:
     """
     Grounded critique. FAITHFULNESS is judged against `source` — the numbered
     CONTEXT passages the writer was actually given (the ground truth for what
@@ -1026,7 +1152,26 @@ def critique_notes(notes, plan, mode, source="", model=None, doc_sample="") -> d
     `needs_revision` triggers on real signal only: the model's own flag, a
     score below threshold, or unsupported claims. `missing_topics` alone is
     advisory — it feeds corrective re-retrieval, not an automatic rewrite.
+
+    With `chunk_map`, a source too big to show whole is replaced by the
+    passages CITED in the notes excerpt the critique sees (whole passages, up
+    to CRITIQUE_CONTEXT_CHARS). `evidence_shown` / `evidence_cited` in the
+    result make a partial view observable instead of silent.
     """
+    notes_excerpt = _notes_excerpt(notes, 20000)
+    cited_all = sorted({int(m) for m in _CITATION_RE.findall(notes_excerpt)})
+    context_text = source[:CRITIQUE_SOURCE_CHARS]
+    shown_ids = None  # set only when judging against cited passages
+    omitted_ids = []
+    if chunk_map and len(source or "") > CRITIQUE_SOURCE_CHARS:
+        ids = _cited_ids(notes_excerpt, chunk_map)
+        if ids:
+            context_text, shown, omitted_ids = _passages_within(
+                ids, chunk_map, CRITIQUE_CONTEXT_CHARS)
+            shown_ids = set(shown)
+    evidence_shown = sum(
+        1 for i in cited_all if re.search(_PASSAGE_HEAD_RE.format(i), context_text))
+
     checklist = plan.get("checklist", [])
     checklist_str = "\n".join(f"- {c}" for c in checklist) if checklist else "(none)"
 
@@ -1039,13 +1184,35 @@ do NOT use this block to judge faithfulness):
 \"\"\"{doc_sample[:8000]}\"\"\"
 """
 
+    faithfulness = """1. FAITHFULNESS — does every claim in the notes actually appear in / follow from
+   the CONTEXT passages below? The CONTEXT is the ONLY ground truth for this:
+   list any statement that is fabricated, distorted, or unsupported by it."""
+    context_header = "CONTEXT (the passages the notes were written from — the ground truth):"
+    if shown_ids is not None:
+        shown_str = ", ".join(str(i) for i in sorted(shown_ids))
+        omitted_str = ""
+        if omitted_ids:
+            omitted_str = (
+                "\n   Passages cited by the notes but NOT shown (over budget): "
+                + ", ".join(str(i) for i in omitted_ids)
+                + ". Do NOT list a claim citing only these as unsupported.")
+        # Uncited claims are not judged here on purpose: their evidence could be
+        # anywhere in a document too big to show, and the grounding step
+        # (verify_claim_support) checks each one against passages retrieved for it.
+        faithfulness = f"""1. FAITHFULNESS — the CONTEXT below holds the passages the notes CITE
+   (passage ids shown: {shown_str}), not the whole document.{omitted_str}
+   List a claim as unsupported ONLY if the passage it cites IS shown and does
+   not support it (fabricated, distorted, or not stated there). List an
+   uncited claim only if the shown CONTEXT contradicts it — uncited claims are
+   verified separately."""
+        context_header = ("CONTEXT (the passages cited by the notes, by id — the ground "
+                          "truth for those claims):")
+
     prompt = f"""You are the CRITIQUE agent in a notes-generation pipeline. Be a
 strict, fair reviewer for the "{mode}" study mode.
 
 Judge the NOTES on THREE things:
-1. FAITHFULNESS — does every claim in the notes actually appear in / follow from
-   the CONTEXT passages below? The CONTEXT is the ONLY ground truth for this:
-   list any statement that is fabricated, distorted, or unsupported by it.
+{faithfulness}
 2. COVERAGE — are any important points from the checklist or the document
    missing from the notes?
 3. QUALITY — clarity, structure, and usefulness for studying.
@@ -1067,11 +1234,11 @@ Scoring: deduct heavily for any unsupported_claims (faithfulness matters most).
 A score of {REVISE_THRESHOLD} or above with NO unsupported claims means no
 revision is needed.
 
-CONTEXT (the passages the notes were written from — the ground truth):
-\"\"\"{source[:12000]}\"\"\"
+{context_header}
+\"\"\"{context_text}\"\"\"
 {sample_block}
 NOTES:
-\"\"\"{_notes_excerpt(notes, 20000)}\"\"\""""
+\"\"\"{notes_excerpt}\"\"\""""
 
     data = safe_json(
         call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True)
@@ -1087,6 +1254,9 @@ NOTES:
             "missing_topics": [],
             "issues": ["Critique could not be parsed; revising to be safe."],
             "strengths": [],
+            "evidence_shown": evidence_shown,
+            "evidence_cited": len(cited_all),
+            "deferred_to_grounding": [],
         }
 
     try:
@@ -1096,6 +1266,23 @@ NOTES:
     score = max(1, min(10, score))
 
     unsupported = data.get("unsupported_claims", []) or []
+    deferred = []
+    if shown_ids is not None:
+        # Code guarantees behind the prompt rules - a prompt rule is not relied
+        # on where a deterministic guard is possible, since a flag here makes
+        # the reviser delete the claim. A claim whose cited passages were ALL
+        # withheld cannot have been judged, so it is not flagged. An UNCITED
+        # claim's evidence could be anywhere in a source too big to show, so
+        # grounding owns it (judged against passages retrieved for it); the
+        # flag is deferred, and kept visible, rather than acted on here.
+        def _ids(claim):
+            return {int(m) for m in _CITATION_RE.findall(str(claim))}
+        deferred = [u for u in unsupported if not _ids(u)]
+        dropped = [u for u in unsupported if _ids(u) and not (_ids(u) & shown_ids)]
+        if dropped:
+            print(f"[critique] ignored {len(dropped)} unsupported flag(s) on claims "
+                  f"whose cited passages were not shown.")
+        unsupported = [u for u in unsupported if _ids(u) & shown_ids]
     missing = data.get("missing_topics", []) or []
     # missing_topics is deliberately NOT a trigger on its own — an LLM critic
     # almost always lists something, which previously forced a revision on
@@ -1114,6 +1301,9 @@ NOTES:
         "missing_topics": missing,
         "issues": data.get("issues", []) or [],
         "strengths": data.get("strengths", []) or [],
+        "evidence_shown": evidence_shown,
+        "evidence_cited": len(cited_all),
+        "deferred_to_grounding": deferred,
     }
 
 
@@ -1121,7 +1311,8 @@ NOTES:
 # Agent: Revise (prompt builder + streaming)
 # ---------------------------------------------------------------------------
 
-def _revise_prompt(notes, critique, mode, plan, fmt, context="", instructions="") -> str:
+def _revise_prompt(notes, critique, mode, plan, fmt, context="", instructions="",
+                   chunk_map=None, added_ids=()) -> str:
     issues = critique.get("issues", [])
     missing = critique.get("missing_topics", [])
     unsupported = critique.get("unsupported_claims", [])
@@ -1130,10 +1321,28 @@ def _revise_prompt(notes, critique, mode, plan, fmt, context="", instructions=""
     unsupported_str = "\n".join(f"- {u}" for u in unsupported) if unsupported else "- (none)"
 
     context_block = (
-        f"\n\nCONTEXT (numbered passages — the ONLY source of truth; cite by number):\n{context[:40000]}"
+        f"\n\nCONTEXT (numbered passages — the ONLY source of truth; cite by number):\n{context[:REVISE_CONTEXT_CHARS]}"
         if context
         else ""
     )
+    # A context too big to show whole is replaced by the passages the notes
+    # cite plus those corrective re-retrieval just added - not its head slice,
+    # which hid the evidence for every later page from the reviser (the
+    # partial-view bug; see CRITIQUE_CONTEXT_CHARS).
+    if context and chunk_map and len(context) > REVISE_CONTEXT_CHARS:
+        added = [i for i in (added_ids or ()) if i in chunk_map]
+        ids = sorted(set(_cited_ids(notes[:NOTES_REWRITE_CAP], chunk_map)) | set(added))
+        if ids:
+            body, _shown, omitted = _passages_within(
+                ids, chunk_map, REVISE_CONTEXT_CHARS, priority=added)
+            omitted_str = (
+                "\nPassages cited but NOT shown (over budget): "
+                + ", ".join(str(i) for i in omitted)
+                + ". Keep claims citing them as they are.") if omitted else ""
+            context_block = (
+                "\n\nCONTEXT (numbered passages — the ONLY source of truth; cite by "
+                "number). These are the passages the notes cite plus any retrieved "
+                f"for missing topics, not the whole document.{omitted_str}\n{body}")
 
     return f"""You are the REVISION agent in a notes-generation pipeline.
 
@@ -1160,9 +1369,11 @@ CURRENT NOTES:
 \"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
 
 
-def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium") -> str:
+def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", context="", length="medium",
+                 chunk_map=None, added_ids=()) -> str:
     return call_model(
-        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions),
+        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions,
+                       chunk_map=chunk_map, added_ids=added_ids),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.4,
@@ -1170,9 +1381,10 @@ def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", 
 
 
 def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", context="",
-                        length="medium", on_serve=None):
+                        length="medium", on_serve=None, chunk_map=None, added_ids=()):
     yield from call_model_stream(
-        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions),
+        _revise_prompt(notes, critique, mode, plan, fmt, context, instructions,
+                       chunk_map=chunk_map, added_ids=added_ids),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.4,
@@ -1184,6 +1396,85 @@ def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructio
 # Agent: Rewrite (shorter / longer)
 # ---------------------------------------------------------------------------
 
+# Rewrite and inline edit REPLACE the user's notes with the model's answer, so
+# a partial answer is data loss - the same bug class as IncompleteStreamError.
+# Both used to send notes[:NOTES_REWRITE_CAP] and ask for the whole document
+# back: anything past the cap, or past the output budget, silently vanished.
+# Now neither ever truncates its input, and every call is strict (a completion
+# cut at the token cap raises instead of being returned as if complete).
+
+# Notes longer than this are rewritten in parts. Sized so a part's expected
+# output fits its token budget with headroom even for "longer" (1.5x):
+# 8000 chars ~ 2.7k tokens in, ~4k out, under the 4500-token "longer" cap.
+REWRITE_PART_CHARS = int(os.getenv("REWRITE_PART_CHARS", "8000"))
+# Bound the number of sequential calls one click can trigger (12 x 8000 =
+# 96k chars); longer notes get a clear refusal instead of a very slow request.
+REWRITE_MAX_PARTS = int(os.getenv("REWRITE_MAX_PARTS", "12"))
+
+_HEADING_LINE = re.compile(r"^#{1,6}\s")
+
+
+class RewriteTooLongError(ValueError):
+    """The notes would need more than REWRITE_MAX_PARTS rewrite calls."""
+
+
+def _pack(pieces, limit):
+    """Greedily join consecutive pieces into chunks of at most `limit` chars
+    (a single piece longer than `limit` stays whole as its own chunk)."""
+    out, cur = [], ""
+    for p in pieces:
+        if cur and len(cur) + len(p) > limit:
+            out.append(cur)
+            cur = ""
+        cur += p
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _split_for_rewrite(notes: str, limit: int):
+    """Split notes into parts of <= `limit` chars that tile the text exactly.
+
+    Boundaries prefer markdown headings (so each part is whole sections),
+    then blank-line paragraph breaks, then line breaks. Never mid-line: a
+    single line longer than `limit` becomes its own (oversized) part.
+    """
+    lines = notes.splitlines(keepends=True)
+    sections, cur = [], ""
+    for ln in lines:
+        if _HEADING_LINE.match(ln) and cur:
+            sections.append(cur)
+            cur = ""
+        cur += ln
+    if cur:
+        sections.append(cur)
+
+    pieces = []
+    for sec in sections:
+        if len(sec) <= limit:
+            pieces.append(sec)
+            continue
+        # Paragraphs: split after each blank line, keeping the text intact.
+        paras = [p for p in re.split(r"(?<=\n\n)", sec) if p]
+        for para in paras:
+            if len(para) <= limit:
+                pieces.append(para)
+            else:
+                pieces.extend(_pack(para.splitlines(keepends=True), limit))
+    # A section that fits is one piece, so a part only starts mid-section
+    # when that section is itself longer than `limit`.
+    return _pack(pieces, limit)
+
+
+def _rewrite_budget(chars: int, direction: str) -> int:
+    # Budget scales with input so the model can return the FULL rewritten text
+    # (a fixed budget silently truncated long rewrites).
+    est_tokens = max(1, chars) // 3
+    if direction == "longer":
+        return min(4500, max(3000, est_tokens * 2))
+    return min(3500, max(1800, est_tokens))
+
+
 def rewrite_notes(notes, direction, mode="exam", tone="academic", fmt="bullet", model=None) -> str:
     if direction == "shorter":
         change = "Condense these notes to roughly half the length, keeping only the most important points."
@@ -1192,8 +1483,22 @@ def rewrite_notes(notes, direction, mode="exam", tone="academic", fmt="bullet", 
     else:
         change = "Rewrite these notes to improve clarity while keeping the same length."
 
-    prompt = f"""You are the REWRITING agent. {change}
+    if len(notes) <= REWRITE_PART_CHARS:
+        parts = [notes]
+    else:
+        parts = _split_for_rewrite(notes, REWRITE_PART_CHARS)
+    if len(parts) > REWRITE_MAX_PARTS:
+        raise RewriteTooLongError(len(notes))
 
+    out = []
+    for i, part in enumerate(parts, 1):
+        where = ""
+        if len(parts) > 1:
+            where = (f"\nThis is part {i} of {len(parts)} of a longer set of notes. "
+                     "Rewrite ONLY this part. Do not add an introduction or a "
+                     "conclusion, and keep its headings.\n")
+        prompt = f"""You are the REWRITING agent. {change}
+{where}
 Keep the "{mode}" study focus and a {tone} tone.
 
 {_format_instructions(fmt)}
@@ -1201,38 +1506,192 @@ Keep the "{mode}" study focus and a {tone} tone.
 Return ONLY the rewritten notes — no commentary.
 
 NOTES:
-\"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
-
-    # Budget scales with input so the model can return the FULL rewritten text
-    # (a fixed budget silently truncated long rewrites).
-    est_tokens = max(1, len(notes)) // 3
-    if direction == "longer":
-        budget = min(4500, max(3000, est_tokens * 2))
-    else:
-        budget = min(3500, max(1800, est_tokens))
-    return call_model(prompt, max_tokens=budget, model=model)
+\"\"\"{part}\"\"\""""
+        # strict: a part cut at the token cap raises (and so does any other
+        # failure), which aborts the whole rewrite - partially rewritten notes
+        # are never returned.
+        out.append(call_model(prompt, max_tokens=_rewrite_budget(len(part), direction),
+                              model=model, strict=True).strip())
+    return "\n\n".join(out)
 
 
 # ---------------------------------------------------------------------------
 # Inline edit: apply an instruction to a selected passage
 # ---------------------------------------------------------------------------
 
-def edit_selection(notes, selection, instruction, model=None) -> str:
-    prompt = f"""You are editing study notes. Apply the INSTRUCTION ONLY to the
-SELECTED passage; leave the rest of the notes unchanged. Preserve the existing
-formatting and any [n] citations. Return the COMPLETE updated notes only — no
-commentary.
+# Surrounding notes shown with the selection, for coherence only.
+EDIT_CONTEXT_CHARS = int(os.getenv("EDIT_CONTEXT_CHARS", "1500"))
+# Most source lines one anchored edit may cover; beyond that the anchors are
+# ignored and the text-location path is used instead.
+EDIT_MAX_LINES = int(os.getenv("EDIT_MAX_LINES", "200"))
+
+
+class SelectionNotFoundError(ValueError):
+    """The selected text could not be found in the notes."""
+
+
+class SelectionAmbiguousError(ValueError):
+    """The selected text occurs more than once in the notes."""
+
+
+class EmptyEditError(RuntimeError):
+    """The model returned no replacement text."""
+
+
+def _locate_selection(notes: str, selection: str):
+    """Return the (start, end) span of `selection` in `notes`.
+
+    Exact match first; otherwise a whitespace-normalised match (the UI's
+    selection text comes from rendered markdown, where line breaks and
+    indentation collapse) mapped back to the original span. Exactly one
+    match is required - splicing into the wrong occurrence would silently
+    edit text the user never selected.
+    """
+    first = notes.find(selection) if selection else -1
+    if first != -1:
+        if notes.find(selection, first + 1) != -1:
+            raise SelectionAmbiguousError()
+        return first, first + len(selection)
+
+    target = " ".join(selection.split())
+    if not target:
+        raise SelectionNotFoundError()
+    # Collapse each whitespace run in the notes to one space, remembering
+    # where every kept character came from.
+    norm, idx = [], []
+    for m in re.finditer(r"\s+|\S+", notes):
+        if m.group(0)[0].isspace():
+            norm.append(" ")
+            idx.append(m.start())
+        else:
+            norm.append(m.group(0))
+            idx.extend(range(m.start(), m.end()))
+    flat = "".join(norm)
+    hits, pos = [], flat.find(target)
+    while pos != -1 and len(hits) < 2:
+        hits.append(pos)
+        pos = flat.find(target, pos + 1)
+    if not hits:
+        raise SelectionNotFoundError()
+    if len(hits) > 1:
+        raise SelectionAmbiguousError()
+    s = hits[0]
+    e = s + len(target) - 1
+    return idx[s], idx[e] + 1
+
+
+def _clean_replacement(text: str, keep_indent: bool = False) -> str:
+    text = (text or "").rstrip()
+    core = text.strip()
+    # Models sometimes echo the prompt's triple-quote delimiters.
+    if len(core) >= 6 and core.startswith('"""') and core.endswith('"""'):
+        text = core[3:-3].rstrip()
+    if not keep_indent:
+        return text.strip()
+    # Drop leading blank lines but keep the first line's indentation (a
+    # nested bullet must stay nested).
+    return re.sub(r"^(?:[ \t]*\n)+", "", text)
+
+
+def _anchored_span(lines, line_start, line_end):
+    """Validated, blank-trimmed (start, end) line indices, or None."""
+    if line_start is None or line_end is None:
+        return None
+    if not (0 <= line_start <= line_end < len(lines)):
+        return None
+    if line_end - line_start + 1 > EDIT_MAX_LINES:
+        return None
+    while line_start < line_end and not lines[line_start].strip():
+        line_start += 1
+    while line_end > line_start and not lines[line_end].strip():
+        line_end -= 1
+    if not lines[line_start].strip():
+        return None
+    return line_start, line_end
+
+
+def _edit_lines(lines, start, end, selection, instruction, model):
+    # Anchored edit: the UI told us which SOURCE lines the highlight covers.
+    # Needed because the highlight is rendered text - bold markers, bullets
+    # and [n] citations (shown as page chips) are gone from it, so it rarely
+    # matches the markdown verbatim. The model edits the raw lines, markdown
+    # and citations intact, and the server splices them back by line index.
+    passage = "\n".join(lines[start:end + 1])
+    before = "\n".join(lines[:start])[-EDIT_CONTEXT_CHARS:]
+    after = "\n".join(lines[end + 1:])[:EDIT_CONTEXT_CHARS]
+    prompt = f"""You are editing study notes. Apply the INSTRUCTION to the
+SOURCE LINES below. The reader highlighted this rendered text within them:
+"{selection[:2000]}"
+Change only what the instruction asks; keep the rest of these lines, their
+markdown formatting and ALL [n] citations. The text before and after is
+context so your edit fits in; do not repeat or change it. Return ONLY the
+replacement for the source lines - no commentary, no quotes.
 
 INSTRUCTION: {instruction or "improve this passage"}
 
-SELECTED PASSAGE:
-\"\"\"{selection[:2000]}\"\"\"
+CONTEXT BEFORE:
+\"\"\"{before}\"\"\"
 
-FULL NOTES:
-\"\"\"{notes[:NOTES_REWRITE_CAP]}\"\"\""""
-    # Must be able to return the COMPLETE notes, not just the edited passage.
-    budget = min(8000, max(2800, len(notes) // 3))
-    return call_model(prompt, max_tokens=budget, model=model, temperature=0.4)
+SOURCE LINES:
+\"\"\"{passage}\"\"\"
+
+CONTEXT AFTER:
+\"\"\"{after}\"\"\""""
+    budget = min(8000, max(600, len(passage) * 2 // 3))
+    replacement = _clean_replacement(
+        call_model(prompt, max_tokens=budget, model=model, temperature=0.4, strict=True),
+        keep_indent=True)
+    if not replacement.strip():
+        raise EmptyEditError()
+    return "\n".join(lines[:start] + [replacement] + lines[end + 1:])
+
+
+def edit_selection(notes, selection, instruction, model=None,
+                   line_start=None, line_end=None) -> str:
+    # Edit only the selection, then splice (the search/replace pattern code
+    # editors use instead of whole-file rewrites): the model returns just the
+    # new passage, so text outside the selection cannot be dropped or drift,
+    # and the output budget no longer has to fit the whole document.
+    # Source-line anchors from the UI are preferred; locating the rendered
+    # text in the markdown is the fallback when they are missing or invalid.
+    lines = notes.split("\n")
+    span = _anchored_span(lines, line_start, line_end)
+    if span is not None:
+        return _edit_lines(lines, span[0], span[1], selection, instruction, model)
+
+    start, end = _locate_selection(notes, selection)
+    # Leave the selection's own leading/trailing whitespace in place.
+    while start < end and notes[start].isspace():
+        start += 1
+    while end > start and notes[end - 1].isspace():
+        end -= 1
+    passage = notes[start:end]
+    before = notes[max(0, start - EDIT_CONTEXT_CHARS):start]
+    after = notes[end:end + EDIT_CONTEXT_CHARS]
+
+    prompt = f"""You are editing study notes. Apply the INSTRUCTION to the
+SELECTED PASSAGE only. The text before and after it is context so your edit
+fits in; do not repeat or change it. Preserve the passage's markdown formatting
+and keep any [n] citations it relies on. Return ONLY the replacement text for
+the selected passage — no commentary, no quotes.
+
+INSTRUCTION: {instruction or "improve this passage"}
+
+CONTEXT BEFORE:
+\"\"\"{before}\"\"\"
+
+SELECTED PASSAGE:
+\"\"\"{passage}\"\"\"
+
+CONTEXT AFTER:
+\"\"\"{after}\"\"\""""
+    # Sized to the selection (~3 chars/token, room to roughly double it).
+    budget = min(8000, max(600, len(passage) * 2 // 3))
+    replacement = _clean_replacement(
+        call_model(prompt, max_tokens=budget, model=model, temperature=0.4, strict=True))
+    if not replacement:
+        raise EmptyEditError()
+    return notes[:start] + replacement + notes[end:]
 
 
 # ---------------------------------------------------------------------------
@@ -1971,7 +2430,8 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
         # plus a breadth sample for coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
         critique = critique_notes(
-            notes, plan, mode, source=context, model=model, doc_sample=doc_sample
+            notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
+            chunk_map=chunk_map,
         )
         yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
@@ -1998,6 +2458,9 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             # with each missing topic and merge any new chunks into the context
             # before revising; the frontend gets the merged sources list.
             missing = critique.get("missing_topics") or []
+            # Ids added this round, so the reviser is shown them even when the
+            # full context is too big to send.
+            round_added = []
             if missing:
                 added = False
                 for topic in missing[:CORRECTIVE_TOPICS_MAX]:
@@ -2008,6 +2471,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                     for c in extra:
                         if c["id"] not in chunk_map:
                             chunk_map[c["id"]] = c
+                            round_added.append(c["id"])
                             added = True
                 if added:
                     merged = [chunk_map[i] for i in sorted(chunk_map)]
@@ -2026,7 +2490,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 for delta in revise_notes_stream(
                     notes, critique, mode, plan, active_fmt, model=model,
                     instructions=instructions, context=context, length=revise_length,
-                    on_serve=_record_serve,
+                    on_serve=_record_serve, chunk_map=chunk_map, added_ids=round_added,
                 ):
                     parts.append(delta)
                     yield _emit("notes_delta", "revise", delta)
@@ -2058,7 +2522,8 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             # Re-critique the revised notes (against the possibly augmented context).
             yield _emit("status", "critique", f"Re-checking (round {rounds})...")
             critique = critique_notes(
-                notes, plan, mode, source=context, model=model, doc_sample=doc_sample
+                notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
+                chunk_map=chunk_map,
             )
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
@@ -2092,7 +2557,8 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
         if GROUNDING_CHECK and chunk_map:
             yield _emit("status", "critique", "Checking every claim against its source…")
             try:
-                grounded, gstats = verify_claim_support(notes, chunk_map, model=helper)
+                grounded, gstats = verify_claim_support(notes, chunk_map, model=helper,
+                                                        retriever=retriever)
             except Exception as exc:  # noqa: BLE001
                 print(f"[grounding] check failed ({exc}); notes left as written.")
                 grounded, gstats = notes, None

@@ -204,6 +204,8 @@ Either way, both modes get the same core rules: follow the plan, hit the target 
 
 The notes are passed as an even sample across their whole length (up to 20,000 characters, anchored to the end), so a long draft's tail isn't invisible. It returns a score from 1–10, plus the specific lists — not just a number, but a **reason** the revision agent can act on directly.
 
+**On long sources the critique sees what the notes cite.** When the writer's context is over 12,000 characters and the notes cite passages, the critique is no longer shown the head of that context (on the long-document path that hid every later page, so true claims about them were flagged as unsupported). It is shown the whole passages cited in the notes excerpt it reads, never cut mid-passage, up to 40,000 characters (`CRITIQUE_CONTEXT_CHARS`), and the prompt names any cited ids left out for budget. Code then enforces what the prompt asks: a flag on a claim whose cited passages were all withheld is dropped, and a flag on an *uncited* claim is not acted on here but listed as `deferred_to_grounding`, because its evidence could be anywhere in the document and the grounding step checks it against passages retrieved for it. The result also carries `evidence_shown` / `evidence_cited`, so a partial view is visible instead of silent. If the notes cite nothing, the first 12,000 characters are still what it sees.
+
 **When revision is triggered:** the model's own `needs_revision` flag, a score below 8, or *any* unsupported claim. Missing topics alone do **not** force a revision — an LLM critic almost always lists something — they feed corrective re-retrieval when a revision happens anyway.
 
 **Strengths:**
@@ -214,7 +216,8 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **Limitations:**
 
-- The context shown to the critique is cut to its first 12,000 characters. On the single-pass path that is most or all of it; on the long-document path the context is every window's passages, so faithfulness is effectively judged against the start of the document only, and correct claims from later pages can be flagged as unsupported. Checking each window against its own passages is the natural next improvement.
+- Cited passages beyond the 40,000-character budget are named and skipped, not judged, and only citations inside the 20,000-character notes excerpt count.
+- The model's raw `needs_revision` flag or a low score still triggers a revision even when every flagged claim was dropped or deferred, so a round can be wasted. It can't make the notes worse: a revision is only kept if it scores strictly higher.
 - It's still one model's judgment. There's no independent second critique or human-in-the-loop check — the per-claim grounding step afterwards is the backstop.
 
 ---
@@ -225,7 +228,7 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **Job:** Take the critique's specific complaints and actually fix them, without throwing away what was already correct.
 
-**How it works:** The revision prompt is built directly from the critique's structured output — it lists the unsupported claims to remove/correct, the missing topics to add, and any other quality issues. It's given the writer's context (up to 40,000 characters), so anything it adds is still grounded in real passages.
+**How it works:** The revision prompt is built directly from the critique's structured output — it lists the unsupported claims to remove/correct, the missing topics to add, and any other quality issues. It's given the writer's context (up to 40,000 characters, `REVISE_CONTEXT_CHARS`), so anything it adds is still grounded in real passages. When that context is larger, it gets the whole passages the notes cite plus the ones corrective re-retrieval added that round (those admitted first) within the same 40,000 characters, rather than the head of the context; cited passages that don't fit are named and the reviser is told to keep claims citing them as they are.
 
 **Corrective re-retrieval.** Before each round, if the critique reported missing topics, the retriever is queried once per topic (up to 4 topics, 3 chunks each) and any new passages are merged into the context — the reviser can only add a topic it is actually shown. The merged source list is re-sent to the UI.
 
@@ -245,7 +248,7 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 **Limitations:**
 
 - Long notes (over 30,000 characters — easy to reach with 12 windows on the "long" setting) skip revision entirely, so on the biggest documents the post-draft checks are citation validation and grounding only.
-- The reviser's context is cut at 40,000 characters, and it doesn't get the document-type rule the writer had.
+- On large sources the reviser sees only cited and newly retrieved passages, so it can't add a topic that was neither cited nor retrieved, and cited passages past 40,000 characters are left unseen. It also doesn't get the document-type rule the writer had.
 - Two rounds is a real ceiling. A document with several distinct faithfulness problems might need more passes than the budget allows; the tradeoff is intentional (cost and latency vs. thoroughness).
 
 ---
@@ -273,7 +276,7 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **Job:** Ask the question citation validation can't: does the cited evidence actually *support* the claim?
 
-**How it works:** Every line that asserts something is treated as a claim — headings, rules, fully bold lines and lines under 5 words are skipped, but an *uncited* line is checked too (selecting only cited lines would let an invented, uncited claim through untouched). Claims go to the helper model in batches of 6, each with its own evidence: the full text of the passages it cites, or, for an uncited claim, the whole retrieved context. The model returns a verdict per claim at temperature 0:
+**How it works:** Every line that asserts something is treated as a claim — headings, rules, fully bold lines and lines under 5 words are skipped, but an *uncited* line is checked too (selecting only cited lines would let an invented, uncited claim through untouched). Claims go to the helper model in batches of 6, each with its own evidence: the full text of the passages it cites, or, for an uncited claim, the whole retrieved context. When that context is over 14,000 characters (`GROUNDING_SOURCE_CHARS`) it is not truncated to fit: each uncited claim is judged against the passages the retriever finds for it instead (`GROUNDING_RETRIEVE_K` = 4, limited to passages the writer or reviser was shown), and a claim with nothing retrieved is left as written and counted as `skipped_partial_view`, because deleting on a view known to be partial is how true claims about later pages used to be lost. On a synthetic ~200,000-character source with 40 facts, the share of needed evidence shown to the critique and grounding went from 0.05 to 1.00; before the fix only 2 of the 40 true late-document facts survived critique and revision. The model returns a verdict per claim at temperature 0:
 
 - `supported` — kept as written.
 - `unsupported` — the line is removed.
@@ -284,7 +287,7 @@ The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupport
 **Strengths:**
 
 - Catches the failure citation validation can't: a perfectly resolving citation attached to a claim the page never makes.
-- Uncited claims don't escape — they are judged against the source instead of skipped.
+- Uncited claims don't escape — they are judged against the source (or, on large sources, the passages retrieved for them) instead of skipped, so a fabricated uncited claim is still removed.
 - Verdicts and rewrites are separate calls, because asking for both at once overran the output budget and left most claims unjudged.
 
 **Limitations:**
@@ -292,7 +295,7 @@ The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupport
 - It is an LLM judgment by the smaller helper model, not a proof.
 - It fails open: if a batch call fails or returns no verdict, those claims are left exactly as written. The count of unjudged claims is logged on the server but not shown to the user.
 - The unit is a line. In paragraph format a whole paragraph is one claim, so a single `unsupported` verdict removes the entire paragraph.
-- For uncited claims the evidence is the retrieved context cut to its first 14,000 characters (`GROUNDING_SOURCE_CHARS`). On long documents a true but uncited claim from later pages can be judged against text that doesn't contain it, and removed.
+- On large sources an uncited claim is only as well judged as retrieval is: if the retriever misses the passage it came from, a true claim can still be judged unsupported and removed. With nothing retrieved at all, the claim ships unjudged.
 
 ---
 
@@ -355,11 +358,11 @@ The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupport
 
 A few more single-purpose agents exist in `agent.py` that don't run as part of `run_agent()`, but are called directly by other parts of the app:
 
-- **`rewrite_notes()`** — condenses notes to roughly half length, expands them to ~1.5x, or just improves clarity, depending on what button the user clicks. Used by the "shorter / longer" controls in the UI.
-- **`edit_selection()`** — applies a specific instruction (like "make this simpler") to just the text a user has highlighted, leaving the rest of the notes untouched. This is the "inline assistant" feature — select text, ask for a change, get back the complete notes with just that passage updated.
+- **`rewrite_notes()`** — condenses notes to roughly half length, expands them to ~1.5x, or just improves clarity, depending on what button the user clicks. Used by the "shorter / longer" controls in the UI. Notes over 8,000 characters (`REWRITE_PART_CHARS`) are rewritten in parts split at headings (then paragraphs, then lines), each its own strict call; more than 12 parts (`REWRITE_MAX_PARTS`) is refused with a 422, and any part that fails or is cut off fails the whole rewrite with a 502, leaving the notes unchanged. Parts are joined with a blank line.
+- **`edit_selection()`** — applies a specific instruction (like "make this simpler") to just the text a user has highlighted. This is the "inline assistant" feature. The highlight is rendered text (no markdown or citations), so the UI also sends the source lines it covers, read from `data-line` anchors on the rendered lines (`line_start` / `line_end`); the model gets just those lines plus a little surrounding context and returns their replacement, which the server splices back in. Without usable anchors the server locates the text in the notes (exact, then whitespace-normalised) and returns a 422 if it isn't found or appears more than once. The model never regenerates the whole notes, so text outside the selection can't be dropped. A triple-click selection can reach into the next line, which is then sent too; the model is told to leave the rest of the lines unchanged.
 - **`chat_about_notes_stream()`** — a tutor-style chat that answers questions grounded primarily in the generated notes (an even sample of up to 10,000 characters), with the last 6 turns of conversation history included for context. If the notes don't cover something, it's explicitly allowed to fall back to general knowledge, but told to say so. If the answer stream is cut off, `/api/chat` appends a visible "cut off — please ask again" notice instead of ending as if the answer were complete.
 
-One limitation worth knowing: `rewrite_notes()` and `edit_selection()` cut their input notes at `NOTES_REWRITE_CAP` (30,000 characters) with no refusal, unlike the in-pipeline revise step. On notes longer than that, the returned text is missing everything past the cap.
+Both replace the user's notes with the model's answer, so a partial answer would be data loss. They never truncate their input and use `call_model(strict=True)`: a completion the provider says it stopped at the token cap raises `IncompleteStreamError(reason="max_tokens")` and fails over to the next provider instead of being returned as if complete.
 
 These all share the same philosophy as the main pipeline — stay grounded in the notes/source wherever possible — but they're simpler, single-shot calls rather than multi-agent loops, because their tasks don't need planning or self-correction.
 
@@ -392,18 +395,17 @@ Everything *outside* `run_agent()` uses the model the UI sends — the user's pi
 
 **What it's genuinely good at:**
 
-- Never silently failing — every agent has a sensible fallback (permissive gatekeeper, safe default plan, "assume revision needed" critique, fail-open grounding), and a stream that is cut off is recorded as incomplete rather than passed off as a finished answer.
+- Never silently failing — every agent has a sensible fallback (permissive gatekeeper, safe default plan, "assume revision needed" critique, fail-open grounding), and a stream that is cut off is recorded as incomplete rather than passed off as a finished answer. That is one bug class — a partial view or partial output treated as complete — and the same rule now covers the judges and the editors: the critique, reviser and grounding check are shown the evidence for what they judge (cited or retrieved passages, not the head of a long context) and refuse to act on views known to be partial, and rewrite and inline edit never return partial notes.
 - Actually checking its own work — the critique/revise loop, then deterministic citation validation, then a per-claim grounding check that removes or tightens lines their evidence doesn't support.
 - Covering entire long documents — coverage windows partition the source so every passage is written about, and a durable coverage record plus an "Incomplete coverage" banner says so when a part could not be generated.
 - Being honest about faithfulness — the scoring is deliberately strict about penalizing fabricated claims over almost everything else.
 
 **What's still genuinely unverified or missing today:**
 
-- **Grounding is an LLM judgment, not a proof.** It runs on the smaller helper model, works line by line (a paragraph is one line), fails open (unjudged claims ship as written, and the user isn't told how many), and judges uncited claims against only the first 14,000 characters of the retrieved context.
-- **Checks on long documents are coarser than the writing.** The critique sees only the first 12,000 characters of the writer's context, and notes over 30,000 characters skip revision entirely.
+- **Grounding is an LLM judgment, not a proof.** It runs on the smaller helper model, works line by line (a paragraph is one line), fails open (unjudged claims ship as written, and the user isn't told how many), and on large sources judges an uncited claim against the passages retrieved for it, so a retrieval miss can still remove a true claim.
+- **Checks on long documents are coarser than the writing.** The critique and reviser see cited passages up to 40,000 characters, and anything cited beyond that is named and skipped, not judged; notes over 30,000 characters skip revision entirely. A critic's raw `needs_revision` flag or score can still trigger a wasted revision round.
 - **No cross-encoder reranking** after the hybrid search — the retrieval quality is capped at what BM25 + embeddings + RRF can do; the code has a clean seam (`_process_candidates()`) for this to be added later, but it isn't built yet.
 - **The quiz users see is not answer-key verified** — `verify_quiz()` only runs on the in-pipeline path. There's also no distractor-quality check and no flashcard verification.
-- **Standalone rewrite and inline edit truncate** notes longer than 30,000 characters instead of refusing.
 - **Daily free-tier quotas are a real ceiling**, not just a hypothetical — this has already caused a real outage in production, and the two-model routing fix reduces but does not eliminate the risk.
 
 This isn't a finished, perfect system — it's a genuinely well-engineered one with clear, honest edges. Knowing exactly where those edges are is what makes it possible to keep improving it deliberately instead of guessing.

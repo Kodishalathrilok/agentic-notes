@@ -18,6 +18,7 @@ import asyncio
 import logging
 import ipaddress
 from io import BytesIO
+from typing import Optional
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,6 +38,9 @@ from agent import (
     rewrite_notes,
     chat_about_notes_stream,
     edit_selection,
+    SelectionNotFoundError,
+    SelectionAmbiguousError,
+    RewriteTooLongError,
 )
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
 from retriever import active_embedding_backend, page_spans, normalize
@@ -258,6 +262,11 @@ class EditSelectionRequest(BaseModel):
     selection: str = Field(default="", max_length=20000)
     instruction: str = Field(default="", max_length=2000)
     model: str = Field(default="", max_length=100)
+    # Source-line anchors from the rendered notes (NotesOutput's data-line):
+    # the highlight is rendered text without markdown/citations, so these
+    # say which raw lines it covers. Optional; text matching is the fallback.
+    line_start: Optional[int] = Field(default=None, ge=0, le=200000)
+    line_end: Optional[int] = Field(default=None, ge=0, le=200000)
 
 
 class ExportRequest(BaseModel):
@@ -543,16 +552,43 @@ async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 
 
 @app.post("/api/edit-selection")
 async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
-    notes = (req.notes or "").strip()
+    raw = req.notes or ""
+    notes = raw.strip()
+    # The anchors index the notes as the client rendered them; stripping
+    # leading blank lines shifts every line, so shift the anchors with them.
+    lead = raw[:len(raw) - len(raw.lstrip())].count("\n")
+    line_start = None if req.line_start is None else req.line_start - lead
+    line_end = None if req.line_end is None else req.line_end - lead
     selection = (req.selection or "").strip()
     if not notes or not selection:
         raise HTTPException(
             status_code=422, detail="`notes` and `selection` are required.")
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        EXECUTOR, lambda: edit_selection(
-            notes, selection, req.instruction, req.model)
-    )
+    try:
+        result = await loop.run_in_executor(
+            EXECUTOR, lambda: edit_selection(
+                notes, selection, req.instruction, req.model,
+                line_start=line_start, line_end=line_end)
+        )
+    except SelectionNotFoundError:
+        raise HTTPException(
+            status_code=422,
+            detail="Couldn't find the selected text in your notes. "
+            "Try selecting it again.")
+    except SelectionAmbiguousError:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected text appears more than once in your notes. "
+            "Select a longer passage so it's unique.")
+    except Exception as exc:  # noqa: BLE001 - provider failure, truncation, empty reply
+        # Generic on purpose: exception text can carry provider URLs/keys.
+        # A strict call that was cut off lands here too - the notes are left
+        # exactly as they were rather than replaced with a partial edit.
+        print(f"[edit-selection] failed: {type(exc).__name__}")
+        raise HTTPException(
+            status_code=502,
+            detail="The edit couldn't be completed. Nothing was changed - "
+            "please try again.")
     return {"notes": result}
 
 
@@ -564,11 +600,25 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, da
     if req.direction not in ("shorter", "longer", "clarity"):
         raise HTTPException(status_code=422, detail="Invalid `direction`.")
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        EXECUTOR,
-        lambda: rewrite_notes(notes, req.direction, req.mode,
-                              req.tone, req.format, req.model),
-    )
+    try:
+        result = await loop.run_in_executor(
+            EXECUTOR,
+            lambda: rewrite_notes(notes, req.direction, req.mode,
+                                  req.tone, req.format, req.model),
+        )
+    except RewriteTooLongError:
+        raise HTTPException(
+            status_code=422,
+            detail="These notes are too long to rewrite in one go. "
+            "Try rewriting a section at a time.")
+    except Exception as exc:  # noqa: BLE001 - provider failure or a truncated part
+        # Any failed or cut-off part fails the whole rewrite: partially
+        # rewritten notes are never returned. Message kept generic (no keys).
+        print(f"[rewrite] failed: {type(exc).__name__}")
+        raise HTTPException(
+            status_code=502,
+            detail="The rewrite couldn't be completed. Nothing was changed - "
+            "please try again.")
     return {"notes": result}
 
 
