@@ -705,9 +705,13 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
 
     # YouTube: fetch the caption transcript (the real content) instead of HTML.
     yt_id = _youtube_id(url)
+    loop = asyncio.get_event_loop()
     if yt_id:
         try:
-            transcript = _youtube_transcript(yt_id).strip()
+            # Blocking network call — keep it off the event loop (single
+            # worker: it would otherwise stall every open SSE stream).
+            transcript = (await loop.run_in_executor(
+                EXECUTOR, lambda: _youtube_transcript(yt_id))).strip()
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
@@ -723,7 +727,6 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
             "chars": min(len(transcript), MAX_TEXT_CHARS),
         }
 
-    loop = asyncio.get_event_loop()
     try:
         resp = await loop.run_in_executor(EXECUTOR, lambda: _fetch_url_safely(url))
     except HTTPException:
@@ -761,10 +764,15 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
+# Rendering up to 300k chars with reportlab/python-docx is CPU-bound for a
+# noticeable time; run it on EXECUTOR so the single worker's event loop (and
+# every open SSE stream) isn't frozen meanwhile.
 
 @app.post("/api/export/pdf")
 async def export_pdf(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    pdf_bytes = notes_to_pdf(req.notes, req.quiz, req.flashcards)
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        EXECUTOR, lambda: notes_to_pdf(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
         BytesIO(pdf_bytes),
         media_type="application/pdf",
@@ -774,7 +782,9 @@ async def export_pdf(req: ExportRequest, user=Depends(limiter("export", 30, 600)
 
 @app.post("/api/export/markdown")
 async def export_markdown(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    md = notes_to_markdown(req.notes, req.quiz, req.flashcards)
+    loop = asyncio.get_event_loop()
+    md = await loop.run_in_executor(
+        EXECUTOR, lambda: notes_to_markdown(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
         BytesIO(md.encode("utf-8")),
         media_type="text/markdown",
@@ -784,7 +794,9 @@ async def export_markdown(req: ExportRequest, user=Depends(limiter("export", 30,
 
 @app.post("/api/export/docx")
 async def export_docx(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    data = notes_to_docx(req.notes, req.quiz, req.flashcards)
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(
+        EXECUTOR, lambda: notes_to_docx(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
         BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -794,7 +806,9 @@ async def export_docx(req: ExportRequest, user=Depends(limiter("export", 30, 600
 
 @app.post("/api/export/flashcards-csv")
 async def export_flashcards_csv(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    csv_text = flashcards_to_csv(req.flashcards)
+    loop = asyncio.get_event_loop()
+    csv_text = await loop.run_in_executor(
+        EXECUTOR, lambda: flashcards_to_csv(req.flashcards))
     return StreamingResponse(
         BytesIO(csv_text.encode("utf-8")),
         media_type="text/csv",

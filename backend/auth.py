@@ -27,6 +27,7 @@ import threading
 
 import requests as _requests
 from fastapi import Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 
 # auth.py is imported before main.py calls load_dotenv(), so load the .env
@@ -144,13 +145,21 @@ def _verify_local(token: str):
     return {"id": claims.get("sub"), "email": (claims.get("email") or "").lower()}
 
 
+def _cached_user(token: str):
+    """Return the cached user for this token, or None if absent/expired."""
+    with _cache_lock:
+        hit = _user_cache.get(token)
+        if hit and hit[1] > time.time():
+            return hit[0]
+    return None
+
+
 def _verify_remote(token: str):
     """Verify by asking Supabase who this token belongs to (cached)."""
     now = time.time()
-    with _cache_lock:
-        hit = _user_cache.get(token)
-        if hit and hit[1] > now:
-            return hit[0]
+    cached = _cached_user(token)
+    if cached is not None:
+        return cached
 
     try:
         r = _requests.get(
@@ -208,8 +217,15 @@ async def require_user(
     if not token:
         raise HTTPException(401, "Sign in required.")
 
-    user = _verify_local(
-        token) if SUPABASE_JWT_SECRET else _verify_remote(token)
+    if SUPABASE_JWT_SECRET:
+        user = _verify_local(token)
+    else:
+        # _verify_remote makes a blocking HTTP call (up to 8s). One uvicorn
+        # worker serves every SSE stream, so run it off the event loop or a
+        # slow Supabase stalls all of them. Cache hits skip the thread hop.
+        user = _cached_user(token)
+        if user is None:
+            user = await run_in_threadpool(_verify_remote, token)
 
     if ALLOWED_EMAILS and user.get("email") not in ALLOWED_EMAILS:
         raise HTTPException(
