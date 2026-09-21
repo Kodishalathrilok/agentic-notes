@@ -123,7 +123,7 @@ def test_quiz_newlines_inside_fields_flattened(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Quiz verification (JSON corrections applied to parsed quiz)
+# Quiz verification (per-question verdicts; evidence-checked corrections)
 # ---------------------------------------------------------------------------
 
 QUIZ_TEXT = (
@@ -134,10 +134,18 @@ QUIZ_TEXT = (
 )
 
 
+VERIFY_NOTES = "- Chlorophyll absorbs light energy for photosynthesis [1].\n- The stroma is inside the chloroplast [2].\n"
+
+
 def test_verify_quiz_applies_corrections(monkeypatch):
-    corr = json.dumps({"corrections": [{"q": 1, "answer": "A", "explanation": "Chlorophyll absorbs light."}]})
+    corr = json.dumps({"verdicts": [
+        {"q": 1, "correct": False, "answer": "A",
+         "evidence": "Chlorophyll absorbs light energy for photosynthesis",
+         "explanation": "Chlorophyll absorbs light."},
+        {"q": 2, "correct": True, "answer": "B", "evidence": ""},
+    ]})
     monkeypatch.setattr(agent, "call_model", lambda *a, **k: corr)
-    out = agent.verify_quiz("notes", QUIZ_TEXT)
+    out = agent.verify_quiz(VERIFY_NOTES, QUIZ_TEXT)
     parsed = _frontend_parse_quiz(out)
     assert parsed[0]["answer"] == "A"          # corrected
     assert parsed[1]["answer"] == "B"          # untouched
@@ -145,23 +153,25 @@ def test_verify_quiz_applies_corrections(monkeypatch):
 
 
 def test_verify_quiz_no_corrections_returns_original(monkeypatch):
-    monkeypatch.setattr(agent, "call_model", lambda *a, **k: '{"corrections": []}')
-    assert agent.verify_quiz("notes", QUIZ_TEXT) == QUIZ_TEXT
+    ok = json.dumps({"verdicts": [{"q": 1, "correct": True}, {"q": 2, "correct": True}]})
+    monkeypatch.setattr(agent, "call_model", lambda *a, **k: ok)
+    assert agent.verify_quiz(VERIFY_NOTES, QUIZ_TEXT) == QUIZ_TEXT
 
 
 def test_verify_quiz_garbage_returns_original(monkeypatch):
     monkeypatch.setattr(agent, "call_model", lambda *a, **k: "not json at all")
-    assert agent.verify_quiz("notes", QUIZ_TEXT) == QUIZ_TEXT
+    assert agent.verify_quiz(VERIFY_NOTES, QUIZ_TEXT) == QUIZ_TEXT
 
 
 def test_verify_quiz_ignores_invalid_corrections(monkeypatch):
-    corr = json.dumps({"corrections": [
-        {"q": 99, "answer": "A"},      # out of range
-        {"q": "x", "answer": "A"},     # non-numeric
-        {"q": 2, "answer": "Z"},       # bad letter
+    ev = "Chlorophyll absorbs light energy for photosynthesis"
+    corr = json.dumps({"verdicts": [
+        {"q": 99, "correct": False, "answer": "A", "evidence": ev},   # out of range
+        {"q": "x", "correct": False, "answer": "A", "evidence": ev},  # non-numeric
+        {"q": 2, "correct": False, "answer": "Z", "evidence": ev},    # bad letter
     ]})
     monkeypatch.setattr(agent, "call_model", lambda *a, **k: corr)
-    out = agent.verify_quiz("notes", QUIZ_TEXT)
+    out = agent.verify_quiz(VERIFY_NOTES, QUIZ_TEXT)
     parsed = _frontend_parse_quiz(out)
     assert parsed[0]["answer"] == "B" and parsed[1]["answer"] == "B"
 

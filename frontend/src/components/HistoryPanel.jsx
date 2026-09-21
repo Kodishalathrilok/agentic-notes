@@ -38,7 +38,7 @@ function formatDate(ts) {
   }
 }
 
-function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
+function SessionCard({ session, onLoad, onDelete, onUpdate, onShare, onUnshare }) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [title, setTitle] = useState(session.title || '')
   const [tagInput, setTagInput] = useState('')
@@ -138,6 +138,15 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
             {session.is_public ? 'Copy link' : 'Share'}
           </button>
         )}
+        {onUnshare && session.is_public && (
+          <button
+            onClick={() => onUnshare(session.id)}
+ className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+            title="Turn off the public link"
+          >
+            Stop sharing
+          </button>
+        )}
         <button
           onClick={() => onDelete(session.id)}
  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-slate-600 dark:hover:bg-red-900/20"
@@ -149,7 +158,7 @@ function SessionCard({ session, onLoad, onDelete, onUpdate, onShare }) {
   )
 }
 
-export default function HistoryPanel({ history, onLoad, onDelete, onUpdate, onShare, cloud }) {
+export default function HistoryPanel({ history, onLoad, onDelete, onUpdate, onShare, onUnshare, cloud }) {
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
@@ -199,6 +208,7 @@ export default function HistoryPanel({ history, onLoad, onDelete, onUpdate, onSh
             onDelete={onDelete}
             onUpdate={onUpdate}
             onShare={onShare}
+            onUnshare={onUnshare}
           />
         ))
       )}

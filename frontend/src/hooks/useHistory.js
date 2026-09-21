@@ -69,10 +69,10 @@ export default function useHistory(user) {
       const { data, error } = await supabase
         .from('sessions')
         .select('*')
-        // Explicit owner filter. RLS also enforces this, but its "read public
-        // sessions" policy deliberately exposes every is_public row to every
-        // signed-in caller — so an unfiltered select pulled other people's
-        // shared notes into this user's History.
+        // Explicit owner filter. RLS enforces this too (shared notes are no
+        // longer readable through the table — see supabase/schema.sql), but
+        // until its STEP 2 has run on a project the old public-read policy
+        // still exposes every is_public row, so keep filtering here.
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(50)
@@ -136,5 +136,18 @@ export default function useHistory(user) {
     [cloud]
   )
 
-  return { history, cloud, reload, addSession, updateSession, deleteSession, shareSession }
+  // Make a session private again. The share link stops resolving at once
+  // (get_shared_session only returns is_public rows). Returns true on success.
+  const unshareSession = useCallback(
+    async (id) => {
+      if (!cloud) return false
+      const { error } = await supabase.from('sessions').update({ is_public: false }).eq('id', id)
+      if (error) return false
+      setHistory((h) => h.map((s) => (s.id === id ? { ...s, is_public: false } : s)))
+      return true
+    },
+    [cloud]
+  )
+
+  return { history, cloud, reload, addSession, updateSession, deleteSession, shareSession, unshareSession }
 }

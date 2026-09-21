@@ -1766,6 +1766,12 @@ def _render_quiz(questions: list) -> str:
     return "\n\n".join(blocks)
 
 
+# The quiz writer and the answer-key checker must read the SAME notes. The
+# checker used to get a 9000-char excerpt of notes the writer saw at 12000, so
+# it could "correct" a right answer from a partial view (the same bug class as
+# the critique/judge truncation fixes). Both now use this one constant.
+QUIZ_NOTES_CHARS = 12000
+
 _QUIZ_JSON_SCHEMA = """{"questions": [{"question": "<question text>",
 "options": {"A": "<option>", "B": "<option>", "C": "<option>", "D": "<option>"},
 "answer": "<A|B|C|D>", "explanation": "<one-sentence explanation>"}]}"""
@@ -1785,7 +1791,7 @@ Return ONLY a JSON object in exactly this shape (no markdown, no commentary):
 Every question must have exactly four options A-D and one correct answer letter.
 
 NOTES:
-\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
+\"\"\"{_notes_excerpt(notes, QUIZ_NOTES_CHARS)}\"\"\""""
 
     try:
         data = safe_json(call_model(
@@ -1816,63 +1822,129 @@ Explanation: <one-sentence explanation>
 Leave a blank line between questions. Number them Q1, Q2, ... up to Q{n}.
 
 NOTES:
-\"\"\"{_notes_excerpt(notes, 12000)}\"\"\""""
+\"\"\"{_notes_excerpt(notes, QUIZ_NOTES_CHARS)}\"\"\""""
 
     return call_model(prompt, max_tokens=1200, model=model, temperature=0.3)
 
 
-def verify_quiz(notes, quiz, model=None) -> str:
-    """
-    Validate the answer key: re-check each marked answer against the NOTES.
-    The verifier returns JSON corrections ({"corrections": [{"q": 1,
-    "answer": "B", "explanation": "..."}]}) which are applied to the parsed
-    quiz and re-rendered — so a chatty verifier can no longer corrupt the
-    quiz format. Any failure returns the original quiz unchanged.
-    """
-    if not quiz or not quiz.strip():
-        return quiz
+# A correction must carry a quote from the notes that Python can find there.
+# The verifier's verdict alone is not enough: a wrong verifier used to silently
+# overwrite a right answer. Quotes shorter than this can't pin anything down.
+_EVIDENCE_MIN_WORDS = 5
 
-    prompt = f"""You are a QUIZ VERIFIER. For each question in the QUIZ, check whether
+
+def _norm_evidence(text) -> str:
+    """Normalise notes/quote text for the evidence check: lowercase, drop
+    `**` bold markers and `[n]` citation markers (with the space before them),
+    collapse whitespace. Applied to BOTH sides, so a plain-text quote matches
+    notes that render the same sentence with markdown and citations."""
+    t = str(text or "").lower().replace("**", "")
+    t = re.sub(r"\s*\[\d+(?:\s*[,–-]\s*\d+)*\]", "", t)
+    return " ".join(t.split())
+
+
+def _evidence_supported(evidence, notes_view: str) -> bool:
+    quote = _norm_evidence(evidence).strip(" \"'“”‘’")
+    quote = quote.strip(" .…").strip()
+    if len(quote.split()) < _EVIDENCE_MIN_WORDS:
+        return False
+    return quote in _norm_evidence(notes_view)
+
+
+def _unchecked_report(questions: int = 0) -> dict:
+    return {"checked": False, "questions": questions, "judged": 0,
+            "corrected": 0, "rejected": 0, "disputed": []}
+
+
+def verify_quiz_detailed(notes, quiz, model=None):
+    """
+    Check the quiz answer key against the notes and say what was checked.
+
+    Returns (quiz_text, report). The verifier gives a verdict for EVERY
+    question; a correction is applied only when its evidence quote is found
+    (after normalisation) in the exact notes excerpt the generator wrote from.
+    Unsupported corrections are rejected: the original answer stays and the
+    question is reported as disputed.
+
+    report = {"checked", "questions", "judged", "corrected", "rejected",
+    "disputed"}. `checked` is False when the call failed or returned nothing
+    usable — previously that looked identical to "no corrections needed".
+    judged < questions means the key was only partly checked. Any failure
+    returns the original quiz unchanged.
+    """
+    parsed = _parse_quiz_text(quiz) if quiz and quiz.strip() else []
+    report = _unchecked_report(len(parsed))
+    if not parsed:
+        return quiz, report
+
+    notes_view = _notes_excerpt(notes, QUIZ_NOTES_CHARS)
+    prompt = f"""You are a QUIZ VERIFIER. For EVERY question in the QUIZ, check whether
 the marked answer letter is actually correct according to the NOTES.
 
-Return ONLY a JSON object listing the corrections needed (empty list if all
-answers are correct), in exactly this shape:
-{{"corrections": [{{"q": <question number>, "answer": "<A|B|C|D>",
-"explanation": "<one-sentence corrected explanation>"}}]}}
+Return ONLY a JSON object with one verdict per question, in exactly this shape:
+{{"verdicts": [{{"q": <question number>, "correct": <true|false>,
+"answer": "<the correct letter A|B|C|D>",
+"evidence": "<exact sentence copied from the NOTES that supports the correct answer>",
+"explanation": "<one-sentence explanation>"}}]}}
+
+The evidence must be copied word for word from the NOTES, not paraphrased.
 
 NOTES:
-\"\"\"{_notes_excerpt(notes, 9000)}\"\"\"
+\"\"\"{notes_view}\"\"\"
 
 QUIZ:
 \"\"\"{quiz}\"\"\""""
 
     try:
         data = safe_json(call_model(
-            prompt, max_tokens=800, model=model, temperature=0.0, json_mode=True))
+            prompt, max_tokens=1400, model=model, temperature=0.0, json_mode=True))
     except Exception:  # noqa: BLE001
-        return quiz
+        return quiz, report
 
-    corrections = data.get("corrections") if isinstance(data, dict) else None
-    if not isinstance(corrections, list) or not corrections:
-        return quiz
+    verdicts = data.get("verdicts") if isinstance(data, dict) else None
+    if not isinstance(verdicts, list):
+        return quiz, report
 
-    parsed = _parse_quiz_text(quiz)
-    if not parsed:
-        return quiz
-    for corr in corrections:
-        if not isinstance(corr, dict):
+    seen, changed = set(), False
+    for v in verdicts:
+        if not isinstance(v, dict):
             continue
         try:
-            idx = int(corr.get("q")) - 1
+            idx = int(v.get("q")) - 1
         except (TypeError, ValueError):
             continue
-        answer = str(corr.get("answer") or "").strip().upper()[:1]
-        if 0 <= idx < len(parsed) and answer in "ABCD":
+        correct = v.get("correct")
+        if isinstance(correct, str):
+            correct = {"true": True, "false": False}.get(correct.strip().lower())
+        if not (0 <= idx < len(parsed)) or idx in seen or not isinstance(correct, bool):
+            continue
+        seen.add(idx)
+        if correct:
+            continue
+        answer = str(v.get("answer") or "").strip().upper()[:1]
+        if answer == parsed[idx]["answer"]:
+            continue  # self-contradictory verdict: nothing to change
+        if answer and answer in "ABCD" and _evidence_supported(v.get("evidence"), notes_view):
             parsed[idx]["answer"] = answer
-            expl = _flat(corr.get("explanation"))
-            if expl:
-                parsed[idx]["explanation"] = expl
-    return _render_quiz(parsed)
+            # The old explanation argued for the wrong answer; replace it.
+            expl = _flat(v.get("explanation")) or f'From your notes: "{_flat(v.get("evidence"))}"'
+            parsed[idx]["explanation"] = expl
+            report["corrected"] += 1
+            changed = True
+        else:
+            report["rejected"] += 1
+            report["disputed"].append(idx + 1)
+
+    report["judged"] = len(seen)
+    report["checked"] = report["judged"] > 0
+    report["disputed"].sort()
+    return (_render_quiz(parsed) if changed else quiz), report
+
+
+def verify_quiz(notes, quiz, model=None) -> str:
+    """Answer-key check returning only the quiz text (run_agent and the eval
+    harness use this). See verify_quiz_detailed for the report."""
+    return verify_quiz_detailed(notes, quiz, model=model)[0]
 
 
 def _parse_quiz_text(quiz: str) -> list:

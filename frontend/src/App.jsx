@@ -163,7 +163,7 @@ export default function App() {
   const [user, setUser] = useState(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [sharedView, setSharedView] = useState(null) // read-only shared session
-  const { history, cloud, addSession, updateSession, deleteSession, shareSession } = useHistory(user)
+  const { history, cloud, addSession, updateSession, deleteSession, shareSession, unshareSession } = useHistory(user)
   const [activeTab, setActiveTab] = useState('notes')
   const [provider, setProvider] = useState(null)
   const [toast, setToast] = useState(null)
@@ -174,6 +174,10 @@ export default function App() {
 
   const [rewriting, setRewriting] = useState(null)
   const [quizRegen, setQuizRegen] = useState(false)
+  // Answer-key report from /api/quiz, paired with the exact quiz it describes.
+  // Keyed by the quiz text so any other quiz (history, a new run, a cleared
+  // workspace) shows no status rather than inheriting a claim about this one.
+  const [quizCheck, setQuizCheck] = useState(null) // { quiz, report }
   const [cardsRegen, setCardsRegen] = useState(false)
 
   const bufferRef = useRef('') // accumulates streamed note deltas
@@ -397,17 +401,21 @@ export default function App() {
   }, [])
 
   // Load a shared (public) session if the URL has ?share=<id>.
+  // Goes through the get_shared_session RPC, not the table: the table has no
+  // public-read policy (it let anyone list every shared note), and the RPC
+  // returns only this one row's display columns — never the owner's user_id.
   useEffect(() => {
     if (!supabase) return
     const id = new URLSearchParams(window.location.search).get('share')
     if (!id) return
     supabase
-      .from('sessions')
-      .select('*')
-      .eq('id', id)
-      .single()
-      .then(({ data }) => {
-        if (data) setSharedView(data)
+      .rpc('get_shared_session', { share_id: id })
+      .then(({ data, error }) => {
+        // A set-returning function: zero rows means unshared, deleted or a
+        // bad id (a malformed uuid comes back as an error). Say so instead of
+        // silently dropping the visitor on the landing page.
+        const row = !error && Array.isArray(data) ? data[0] : null
+        setSharedView(row || { missing: true })
       })
   }, [])
 
@@ -445,6 +453,11 @@ export default function App() {
     // These notes came out of history, not out of whatever is in the input
     // panel — so the workspace should offer to generate, not to regenerate.
     setGeneratedFrom('')
+  }
+
+  const stopSharing = async (id) => {
+    const ok = await unshareSession(id)
+    if (ok) showToast('Sharing stopped — the link no longer works ✓')
   }
 
   const shareLink = async (id) => {
@@ -595,7 +608,10 @@ export default function App() {
         body: JSON.stringify({ notes, model }),
       })
       const data = await res.json()
-      if (data.quiz) setQuiz(data.quiz)
+      if (data.quiz) {
+        setQuiz(data.quiz)
+        setQuizCheck(data.verification ? { quiz: data.quiz, report: data.verification } : null)
+      }
     } catch {
       /* ignore */
     } finally {
@@ -1181,7 +1197,12 @@ export default function App() {
                 )}
                 {activeTab === 'quiz' && (
                   <Suspense fallback={<PanelFallback />}>
-                    <QuizPanel quiz={quiz} onRegenerate={notes ? regenQuiz : null} regenerating={quizRegen} />
+                    <QuizPanel
+                      quiz={quiz}
+                      onRegenerate={notes ? regenQuiz : null}
+                      regenerating={quizRegen}
+                      verification={quizCheck && quizCheck.quiz === quiz ? quizCheck.report : null}
+                    />
                   </Suspense>
                 )}
                 {activeTab === 'flashcards' && (
@@ -1202,6 +1223,7 @@ export default function App() {
                       onDelete={deleteSession}
                       onUpdate={updateSession}
                       onShare={cloud ? shareLink : null}
+                      onUnshare={cloud ? stopSharing : null}
                       cloud={cloud}
                     />
                   </Suspense>

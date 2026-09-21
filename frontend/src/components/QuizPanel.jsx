@@ -38,7 +38,25 @@ function parseQuiz(raw) {
   return questions
 }
 
-export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
+// One honest line about the answer key. "Checked" is only claimed when the
+// verifier actually returned verdicts; a failed or partial check says so
+// instead of looking identical to a clean one (same partial-view bug class).
+function verificationLabel(v) {
+  if (!v) return null
+  if (!v.checked) return 'Answer key not verified'
+  const parts = [
+    v.judged < v.questions
+      ? `Answer key partly checked against your notes (${v.judged} of ${v.questions} questions)`
+      : 'Answer key checked against your notes',
+  ]
+  if (v.corrected > 0) parts.push(`${v.corrected} answer${v.corrected === 1 ? '' : 's'} corrected`)
+  const d = v.disputed || []
+  if (d.length === 1) parts.push(`Question ${d[0]}'s answer is disputed`)
+  else if (d.length > 1) parts.push(`Questions ${d.join(', ')} have disputed answers`)
+  return parts.join(' · ')
+}
+
+export default function QuizPanel({ quiz, onRegenerate, regenerating, verification }) {
   const questions = useMemo(() => parseQuiz(quiz), [quiz])
   const [picked, setPicked] = useState({}) // { index: 'A' }
   const [resetKey, setResetKey] = useState(0)
@@ -123,6 +141,12 @@ export default function QuizPanel({ quiz, onRegenerate, regenerating }) {
           </button>
         </div>
       </div>
+
+      {verificationLabel(verification) && (
+        <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+          {verificationLabel(verification)}
+        </p>
+      )}
 
       {questions.map((q, qi) => {
         const chosen = picked[qi]

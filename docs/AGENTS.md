@@ -51,7 +51,7 @@ On demand, outside this run (Learn sidebar -> /api/quiz, /api/flashcards):
    Quiz agent (5 MCQs)        Flashcard agent (8 cards)
 ```
 
-`run_agent()` can still produce the quiz (with the answer-key verifier) and flashcards at the end of the run when called with `include_quiz` / `include_flashcards` — the eval harness does this for the quiz — but `/api/generate` defaults both to false and the UI never sets them.
+`/api/quiz` generates the quiz and then checks its answer key. `run_agent()` can still produce the quiz (with the answer-key verifier) and flashcards at the end of the run when called with `include_quiz` / `include_flashcards` — the eval harness does this for the quiz — but `/api/generate` defaults both to false and the UI never sets them.
 
 Two important ideas run underneath all of this:
 
@@ -315,25 +315,30 @@ The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupport
 
 ## On demand — Quiz and Quiz Verifier
 
-**Files:** `generate_quiz()` and `verify_quiz()`; endpoint `/api/quiz` in `main.py`
+**Files:** `generate_quiz()`, `verify_quiz_detailed()` (and its text-only wrapper `verify_quiz()`); endpoint `/api/quiz` in `main.py`
 
-**Job:** Turn the finished notes into 5 multiple-choice questions — and, where the verifier runs, make sure the answer key is correct.
+**Job:** Turn the finished notes into 5 multiple-choice questions, check the answer key against the notes, and say whether it was checked.
 
-**When it runs:** The UI generates the quiz on demand from the Learn sidebar, which calls `/api/quiz`. That endpoint calls `generate_quiz()` only. `verify_quiz()` runs only inside `run_agent()` when `include_quiz` is true — the eval harness uses that path; the app doesn't.
+**When it runs:** The UI generates the quiz on demand from the Learn sidebar, which calls `/api/quiz`. That endpoint calls `generate_quiz()` and then `verify_quiz_detailed()`, both with the model the user picked. The same check (via `verify_quiz()`) also runs inside `run_agent()` when `include_quiz` is true, which the eval harness uses.
 
 **How it works:**
 
-1. **Generate:** the model is asked for **JSON** (`{"questions": [{"question", "options": {A..D}, "answer", "explanation"}]}`) in JSON mode. Each question is validated — non-empty text, all four options A–D, an answer letter in A–D — and the valid ones are rendered into the plain-text format the frontend and exports parse (`Q1) ... A) ... Answer: ... Explanation: ...`). If the JSON is unusable, a legacy plain-text prompt is used as a fallback. The notes are passed as an even sample across their whole length (12,000 characters), not just the beginning.
-2. **Verify (in-pipeline only):** a separate pass re-reads each question against the notes and returns JSON corrections (`{"corrections": [{"q", "answer", "explanation"}]}`). These are applied to the parsed quiz, which is then re-rendered, so a chatty verifier can't corrupt the format. Any failure returns the original quiz unchanged.
+1. **Generate:** the model is asked for **JSON** (`{"questions": [{"question", "options": {A..D}, "answer", "explanation"}]}`) in JSON mode. Each question is validated — non-empty text, all four options A–D, an answer letter in A–D — and the valid ones are rendered into the plain-text format the frontend and exports parse (`Q1) ... A) ... Answer: ... Explanation: ...`). If the JSON is unusable, a legacy plain-text prompt is used as a fallback. The notes are passed as an even sample across their whole length (`QUIZ_NOTES_CHARS` = 12,000 characters), not just the beginning.
+2. **Verify:** a separate pass at temperature 0 sees the **same** notes excerpt the generator wrote from (it used to get a 9,000-character one, so it could "correct" a right answer from a partial view) and returns a verdict for every question: `{"verdicts": [{"q", "correct", "answer", "evidence", "explanation"}]}`, where `evidence` must be copied word for word from the notes. A correction is applied only if the evidence quote is at least 5 words and is found in the notes after normalising both sides (lowercase, `**` and `[n]` citation markers stripped, whitespace collapsed). Otherwise it is rejected: the original answer stays and the question is reported as disputed. Corrections are applied to the parsed quiz, which is then re-rendered, so a chatty verifier can't corrupt the format.
+3. **Report:** `/api/quiz` returns `verification` = `{checked, questions, judged, corrected, rejected, disputed}` next to the quiz. `checked` is false when the verifier call failed or returned nothing usable (previously that looked the same as "no corrections needed"); `judged < questions` means only part of the key was checked. If the verifier raises, the endpoint still returns the unchanged quiz with `checked: false`. The quiz panel shows one line from this report ("Answer key checked against your notes", "partly checked (3 of 5)", corrections, disputed questions, or "Answer key not verified").
 
 **Strengths:**
 
 - Structured output plus validation means a model drifting from the text format can't produce a broken quiz on the main path.
-- Where it runs, the verifier catches a class of error a single pass makes easily — marking the "obviously right-sounding" option instead of the one the notes support.
+- The verifier catches a class of error a single pass makes easily — marking the "obviously right-sounding" option instead of the one the notes support — on the quiz users actually get.
+- A wrong verifier can no longer silently overwrite a right answer with nothing to back it: a correction needs a quote that Python can find in the notes, and an unsupported one is reported as disputed instead.
+- The user is told what was checked; a failed or partial check is never shown as a clean one.
 
 **Limitations:**
 
-- The answer key of the quiz users actually see (on demand) is **not** verified.
+- The evidence check proves the quote exists in the notes, not that it supports the chosen letter; a real quote attached to a wrong correction still gets applied.
+- The verifier is the same model that wrote the quiz (the user's pick), so it can share the generator's blind spots; a verdict of "correct" needs no evidence.
+- Quizzes reopened from history show no verification status (the report isn't stored).
 - The plain-text fallback output is not validated; if both the JSON path and the fallback misbehave, the frontend parser gets whatever the model wrote.
 - Verification checks against the *notes*, not the original source, so it can only be as correct as the notes.
 - There's no distractor-quality check — a technically-correct quiz could still have implausible wrong answers that make the question too easy.
@@ -383,7 +388,7 @@ The fix: split work across **two separate quotas**.
 
 Because free-tier daily limits are tracked *per model*, this isn't just a cost optimization — it substantially raises how many documents the app can process per day before hitting a wall. (The NVIDIA split only kicks in once `HELPER_NVIDIA_MODEL` names a small catalog id; unset, the helper steps fall back to the main model. An Ollama model is its own helper.)
 
-Everything *outside* `run_agent()` uses the model the UI sends — the user's pick. That includes the on-demand quiz and flashcards (`/api/quiz`, `/api/flashcards`), chat, rewrite and inline edit, so today those draw on the main model's quota, not the helper's.
+Everything *outside* `run_agent()` uses the model the UI sends — the user's pick. That includes the on-demand quiz, its answer-key check and flashcards (`/api/quiz`, `/api/flashcards`), chat, rewrite and inline edit, so today those draw on the main model's quota, not the helper's.
 
 **Strengths:** Free, effective, and doesn't compromise quality where it matters — the tasks on the helper model genuinely don't need a large model to do well.
 
@@ -399,13 +404,14 @@ Everything *outside* `run_agent()` uses the model the UI sends — the user's pi
 - Actually checking its own work — the critique/revise loop, then deterministic citation validation, then a per-claim grounding check that removes or tightens lines their evidence doesn't support.
 - Covering entire long documents — coverage windows partition the source so every passage is written about, and a durable coverage record plus an "Incomplete coverage" banner says so when a part could not be generated.
 - Being honest about faithfulness — the scoring is deliberately strict about penalizing fabricated claims over almost everything else.
+- Keeping shared notes private to their links — a share link resolves one row by exact id through a locked-down function owned by a least-privilege role, so the public anon key can no longer list everyone's shared notes; this is tested against a real PostgreSQL running the actual schema.
 
 **What's still genuinely unverified or missing today:**
 
 - **Grounding is an LLM judgment, not a proof.** It runs on the smaller helper model, works line by line (a paragraph is one line), fails open (unjudged claims ship as written, and the user isn't told how many), and on large sources judges an uncited claim against the passages retrieved for it, so a retrieval miss can still remove a true claim.
 - **Checks on long documents are coarser than the writing.** The critique and reviser see cited passages up to 40,000 characters, and anything cited beyond that is named and skipped, not judged; notes over 30,000 characters skip revision entirely. A critic's raw `needs_revision` flag or score can still trigger a wasted revision round.
 - **No cross-encoder reranking** after the hybrid search — the retrieval quality is capped at what BM25 + embeddings + RRF can do; the code has a clean seam (`_process_candidates()`) for this to be added later, but it isn't built yet.
-- **The quiz users see is not answer-key verified** — `verify_quiz()` only runs on the in-pipeline path. There's also no distractor-quality check and no flashcard verification.
+- **The quiz answer-key check is evidence-gated, not proven.** A correction needs a quote found in the notes, but that shows the quote exists, not that it supports the new letter; the key is checked against the notes, not the source; and quizzes from history show no status. There's also no distractor-quality check and no flashcard verification.
 - **Daily free-tier quotas are a real ceiling**, not just a hypothetical — this has already caused a real outage in production, and the two-model routing fix reduces but does not eliminate the risk.
 
 This isn't a finished, perfect system — it's a genuinely well-engineered one with clear, honest edges. Knowing exactly where those edges are is what makes it possible to keep improving it deliberately instead of guessing.

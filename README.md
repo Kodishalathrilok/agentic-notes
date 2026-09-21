@@ -21,7 +21,7 @@ What makes it more than an "AI wrapper":
 - **The pipeline checks its own work.** A critique agent judges the draft against the passages the writer was given, flags unsupported claims and missing topics, triggers corrective re-retrieval for the missing topics, and revises (up to 2 rounds) — a revision replaces the kept version only if it scores strictly higher.
 - **Claims are checked against their sources.** Notes cite retrieved passages inline (`[3]`). A deterministic check drops any citation that doesn't point at a passage the model was shown (or, for PDFs, at a passage with a valid page), and a per-claim grounding pass then asks a helper model whether each claim line is actually supported by the passage it cites — unsupported lines are removed, over-reaching ones tightened.
 - **Long documents are covered end to end.** Sources over 12,000 characters are split into coverage windows that partition the document — every chunk belongs to exactly one window and every window is written — and sources over 60,000 characters also get a full-document digest scan before planning. If a window fails, the notes say so with an "Incomplete coverage" banner naming the missing pages instead of passing as complete.
-- **It's engineered, not vibe-coded:** 290+ backend tests plus frontend unit tests, CI that gates deploys on green tests, SSRF-guarded URL fetching, request size limits, per-user rate limiting, and an LLM-judge eval harness that scores faithfulness and coverage.
+- **It's engineered, not vibe-coded:** 300+ backend tests plus frontend unit tests, CI that gates deploys on green tests, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, per-user rate limiting, and an LLM-judge eval harness that scores faithfulness and coverage.
 
 ## How it works
 
@@ -57,7 +57,7 @@ The source is chunked (~700-character passages with overlap, cut on word boundar
 
 ### Reliability details that took real work
 
-- **Structured outputs for quizzes and flashcards.** Both are requested as JSON, validated (four options A–D and a valid answer letter per question; non-empty front and back per card) and rendered to the UI format deterministically, with a plain-text prompt as fallback if the JSON is unusable. An answer-key verifier (`verify_quiz`) that re-checks each marked answer against the notes exists, but it only runs on the in-pipeline path (`include_quiz=true`, used by the eval harness) — the on-demand `/api/quiz` the UI calls does not run it.
+- **Structured outputs for quizzes and flashcards.** Both are requested as JSON, validated (four options A–D and a valid answer letter per question; non-empty front and back per card) and rendered to the UI format deterministically, with a plain-text prompt as fallback if the JSON is unusable. The on-demand `/api/quiz` the UI calls then checks the answer key (`verify_quiz_detailed`): the verifier reads the same 12,000-character notes excerpt the generator wrote from (it used to get 9,000), gives a verdict per question with a quote from the notes as evidence, and a correction is applied only if that quote (at least 5 words) is actually found in the notes after normalising markdown bold and `[n]` citations — otherwise the original answer stays and the question is marked disputed. The response carries a `verification` report, and the quiz panel says whether the key was checked, partly checked, corrected or disputed (or "not verified" if the check failed; the quiz is still returned). Known limits: the evidence check proves the quote exists in the notes, not that it supports the chosen letter; the key is checked against the notes, not the original source; and quizzes reopened from history show no status.
 - **No tail-loss on long notes.** Agents that read the notes without rewriting them (critique, quiz, flashcards, chat) get an even sample across the whole notes, anchored to the end, instead of the first N characters. The in-pipeline revision refuses to run on notes over 30,000 characters rather than revising a truncated copy.
 - **Rewrite and inline edit never return partial notes.** One-click rewrite sends notes over 8,000 characters as parts split at headings (at most 12 parts; longer notes get a 422 asking to rewrite a section at a time), and if any part fails or is cut off, the whole rewrite fails with a 502 and nothing is changed. Inline edit sends only the source lines the highlight covers (the UI reads them from `data-line` anchors on the rendered lines; locating the text is the fallback, with a 422 if it isn't found or isn't unique), and the server splices the new lines back in, so the model never regenerates the whole notes. Both use strict model calls: a completion the provider stopped at the token cap counts as a failure and fails over to the next provider. Known limits: a triple-click selection can reach into the next line, which is then sent too (the model is told to keep it unchanged), and a multi-part rewrite joins its parts with a blank line.
 - **A cut-off stream is never passed off as complete.** If a provider stream fails part-way, or stops at the token cap, the model layer raises `IncompleteStreamError` instead of returning quietly. A cut-off coverage window is recorded as a failed window (and the notes get the "Incomplete coverage" banner), a cut-off single-pass draft is kept but marked incomplete, a cut-off revision is discarded in favour of the previous notes, and the tutor chat appends a "cut off" notice.
@@ -71,13 +71,14 @@ The source is chunked (~700-character passages with overlap, cut on word boundar
 - **Outputs:** cited notes · interactive multiple-choice quiz and spaced-repetition flashcards (generated on demand) · PDF / Markdown / DOCX / CSV export
 - **Study tools:** tutor chat grounded in your notes · select-and-edit any passage with an instruction · one-click rewrite (shorter / longer)
 - **Controls:** study mode (exam, summary, deep-dive…), tone, length, format, model picker
-- **Accounts:** Supabase auth (email + Google), cloud session history, shareable public note links — with a local-only mode when auth isn't configured
+- **Accounts:** Supabase auth (email + Google), cloud session history, shareable public note links you can stop sharing at any time — with a local-only mode when auth isn't configured
 
 ## Security & operations
 
 - SSRF-protected URL fetching (private/internal addresses blocked, redirects re-validated per hop, download size capped)
 - Request size limits on every endpoint; chunked uploads with hard caps (PDF 20 MB, audio 25 MB, image 10 MB)
 - Per-user rate limiting (short sliding windows plus daily caps on the token-spending endpoints) with Supabase JWT verification
+- Share links can't be used to list other people's notes. The old RLS policy (`is_public = true` for anon) let anyone holding the public anon key list every user's shared notes, `user_id` included. Shared notes are no longer readable through the table: a link resolves through `public.get_shared_session(share_id)`, which returns one row by exact id with display columns only (no `user_id`). It is `SECURITY DEFINER` with an empty `search_path`, executable only by `anon`/`authenticated`, and owned by a dedicated `share_reader` role (no login, no RLS bypass, no access to `user_id`, and an RLS policy that only shows it shared rows), so even a bug in its `WHERE` clause could only return notes that are already public. Owners can stop sharing, and a dead link shows a clear "unavailable" page. The RLS rules are tested against a real PostgreSQL 16 running the actual `supabase/schema.sql` as a non-superuser. Deploying to an existing project is two steps (see the file's header): run STEP 1, deploy the frontend, then run STEP 2 to drop the old policy
 - A production start with authentication switched off refuses to boot (`verify_auth_config`) unless `ALLOW_ANONYMOUS=true` is set explicitly
 - Bounded worker pool + concurrency gate so heavy generations can't starve the server; blocking work runs off the event loop
 - CI on every push and pull request to `main`: backend tests and the frontend tests + build; a push to `main` deploys to Hugging Face Spaces only after both pass
@@ -90,7 +91,7 @@ The source is chunked (~700-character passages with overlap, cut on word boundar
 | Frontend       | React · Vite · Tailwind CSS                                                |
 | Models         | NVIDIA NIM (Nemotron) · Gemini Flash · Ollama (local fallback)             |
 | Retrieval      | BM25 (rank-bm25) + Gemini embeddings · rank fusion · BM25-only fallback    |
-| Auth & storage | Supabase (JWT verification server-side, RLS-scoped sessions)               |
+| Auth & storage | Supabase (JWT verification server-side, RLS-scoped sessions, share-link RPC) |
 | Docs           | pypdf · reportlab · python-docx · Gemini audio + vision                    |
 | CI/CD          | GitHub Actions → Hugging Face Spaces (Docker)                              |
 
@@ -141,7 +142,7 @@ primary with Gemini as automatic failover:
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-pytest        # 290+ tests: pipeline, long-document coverage, judge evidence on long sources, rewrite/edit integrity, parsers, retrieval, security, stream integrity, event-loop blocking, truncation-safety
+pytest        # 300+ tests: pipeline, long-document coverage, judge evidence on long sources, rewrite/edit integrity, quiz answer-key verification, parsers, retrieval, security, Supabase RLS / share links (real PostgreSQL via pgserver; skipped if it isn't installed), stream integrity, event-loop blocking, truncation-safety
 
 cd ../frontend
 npm test      # Vitest: SSE parser and inline-edit line-anchor resolution
@@ -162,7 +163,7 @@ agentic-notes/
 │   ├── eval/                # LLM-judge eval harness + retrieval benchmark
 │   ├── auth.py              # Supabase JWT verification + rate limiting
 │   ├── pdf_export.py        # PDF / Markdown / DOCX / CSV rendering
-│   └── tests/               # 290+ backend tests
+│   └── tests/               # 300+ backend tests
 ├── frontend/
 │   └── src/                 # React app: streaming UI, quiz, flashcards, chat, auth
 └── .github/workflows/       # CI: test → build → deploy

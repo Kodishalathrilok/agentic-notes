@@ -34,6 +34,7 @@ from auth import limiter, auth_required, verify_auth_config
 from agent import (
     run_agent,
     generate_quiz,
+    verify_quiz_detailed,
     generate_flashcards,
     rewrite_notes,
     chat_about_notes_stream,
@@ -536,8 +537,22 @@ async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, d
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
     loop = asyncio.get_event_loop()
-    quiz = await loop.run_in_executor(EXECUTOR, lambda: generate_quiz(notes, 5, req.model))
-    return {"quiz": quiz}
+
+    # This is the quiz users actually get (the pipeline's include_quiz path is
+    # off in the UI), so its answer key is checked here, with the same model
+    # that wrote it. A verifier failure must not cost the user their quiz: it
+    # fails open, and `verification.checked: false` says the key wasn't checked
+    # instead of passing an unchecked key off as a checked one.
+    def _quiz_job():
+        quiz = generate_quiz(notes, 5, req.model)
+        try:
+            return verify_quiz_detailed(notes, quiz, req.model)
+        except Exception:  # noqa: BLE001
+            return quiz, {"checked": False, "questions": 0, "judged": 0,
+                          "corrected": 0, "rejected": 0, "disputed": []}
+
+    quiz, verification = await loop.run_in_executor(EXECUTOR, _quiz_job)
+    return {"quiz": quiz, "verification": verification}
 
 
 @app.post("/api/flashcards")
