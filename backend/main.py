@@ -41,6 +41,7 @@ from agent import (
 from pdf_export import notes_to_pdf, notes_to_markdown, notes_to_docx, flashcards_to_csv
 from retriever import active_embedding_backend, page_spans, normalize
 from models import (
+    IncompleteStreamError,
     get_active_provider,
     OLLAMA_URL,
     available_models,
@@ -595,7 +596,13 @@ async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAI
             return next(gen, sentinel)
 
         while True:
-            piece = await loop.run_in_executor(EXECUTOR, _next)
+            try:
+                piece = await loop.run_in_executor(EXECUTOR, _next)
+            except IncompleteStreamError:
+                # The partial answer is already on screen; say so rather than
+                # let it pass for the whole answer.
+                yield "\n\n_[The answer was cut off \u2014 please ask again.]_"
+                break
             if piece is sentinel:
                 break
             yield piece

@@ -129,6 +129,43 @@ class RateLimitError(RuntimeError):
     """Kept for compatibility; failover now handles rate limits transparently."""
 
 
+class IncompleteStreamError(RuntimeError):
+    """A stream stopped after it had already produced output.
+
+    Raised instead of ending quietly because partial output must never be
+    mistaken for complete output: a window cut off half-way would count as
+    covered, a truncated revision would replace good notes, and a chat answer
+    would just stop. The text already yielded stays with the caller; this
+    tells it that text is not the whole answer.
+
+    `reason` is "interrupted" (the provider errored mid-stream) or
+    "max_tokens" (the provider said it stopped at the token cap). `chars` is
+    how much text had been yielded. The message is built from these fields
+    only, so it is safe to log - it never carries a provider URL or key.
+    """
+
+    def __init__(self, provider: str, reason: str, chars: int = 0):
+        self.provider = provider
+        self.reason = reason
+        self.chars = chars
+        super().__init__(f"{provider} stream incomplete ({reason}) after {chars} chars")
+
+
+def _check_finish(prov: str, finish) -> None:
+    """Raise if a parser saw the provider's explicit token-cap finish reason.
+
+    Only the explicit length/MAX_TOKENS value counts. A stream with no finish
+    reason at all is logged, not failed: some catalog models omit it, and
+    treating every such answer as truncated would be worse than the bug.
+    """
+    if finish is None:
+        print(f"[models] {prov} stream ended without a finish reason.")
+        return
+    if str(finish).lower() in ("length", "max_tokens"):
+        # chars is filled in by call_model_stream, which counts what was yielded.
+        raise IncompleteStreamError(prov, "max_tokens")
+
+
 def _safe(exc) -> str:
     """Strip API keys out of error text before logging (handles ?key= and &key=)."""
     return re.split(r"[?&]key=", str(exc))[0]
@@ -383,6 +420,7 @@ def _stream_gemini(prompt, max_tokens, model, temperature):
     gm = _gemini_model(model)
     resp = _gemini_post(gm, _gemini_body(prompt, max_tokens, temperature, False),
                         "gemini stream", 300, stream=True)
+    finish = None
     with resp:
         resp.raise_for_status()
         for raw in resp.iter_lines():
@@ -401,6 +439,8 @@ def _stream_gemini(prompt, max_tokens, model, temperature):
             text = _gemini_text(data)
             if text:
                 yield text
+            finish = (data.get("candidates") or [{}])[0].get("finishReason") or finish
+    _check_finish("gemini", finish)
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +629,7 @@ def _stream_nvidia(prompt, max_tokens, model, temperature):
     with _nvidia_post(
         _nvidia_body(prompt, max_tokens, model, temperature, False, True), stream=True
     ) as resp:
+        finish = None
         for raw in resp.iter_lines():
             if not raw:
                 continue
@@ -603,11 +644,14 @@ def _stream_nvidia(prompt, max_tokens, model, temperature):
             except Exception:  # noqa: BLE001
                 continue
             try:
-                delta = (data["choices"][0].get("delta") or {}).get("content")
-            except (KeyError, IndexError):
+                choice = data["choices"][0]
+                delta = (choice.get("delta") or {}).get("content")
+                finish = choice.get("finish_reason") or finish
+            except (KeyError, IndexError, AttributeError):
                 delta = None
             if delta:
                 yield delta
+    _check_finish("nvidia", finish)
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +685,7 @@ def _stream_ollama(prompt, max_tokens, temperature):
         timeout=300,
     ) as resp:
         resp.raise_for_status()
+        finish = None
         for line in resp.iter_lines():
             if not line:
                 continue
@@ -651,6 +696,9 @@ def _stream_ollama(prompt, max_tokens, temperature):
             piece = data.get("response", "")
             if piece:
                 yield piece
+            if data.get("done"):
+                finish = data.get("done_reason") or finish
+    _check_finish("ollama", finish)
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +806,10 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
 
     `on_serve` fires on the FIRST delta — once a provider has emitted output it
     is the one serving this call, even if it later breaks mid-stream.
+
+    Once output has been yielded a failure raises IncompleteStreamError rather
+    than ending the stream: the caller already holds partial text and must be
+    able to tell it from a finished answer.
     """
     target = resolve_model(model)
     errors = []
@@ -765,17 +817,23 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
         if not _provider_ready(prov):
             continue
         yielded = False
+        chars = 0
         try:
             for delta in _dispatch_stream(prov, prompt, max_tokens, target, temperature):
                 if not yielded and on_serve:
                     on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
                 yielded = True
+                chars += len(delta)
                 yield delta
         except Exception as exc:  # noqa: BLE001
             errors.append((prov, exc))
             if yielded:
+                # No failover here: the text is already on its way to the
+                # client, so a second provider would duplicate it. Raise so the
+                # caller knows what it holds is partial.
                 print(f"[models] {prov} stream interrupted ({_safe(exc)}).")
-                return
+                reason = exc.reason if isinstance(exc, IncompleteStreamError) else "interrupted"
+                raise IncompleteStreamError(prov, reason, chars) from exc
             print(f"[models] {prov} stream failed ({_safe(exc)}); trying next provider.")
             continue
         if yielded:

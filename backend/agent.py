@@ -14,7 +14,7 @@ import re
 import queue as _queue
 from concurrent.futures import ThreadPoolExecutor
 
-from models import call_model, call_model_stream, safe_json, helper_model
+from models import call_model, call_model_stream, safe_json, helper_model, IncompleteStreamError
 from retriever import Retriever, page_for_offset
 
 # Quality thresholds for the self-improvement loop
@@ -137,6 +137,8 @@ def _failure_slug(exc) -> str:
     """
     if isinstance(exc, _WindowProducedNothing):
         return "empty_output"
+    if isinstance(exc, IncompleteStreamError):
+        return exc.reason  # "interrupted" / "max_tokens" - fixed slugs
     if isinstance(exc, TimeoutError):
         return "timeout"
     return type(exc).__name__.lower()
@@ -1921,12 +1923,25 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
 
             yield _emit("status", "write", "Writing notes...")
             parts = []
-            for delta in write_notes_stream(
-                context, mode, tone, length, active_fmt, plan, model=model,
-                instructions=instructions, doc_type=doc_type, on_serve=_record_serve,
-            ):
-                parts.append(delta)
-                yield _emit("notes_delta", "write", delta)
+            try:
+                for delta in write_notes_stream(
+                    context, mode, tone, length, active_fmt, plan, model=model,
+                    instructions=instructions, doc_type=doc_type, on_serve=_record_serve,
+                ):
+                    parts.append(delta)
+                    yield _emit("notes_delta", "write", delta)
+            except IncompleteStreamError as exc:
+                # The client already has the partial draft, and a partial draft
+                # beats none - but it must be recorded as incomplete, exactly
+                # like a failed window, so the banner and coverage record say so.
+                if not "".join(parts).strip():
+                    raise
+                coverage["complete"] = False
+                coverage["failed_windows"] = [
+                    {"window": "draft", "pages": [], "reason": exc.reason}]
+                yield _emit("status", "write",
+                            "The draft was cut off before it finished; "
+                            "keeping what was written.")
             notes = "".join(parts).strip()
             if not notes:
                 raise RuntimeError(
@@ -2006,6 +2021,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             yield _emit("status", "revise", f"Revising (round {rounds}/{MAX_REVISION_ROUNDS})...")
             yield _emit("revise_start", "revise", "")
             parts = []
+            cut_off = False
             try:
                 for delta in revise_notes_stream(
                     notes, critique, mode, plan, active_fmt, model=model,
@@ -2015,7 +2031,10 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                     parts.append(delta)
                     yield _emit("notes_delta", "revise", delta)
             except Exception as exc:  # noqa: BLE001
+                # Includes IncompleteStreamError: a half-finished revision is
+                # discarded, never allowed to replace complete notes.
                 print(f"[agent] revision round {rounds} failed ({exc}); keeping current notes.")
+                cut_off = isinstance(exc, IncompleteStreamError)
                 parts = []
 
             revised = "".join(parts).strip()
@@ -2028,6 +2047,8 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             if not revised:
                 yield _emit("notes_revised", "revise", notes)
                 yield _emit("status", "revise",
+                            "Revision was cut off — keeping the previous version."
+                            if cut_off else
                             "Revision returned nothing — keeping the previous version.")
                 break
 
