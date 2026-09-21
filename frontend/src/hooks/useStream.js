@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { apiFetch } from '../lib/api'
+import { readSseEvents } from '../lib/sse'
+
+const STREAM_CLOSED_EARLY =
+  "The connection closed before the notes finished — what's shown may be incomplete. Please generate again."
 
 /**
  * Consume the /api/generate SSE stream.
@@ -117,40 +121,15 @@ export default function useStream() {
         throw new Error(detail)
       }
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
+      const { terminal } = await readSseEvents(res.body, dispatch)
 
-      // SSE frames are separated by a blank line. Each frame has one or more
-      // `data:` lines; we concatenate them and JSON.parse the result.
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        // Normalise CRLF -> LF so frames split consistently regardless of
-        // whether the server uses \n\n or \r\n\r\n between events.
-        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '')
-
-        let sepIndex
-        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sepIndex)
-          buffer = buffer.slice(sepIndex + 2)
-
-          const dataLines = frame
-            .split('\n')
-            .filter((l) => l.startsWith('data:'))
-            .map((l) => l.slice(5).trimStart())
-
-          if (dataLines.length === 0) continue
-          const raw = dataLines.join('\n')
-          if (!raw) continue
-
-          try {
-            dispatch(JSON.parse(raw))
-          } catch {
-            /* ignore non-JSON keep-alive frames */
-          }
-        }
-      }
+      // The backend always ends a run with `done`, `error` or `blocked`. If
+      // the connection closed cleanly without one (proxy idle timeout, server
+      // restart, deploy), the run is incomplete: surface it as an error so
+      // steps stop spinning and the partial notes aren't saved as finished.
+      // (A user cancel normally rejects with AbortError; the signal check is
+      // a belt-and-braces guard so cancelling is never reported as an error.)
+      if (!terminal && !controller.signal.aborted) throw new Error(STREAM_CLOSED_EARLY)
     } catch (err) {
       if (err.name === 'AbortError') {
         // user cancelled — not an error
