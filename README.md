@@ -131,7 +131,9 @@ primary with Gemini as automatic failover:
 | `HELPER_NVIDIA_MODEL` / `HELPER_GEMINI_MODEL`                    | Cheaper model for the mechanical steps (unset NVIDIA helper = main model) |
 | `GEMINI_API_KEY`                                                 | Failover, semantic embeddings, image OCR, audio transcription |
 | `OLLAMA_URL` / `OLLAMA_MODEL`                                    | Local offline fallback                            |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` or `SUPABASE_JWT_SECRET`    | Server-side token verification (required for a production start) |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` or `SUPABASE_JWT_SECRET`    | Server-side token verification (required for a production start). Asymmetric (ES256/RS256) signing keys are verified locally via the project's JWKS automatically; `SUPABASE_JWT_SECRET` is only for legacy HS256 projects |
+| `AUTH_ISSUER`                                                    | Expected token `iss` (default `SUPABASE_URL/auth/v1`); set for custom domains |
+| `AUTH_VERIFY_CONCURRENCY`, `AUTH_VERIFY_PER_CLIENT`, `AUTH_JWKS_TTL_S` | Optional auth tuning: concurrent `/auth/v1/user` calls (default 8), per client address (default 2), JWKS cache TTL (default 600s). `SUPABASE_JWT_SECRET` without `SUPABASE_URL` cannot verify ES256/RS256 tokens (startup warning) |
 | `ALLOW_ANONYMOUS`                                                | Explicitly allow a production start with auth off |
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`                   | Auth + cloud history (frontend `.env`)        |
 | `DAILY_GENERATIONS`, `DAILY_EXTRACTS`, `DAILY_REGENS`, `DAILY_CHATS` | Per-account daily caps                        |

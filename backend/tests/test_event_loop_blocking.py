@@ -12,6 +12,7 @@ import asyncio
 import time
 
 import httpx
+import jwt
 import pytest
 
 import auth
@@ -94,7 +95,10 @@ async def test_remote_auth_does_not_block_loop(monkeypatch):
         lambda c: c.post(
             "/api/export/markdown",
             json={"notes": "# Hi"},
-            headers={"Authorization": "Bearer tok-123"},
+            headers={"Authorization": "Bearer " + jwt.encode(
+                {"sub": "u1", "aud": "authenticated",
+                 "iss": "https://example.supabase.co/auth/v1",
+                 "exp": int(time.time()) + 600}, "x" * 32, algorithm="HS256")},
         ),
     )
     print(f"\n[remote auth] /api/health latency: {latency:.3f}s")

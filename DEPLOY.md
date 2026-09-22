@@ -44,7 +44,11 @@ This app deploys as a **single service**: the FastAPI backend serves both the
 | `PORT` | auto | Most hosts set this for you |
 | `SUPABASE_URL` | **yes** | Server-side auth — see below |
 | `SUPABASE_ANON_KEY` | **yes** | Server-side auth — see below |
-| `SUPABASE_JWT_SECRET` | no | Alternative to the two above: verifies tokens locally, no network call |
+| `SUPABASE_JWT_SECRET` | no | Only for **legacy HS256** projects that want local verification instead of the remote call; not needed with asymmetric signing keys (see below). Set on its own (without `SUPABASE_URL`), ES256/RS256 tokens can't be verified and are rejected; a startup warning says so |
+| `AUTH_ISSUER` | no | Expected `iss` claim, default `SUPABASE_URL/auth/v1`. Set it if tokens carry a different issuer (custom domain, self-hosted behind a gateway); the first mismatch is logged with expected vs received issuer |
+| `AUTH_VERIFY_CONCURRENCY` | no | Max concurrent `/auth/v1/user` verification calls, default `8`; callers are admitted first-come first-served and get **503** after waiting 3s |
+| `AUTH_VERIFY_PER_CLIENT` | no | Max verification calls one client address may have queued or running, default `2`; beyond that **503** at once |
+| `AUTH_JWKS_TTL_S` | no | How long the fetched JWKS is cached, default `600` (min `30`) |
 | `ALLOWED_EMAILS` | no | Comma-separated allowlist. Empty = any signed-in user |
 | `ALLOW_ANONYMOUS` | no | Set `true` only to deliberately run with no auth |
 
@@ -66,6 +70,31 @@ the frontend sends an access token with every request, but the server never
 verifies it and serves all callers as anonymous — so anyone with the URL can
 spend your model credits. Since v1.1 a production start in that state refuses
 to boot rather than failing silently.
+
+How tokens are verified (no configuration change needed):
+
+- Projects using Supabase's **asymmetric JWT signing keys** (ES256/RS256, the
+  current recommendation) are verified locally against
+  `SUPABASE_URL/auth/v1/.well-known/jwks.json`, cached for
+  `AUTH_JWKS_TTL_S`. Signature, `exp`, `aud=authenticated`,
+  `iss=SUPABASE_URL/auth/v1` and `sub` are checked; there is no per-request
+  network call, and forged tokens cost none either. Key rotation is picked up
+  automatically (an unknown `kid` triggers at most one JWKS refresh per 60s).
+- If the JWKS can't be fetched (outage, not migrated, empty key set) the
+  server falls back to asking Supabase (`/auth/v1/user`, needs
+  `SUPABASE_ANON_KEY`) — it never just accepts the token.
+- **Legacy HS256** tokens use `SUPABASE_JWT_SECRET` if set, otherwise the
+  `/auth/v1/user` call. Before that call, tokens that could never be valid
+  (expired, wrong `aud`, wrong `iss`) are refused for free.
+- Anything that is not a JWT at all is refused immediately.
+- The JWKS fetch never waits behind `/auth/v1/user` calls, and cached keys
+  stay in use while a refresh is running or failing (up to 24h), so a flood
+  of junk tokens can't lock out ES256/RS256 users. HS256 projects without
+  `SUPABASE_JWT_SECRET` still depend on the rate-limited remote call; setting
+  the secret, or migrating to asymmetric keys, removes that dependency.
+
+`SUPABASE_URL` + `SUPABASE_ANON_KEY` remain the required pair for a
+production start (the anon key is what makes the fallback work).
 
 Verify a deploy with:
 

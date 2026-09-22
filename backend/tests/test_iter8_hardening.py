@@ -840,21 +840,41 @@ def test_junk_tokens_cannot_lock_out_a_valid_token_from_the_same_ip(monkeypatch)
         def json(self):
             return {"id": "u1", "email": "v@x.y"}
 
+    import jwt
+
+    def tok(sub):
+        # JWT-shaped with plausible claims, so it passes the free unverified
+        # prechecks and really reaches (fake) Supabase, which decides.
+        return jwt.encode({"sub": sub, "aud": "authenticated",
+                           "iss": "https://example.supabase.co/auth/v1",
+                           "exp": int(time.time()) + 600}, "x" * 32, algorithm="HS256")
+
+    good = tok("good")
+
     def fake_get(url, headers=None, timeout=None):
         calls.append(headers["Authorization"])
-        return R(200 if headers["Authorization"] == "Bearer GOOD" else 401)
+        return R(200 if headers["Authorization"] == f"Bearer {good}" else 401)
 
     monkeypatch.setattr(auth._requests, "get", fake_get)
     monkeypatch.setattr(auth, "_user_cache", {})
     monkeypatch.setattr(auth, "_bad_tokens", {})
     monkeypatch.setattr(auth, "REQUIRE_AUTH", True)
+    monkeypatch.setattr(auth, "SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setattr(auth, "SUPABASE_ANON_KEY", "anon-key")
     monkeypatch.setattr(auth, "SUPABASE_JWT_SECRET", "")
     req = _Req("198.51.100.7")
     for i in range(40):
         with pytest.raises(HTTPException) as exc:
+            asyncio.run(auth.require_user(req, f"Bearer {tok(f'junk{i}')}"))
+        assert exc.value.status_code == 401
+    assert len(calls) == 40  # each junk token was judged by Supabase itself
+    # Malformed (non-JWT) tokens are rejected too - without an outbound call.
+    for i in range(10):
+        with pytest.raises(HTTPException) as exc:
             asyncio.run(auth.require_user(req, f"Bearer junk{i}"))
         assert exc.value.status_code == 401
-    user = asyncio.run(auth.require_user(req, "Bearer GOOD"))
+    assert len(calls) == 40
+    user = asyncio.run(auth.require_user(req, f"Bearer {good}"))
     assert user["id"] == "u1"
 
 
