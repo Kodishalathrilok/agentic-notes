@@ -30,8 +30,12 @@ def test_generate_rejects_empty_text():
 
 
 def test_generate_rejects_oversized_text():
-    r = client.post("/api/generate", json={"text": "x" * 9_999_999})
+    # Over MAX_TEXT_CHARS but inside the JSON body limit: the handler's 422.
+    r = client.post("/api/generate", json={"text": "x" * 300_001})
     assert r.status_code == 422
+    # Far over the body limit: refused with 413 before the body is parsed.
+    r = client.post("/api/generate", json={"text": "x" * 9_999_999})
+    assert r.status_code == 413
 
 
 def test_export_markdown_works_offline():

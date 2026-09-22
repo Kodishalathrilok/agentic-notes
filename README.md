@@ -135,7 +135,13 @@ primary with Gemini as automatic failover:
 | `ALLOW_ANONYMOUS`                                                | Explicitly allow a production start with auth off |
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`                   | Auth + cloud history (frontend `.env`)        |
 | `DAILY_GENERATIONS`, `DAILY_EXTRACTS`, `DAILY_REGENS`, `DAILY_CHATS` | Per-account daily caps                        |
-| `MAX_TEXT_CHARS`, `WORKER_THREADS`, `MAX_CONCURRENT_GENERATIONS` | Server tuning                                 |
+| `MAX_TEXT_CHARS`, `WORKER_THREADS`, `MAX_CONCURRENT_GENERATIONS`, `GENERATION_DEADLINE_S` | Server tuning                                 |
+| `MAX_INFLIGHT_PER_USER`                                          | Expensive requests one account may have running at once (default 3; 429 beyond) |
+| `EXPORT_THREADS`                                                 | Threads for export rendering (default 2), separate from the main worker pool |
+| `MAX_PDF_MB`, `MAX_AUDIO_MB`, `MAX_IMAGE_MB`, `MAX_PDF_PAGES`    | Upload caps (20 / 25 / 10 MB) and pages parsed per PDF (500) |
+| `MAX_JSON_BODY_BYTES`                                            | Largest JSON request body (default 2.5 MiB); bigger bodies get 413 before they are read |
+| `TRUSTED_PROXY_HOPS`                                             | Reverse proxies in front of the app that append to `X-Forwarded-For` (default 1, right for Hugging Face Spaces / Render / Railway / Fly). The per-IP identity used when auth is off is the entry that many places from the right; entries further left are client-supplied and ignored. **On direct exposure (no proxy) it must be `0`**, and uvicorn must stop trusting forwarded headers: set `FORWARDED_ALLOW_IPS=127.0.0.1` (the Dockerfile defaults it to `*` for the proxied platforms). |
+| `FORWARDED_ALLOW_IPS`                                            | Read by uvicorn: which peers may set `X-Forwarded-Proto`/`-For`. The Dockerfile sets `*` for proxied platforms (keeps redirects on https). **Direct exposure: `127.0.0.1`**, together with `TRUSTED_PROXY_HOPS=0` |
 
 ## Tests & evaluation
 

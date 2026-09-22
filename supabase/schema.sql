@@ -35,6 +35,8 @@
 --     3. Run STEP 2 (drops "read public sessions"). Until you do, the
 --        enumeration hole is still open.
 --   On a brand-new project, just run the whole file.
+--   STEP 3 (size limits) is additive and independent of the order above:
+--   run it at any time.
 -- ---------------------------------------------------------------------------
 
 -- ===========================================================================
@@ -219,6 +221,55 @@ grant execute on function public.get_shared_session(uuid) to anon, authenticated
 
 drop policy if exists "read public sessions" on public.sessions;
 
+-- ===========================================================================
+-- STEP 3 — size limits on stored sessions; additive, safe to run at any time
+--
+-- The browser writes this table directly with the anon key, so nothing but
+-- the database bounds what one signed-in account can store in a row. These
+-- CHECK constraints cap every free-form column well above anything the app
+-- produces (notes are generated from a source capped at 300k characters;
+-- `sources` holds the retrieved passages of that source; quiz and flashcards
+-- are a few KB), measured in BYTES (octet_length) because that is what costs
+-- storage. jsonb columns are measured as their text form.
+--
+-- NOT VALID: the constraint is enforced for every INSERT and UPDATE from now
+-- on, but existing rows are not scanned, so a pre-existing oversized row can
+-- never make this migration fail. To also check existing rows (optional; it
+-- scans the table and fails, naming the constraint, if a row is over), run:
+--   alter table public.sessions validate constraint sessions_notes_size;
+--   (and likewise for each constraint below)
+-- Re-running this step drops and re-adds the constraints, which makes them
+-- NOT VALID again; re-run the VALIDATE statements afterwards if you rely on
+-- them.
+--
+-- Not done here: a cap on the NUMBER of rows per user. Accepted risk - it
+-- needs a trigger (RLS cannot count), and rows are already size-bounded.
+-- ===========================================================================
+
+alter table public.sessions drop constraint if exists sessions_notes_size;
+alter table public.sessions add constraint sessions_notes_size
+  check (octet_length(notes) <= 2097152) not valid;               -- 2 MiB
+
+alter table public.sessions drop constraint if exists sessions_quiz_size;
+alter table public.sessions add constraint sessions_quiz_size
+  check (octet_length(quiz) <= 524288) not valid;                 -- 512 KiB
+
+alter table public.sessions drop constraint if exists sessions_flashcards_size;
+alter table public.sessions add constraint sessions_flashcards_size
+  check (octet_length(flashcards) <= 524288) not valid;           -- 512 KiB
+
+alter table public.sessions drop constraint if exists sessions_title_size;
+alter table public.sessions add constraint sessions_title_size
+  check (octet_length(title) <= 4096) not valid;                  -- 4 KiB
+
+alter table public.sessions drop constraint if exists sessions_sources_size;
+alter table public.sessions add constraint sessions_sources_size
+  check (octet_length(sources::text) <= 4194304) not valid;       -- 4 MiB
+
+alter table public.sessions drop constraint if exists sessions_tags_size;
+alter table public.sessions add constraint sessions_tags_size
+  check (octet_length(tags::text) <= 16384) not valid;            -- 16 KiB
+
 -- ---------------------------------------------------------------------------
 -- Verify (run these after, and read the output — do not assume)
 -- ---------------------------------------------------------------------------
@@ -263,3 +314,8 @@ drop policy if exists "read public sessions" on public.sessions;
 --      set local role anon;
 --      select * from public.get_shared_session('<a shared session id>');
 --    rollback;
+
+-- 6. The size limits (STEP 3) exist. Expect six rows; convalidated is false
+--    until you run the optional VALIDATE statements:
+--    select conname, convalidated from pg_constraint
+--     where conrelid = 'public.sessions'::regclass and conname like 'sessions_%_size';

@@ -334,3 +334,81 @@ def test_schema_sql_is_idempotent(server):
         ]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# STEP 3: size limits on stored sessions
+# ---------------------------------------------------------------------------
+
+_SIZE_CONSTRAINTS = [
+    "sessions_flashcards_size", "sessions_notes_size", "sessions_quiz_size",
+    "sessions_sources_size", "sessions_tags_size", "sessions_title_size",
+]
+
+
+@pytest.mark.parametrize("column,value", [
+    ("notes", "x" * (2 * 1024 * 1024 + 1)),
+    ("notes", "é" * (1024 * 1024 + 1)),          # 2 bytes each: bytes, not chars
+    ("quiz", "x" * (512 * 1024 + 1)),
+    ("flashcards", "x" * (512 * 1024 + 1)),
+    ("title", "x" * 4097),
+])
+def test_oversized_text_column_is_rejected(tx, column, value):
+    cur, _ = tx
+    as_user(cur, USER_A)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with cur.connection.transaction():
+            cur.execute(f"insert into public.sessions ({column}) values (%s)", (value,))
+
+
+@pytest.mark.parametrize("column,value", [
+    ("sources", '[{"text": "' + "x" * (4 * 1024 * 1024) + '"}]'),
+    ("tags", '["' + "x" * 16384 + '"]'),
+])
+def test_oversized_jsonb_column_is_rejected(tx, column, value):
+    cur, _ = tx
+    as_user(cur, USER_A)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with cur.connection.transaction():
+            cur.execute(f"insert into public.sessions ({column}) values (%s::jsonb)", (value,))
+
+
+def test_normal_sized_session_and_update_still_work(tx):
+    cur, ids = tx
+    as_user(cur, USER_A)
+    cur.execute(
+        "insert into public.sessions (title, notes, quiz, flashcards, sources, tags)"
+        " values (%s, %s, %s, %s, %s::jsonb, %s::jsonb) returning id",
+        ("t", "n" * 300_000, "q" * 20_000, "f" * 20_000,
+         '[{"id": 1, "text": "' + "s" * 400_000 + '"}]', '["bio"]'))
+    new_id = cur.fetchone()[0]
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with cur.connection.transaction():
+            cur.execute("update public.sessions set notes = %s where id = %s",
+                        ("x" * (2 * 1024 * 1024 + 1), new_id))
+
+
+def test_size_limits_are_idempotent_and_not_valid(server):
+    """Re-running is safe, and an existing oversized row never blocks it
+    (the constraints are NOT VALID: new writes only)."""
+    conn = _fresh_db(server, "rls_size_limits")
+    try:
+        _apply_schema(conn)
+        conn.execute("insert into auth.users (id) values (%s)", (USER_A,))
+        # A row that predates the limits (inserted with the check removed).
+        conn.execute("alter table public.sessions drop constraint sessions_notes_size")
+        conn.execute("insert into public.sessions (user_id, notes) values (%s, %s)",
+                     (USER_A, "x" * (2 * 1024 * 1024 + 10)))
+        _apply_schema(conn)
+        _apply_schema(conn)
+        rows = conn.execute(
+            "select conname, convalidated from pg_constraint"
+            " where conrelid = 'public.sessions'::regclass and conname like 'sessions_%%_size'"
+            " order by conname").fetchall()
+        assert [r[0] for r in rows] == _SIZE_CONSTRAINTS
+        assert not any(r[1] for r in rows)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute("insert into public.sessions (user_id, notes) values (%s, %s)",
+                         (USER_A, "x" * (2 * 1024 * 1024 + 1)))
+    finally:
+        conn.close()

@@ -72,12 +72,39 @@ def parse_flashcards(raw: str):
     return cards
 
 
+# CSV/formula injection: a cell starting with one of these is evaluated as a
+# formula by Excel, LibreOffice and Google Sheets (e.g. =HYPERLINK(...)).
+_ALWAYS_FORMULA = ("=", "@", "\t", "\r")
+
+
+def _csv_safe(cell: str) -> str:
+    """Neutralise a spreadsheet formula by prefixing an apostrophe (OWASP).
+
+    `=`, `@`, tab and CR always start a formula. `+` and `-` are escaped
+    when NOT followed by a digit, `.` or a space (`-cmd|...`,
+    `+HYPERLINK(...)`), so ordinary values such as `-38.8 °C`, `+3` or
+    `- item` stay untouched. A number-like start is still escaped if the cell
+    contains what turns arithmetic into code - a function call `(`, a DDE
+    pipe `|` or a sheet reference `!` (e.g. `-2+3+cmd|' /C calc'!A0`).
+    """
+    if cell.startswith(_ALWAYS_FORMULA):
+        return "'" + cell
+    if cell[:1] in ("+", "-") and len(cell) > 1:
+        if not (cell[1].isdigit() or cell[1] in ". ") or any(c in cell for c in "(|!"):
+            return "'" + cell
+    return cell
+
+
 def flashcards_to_csv(flashcards: str) -> str:
-    """Render flashcards as a two-column CSV (front,back) for Anki/Quizlet."""
+    """Render flashcards as a two-column CSV (front,back) for Anki/Quizlet.
+
+    Card text comes from a model that was fed user-supplied documents, so a
+    cell could carry a formula; every cell goes through _csv_safe.
+    """
     buf = StringIO()
     writer = csv.writer(buf)
     for card in parse_flashcards(flashcards):
-        writer.writerow([card["front"], card["back"]])
+        writer.writerow([_csv_safe(card["front"]), _csv_safe(card["back"])])
     return buf.getvalue()
 
 

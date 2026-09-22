@@ -2062,11 +2062,15 @@ NOTES:
 # Chat: ask questions grounded in the notes
 # ---------------------------------------------------------------------------
 
+# How many prior chat turns go into the prompt (the most recent ones).
+CHAT_HISTORY_TURNS = 6
+
+
 def chat_about_notes_stream(notes, question, history=None, model=None, cancel=None):
     """Stream a tutor-style answer grounded in the provided notes."""
     history = history or []
     convo = ""
-    for turn in history[-6:]:
+    for turn in history[-CHAT_HISTORY_TURNS:]:
         role = "Student" if turn.get("role") == "user" else "Tutor"
         convo += f"{role}: {(turn.get('content') or '')[:2000]}\n"
 

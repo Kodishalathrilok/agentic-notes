@@ -23,6 +23,8 @@ resets on restart, which is fine for a single-process deployment.
 
 import os
 import time
+import logging
+import ipaddress
 import threading
 
 import requests as _requests
@@ -83,6 +85,97 @@ ALLOW_ANONYMOUS = (os.getenv("ALLOW_ANONYMOUS") or "false").lower() in (
 _IS_DEV = (os.getenv("DEV") or "1").lower() in ("1", "true", "yes")
 
 
+# How many reverse proxies in front of this app APPEND to X-Forwarded-For.
+# Only used for the anonymous (auth-off) identity; with auth on, the identity
+# is the verified user id. Every proxy appends the address it received the
+# connection from, so the entry `hops` places from the RIGHT was written by
+# our own outermost proxy and is the real client; everything to its left came
+# from the client and is spoofable. Hugging Face Spaces (and Render/Railway/
+# Fly) put exactly one such proxy in front of the container, hence the
+# default of 1. The proxies' IP ranges are not published, so they cannot be
+# allowlisted instead. With NO proxy in front (direct exposure) this MUST be
+# 0 - otherwise the client writes the entry that is read - and uvicorn must
+# not trust forwarders either: set FORWARDED_ALLOW_IPS=127.0.0.1 (the
+# Dockerfile defaults it to '*'). If that is forgotten, client_ip detects
+# uvicorn's rewrite and refuses to use the spoofed address.
+TRUSTED_PROXY_HOPS = max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1") or 0))
+
+# Identity used when X-Forwarded-For is present but the configured hop's entry
+# is not an address. Deliberately NOT request.client: under uvicorn's
+# --proxy-headers --forwarded-allow-ips='*' that is the LEFTMOST entry, which
+# the client wrote. A proxy that appends always writes a valid address, so
+# only hand-made headers land in this one shared bucket.
+_UNPARSABLE_XFF_ID = "xff-unparsable"
+_warned_unparsable_xff = False
+
+# Identity when TRUSTED_PROXY_HOPS=0 but uvicorn has ALREADY replaced the peer
+# with a client-written X-Forwarded-For entry (it trusts forwarders, i.e.
+# FORWARDED_ALLOW_IPS='*', which the Dockerfile sets for the proxied
+# platforms). The real peer is gone by then, so no per-client identity is
+# trustworthy; these requests share one bucket instead of minting new ones.
+_REWRITTEN_PEER_ID = "untrusted-forwarded-peer"
+_warned_rewritten_peer = False
+
+
+def _forwarded_ip(entry: str):
+    """Parse one X-Forwarded-For entry: `1.2.3.4`, `1.2.3.4:5678`, `2001:db8::1`
+    or `[2001:db8::1]:443`. Returns the normalised address or None."""
+    entry = entry.strip()
+    if entry.startswith("["):
+        end = entry.find("]")
+        entry = entry[1:end] if end > 0 else ""
+    elif entry.count(":") == 1:  # IPv4 with a port (bare IPv6 has 2+ colons)
+        entry = entry.split(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(entry))
+    except ValueError:
+        return None
+
+
+def client_ip(request) -> str:
+    """The caller's address for per-IP limits (see TRUSTED_PROXY_HOPS).
+
+    Reads the raw X-Forwarded-For header itself instead of trusting
+    request.client, which uvicorn's --proxy-headers --forwarded-allow-ips='*'
+    sets to the LEFTMOST (client-supplied) entry. request.client is only used
+    when there is no X-Forwarded-For at all, in which case uvicorn has not
+    rewritten it and it is the socket peer.
+    """
+    global _warned_unparsable_xff, _warned_rewritten_peer
+    peer = request.client.host if request.client else "local"
+    headers = getattr(request, "headers", None)
+    values = headers.getlist("x-forwarded-for") if headers is not None else []
+    entries = [e.strip() for v in values for e in v.split(",") if e.strip()]
+    if TRUSTED_PROXY_HOPS <= 0:
+        # Direct exposure: the socket peer is the identity - unless uvicorn's
+        # ProxyHeadersMiddleware rewrote it from X-Forwarded-For. It does so
+        # only when the header is present, and always sets the port to 0,
+        # which a real TCP peer never has; that combination means the value
+        # came from the client.
+        if entries and request.client is not None and getattr(request.client, "port", None) == 0:
+            if not _warned_rewritten_peer:
+                _warned_rewritten_peer = True
+                logging.getLogger("agentic").warning(
+                    "TRUSTED_PROXY_HOPS=0 but uvicorn trusts X-Forwarded-For "
+                    "(FORWARDED_ALLOW_IPS); the client address is spoofable, so such "
+                    "requests share one rate-limit identity. On direct exposure set "
+                    "FORWARDED_ALLOW_IPS=127.0.0.1.")
+            return _REWRITTEN_PEER_ID
+        return peer
+    if not entries:
+        return peer
+    parsed = _forwarded_ip(entries[max(0, len(entries) - TRUSTED_PROXY_HOPS)])
+    if parsed is None:
+        if not _warned_unparsable_xff:
+            _warned_unparsable_xff = True
+            logging.getLogger("agentic").warning(
+                "X-Forwarded-For entry at hop %d is not an IP address; such requests "
+                "share one rate-limit identity. Check TRUSTED_PROXY_HOPS.",
+                TRUSTED_PROXY_HOPS)
+        return _UNPARSABLE_XFF_ID
+    return parsed
+
+
 def auth_required() -> bool:
     """Whether tokens are actually being verified. Surfaced on /api/health."""
     return REQUIRE_AUTH
@@ -126,6 +219,16 @@ _user_cache: dict = {}
 _cache_lock = threading.Lock()
 _CACHE_TTL = 300  # seconds
 
+# Negative cache: token -> time until which it is known to be rejected, so
+# replaying the same junk token costs no outbound call. Keyed by the exact
+# token, so it can never reject a DIFFERENT token - in particular never a
+# valid one (a per-IP failure limit did: one client behind a shared NAT, or a
+# spoofed header, could lock everyone else out). Only a definite 401/403 from
+# Supabase is cached, never an outage.
+_bad_tokens: dict = {}
+_BAD_TOKEN_TTL = 60  # seconds
+_BAD_TOKEN_MAX = 5000
+
 
 def _verify_local(token: str):
     """Verify with the project's JWT secret (HS256). Returns user dict."""
@@ -154,12 +257,30 @@ def _cached_user(token: str):
     return None
 
 
+def _token_exp(token: str):
+    """The token's `exp` claim, read WITHOUT verifying the signature - used only
+    to stop caching a user past the token's own expiry (Supabase has already
+    verified it). None if it isn't a readable JWT or has no numeric exp."""
+    if _pyjwt is None:
+        return None
+    try:
+        claims = _pyjwt.decode(token, options={"verify_signature": False})
+    except Exception:  # noqa: BLE001
+        return None
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    return exp if isinstance(exp, (int, float)) and not isinstance(exp, bool) else None
+
+
 def _verify_remote(token: str):
     """Verify by asking Supabase who this token belongs to (cached)."""
     now = time.time()
     cached = _cached_user(token)
     if cached is not None:
         return cached
+    with _cache_lock:
+        if _bad_tokens.get(token, 0) > now:
+            raise HTTPException(
+                401, "Invalid or expired session — please sign in again.")
 
     try:
         r = _requests.get(
@@ -181,6 +302,11 @@ def _verify_remote(token: str):
             "(check SUPABASE_URL and SUPABASE_ANON_KEY).",
         )
     if r.status_code != 200:
+        if r.status_code in (401, 403):
+            with _cache_lock:
+                if len(_bad_tokens) >= _BAD_TOKEN_MAX:
+                    _bad_tokens.clear()
+                _bad_tokens[token] = now + _BAD_TOKEN_TTL
         raise HTTPException(
             401, "Invalid or expired session — please sign in again.")
 
@@ -190,11 +316,18 @@ def _verify_remote(token: str):
         raise HTTPException(
             502, "The auth service returned an unreadable response.")
     user = {"id": body.get("id"), "email": (body.get("email") or "").lower()}
-    with _cache_lock:
-        # Opportunistic cleanup so the cache can't grow unbounded.
-        if len(_user_cache) > 2000:
-            _user_cache.clear()
-        _user_cache[token] = (user, now + _CACHE_TTL)
+    # Never cache past the token's own expiry: an expired token must stop
+    # working when it expires, not up to _CACHE_TTL later.
+    expires_at = now + _CACHE_TTL
+    exp = _token_exp(token)
+    if exp is not None:
+        expires_at = min(expires_at, exp)
+    if expires_at > now:
+        with _cache_lock:
+            # Opportunistic cleanup so the cache can't grow unbounded.
+            if len(_user_cache) > 2000:
+                _user_cache.clear()
+            _user_cache[token] = (user, expires_at)
     return user
 
 
@@ -208,8 +341,7 @@ async def require_user(
     anonymous user keyed by client IP so rate limiting still has an identity.
     """
     if not REQUIRE_AUTH:
-        ip = request.client.host if request.client else "local"
-        return {"id": f"anon:{ip}", "email": ""}
+        return {"id": f"anon:{client_ip(request)}", "email": ""}
 
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Sign in required.")

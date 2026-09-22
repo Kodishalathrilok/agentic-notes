@@ -32,6 +32,15 @@ This app deploys as a **single service**: the FastAPI backend serves both the
 | `GEMINI_MODEL` | no | Defaults to `gemini-3.6-flash`. Retired ids self-heal to `gemini-flash-latest`, with a log line telling you to update the pin |
 | `HELPER_GEMINI_MODEL` | no | Defaults to `gemini-3.5-flash-lite` |
 | `MAX_TEXT_CHARS` | no | Defaults to `300000` |
+| `MAX_JSON_BODY_BYTES` | no | Largest JSON request body. Defaults to 2.5 MiB (or 8 bytes × `MAX_TEXT_CHARS` if that is larger); bigger bodies get **413** before they are read or authenticated |
+| `MAX_PDF_MB` / `MAX_AUDIO_MB` / `MAX_IMAGE_MB` | no | Upload caps, default `20` / `25` / `10`. The upload routes' body limit is the cap + 1 MB |
+| `MAX_PDF_PAGES` | no | Pages parsed per PDF, default `500`. Past it (or past `MAX_TEXT_CHARS` of text) extraction stops and the response says `truncated` |
+| `MAX_INFLIGHT_PER_USER` | no | Expensive requests (generate, chat, quiz/flashcards/rewrite/edit, extract, export) one account may have running at once, default `3`; more get **429** |
+| `GENERATION_DEADLINE_S` | no | End-to-end time budget for one `/api/generate` stream, default `900` |
+| `TRUSTED_PROXY_HOPS` | no | Reverse proxies in front of the app that append to `X-Forwarded-For`, default `1` (right for Render, Railway, Fly and Hugging Face Spaces). The per-IP identity used when auth is off is the entry that many places from the right; entries further left are written by the client and ignored. **If the container is exposed directly (no proxy), set `0`** and set `FORWARDED_ALLOW_IPS=127.0.0.1` (the Dockerfile defaults it to `*` so `X-Forwarded-Proto` from the platform proxy keeps redirects on https) |
+| `FORWARDED_ALLOW_IPS` | no | Read by uvicorn. The Dockerfile sets `*` so the platform proxy's `X-Forwarded-Proto` keeps redirects on https. **If the container is exposed directly, set `127.0.0.1`** (and `TRUSTED_PROXY_HOPS=0`). Otherwise uvicorn believes any address a client puts in `X-Forwarded-For`; the app detects this and puts such requests in one shared rate-limit bucket |
+| `EXPORT_THREADS` | no | Threads for PDF/DOCX/Markdown/CSV export rendering, default `2`. Exports get their own pool so a burst of them can't stall generations or chats |
+| `WORKER_THREADS` | no | Main worker pool. Default `max(16, MAX_CONCURRENT_GENERATIONS + 12)`: each running generation holds one thread, and chats/extracts/quiz calls need the rest |
 | `PORT` | auto | Most hosts set this for you |
 | `SUPABASE_URL` | **yes** | Server-side auth — see below |
 | `SUPABASE_ANON_KEY` | **yes** | Server-side auth — see below |
@@ -70,6 +79,16 @@ The second call must return **401**. A **422** means auth is off — the request
 got past the auth check and only then failed input validation.
 
 Never commit `.env` — it's gitignored and excluded from the image.
+
+### Supabase schema (`supabase/schema.sql`)
+
+Run the file in the Supabase SQL Editor; it is idempotent. On a project that
+already has the old share policy, follow the order in the file's header
+(STEP 1, deploy the frontend, then STEP 2). **STEP 3** adds size limits
+(CHECK constraints on `notes`, `quiz`, `flashcards`, `title`, `sources`,
+`tags`). It is additive and can be run at any time. The constraints are added
+`NOT VALID`, so rows that already exist never block it; the file shows the
+optional `validate constraint` statements that also check existing rows.
 
 ---
 

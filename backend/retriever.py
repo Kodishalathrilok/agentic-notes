@@ -89,6 +89,50 @@ def page_for_offset(spans, offset):
     return best
 
 
+# Upper bound on page spans accepted for one document. /api/extract-pdf emits
+# one per page and parses at most MAX_PDF_PAGES pages (default 500), so this
+# leaves ample headroom while bounding the per-span work below.
+MAX_PAGE_SPANS = 5000
+
+# Hard ceiling on chunks per document (defence in depth). Unbounded chunking of
+# a 300k-char document yields ~520 chunks; page-bounded chunking adds at most
+# one partial chunk per page. Anything past this is not a real document.
+MAX_CHUNKS = 6000
+
+# How far past the end of the normalized text a span may reach. Matches the
+# +-2 tolerance of _spans_match.
+_SPAN_SLACK = 2
+
+
+def valid_page_spans(spans, norm_len: int) -> bool:
+    """Are these spans STRUCTURALLY what page_spans() produces for a text of
+    normalized length `norm_len`?
+
+    page_spans() emits dicts {page, start, end} of ints, pages strictly
+    increasing from 1, 0 <= start <= end, each span starting at or after the
+    previous one's end (no overlap; blank pages are zero-width), and none
+    reaching past the text. Spans that break any of this cannot have come
+    from /api/extract-pdf; honouring them would let one request multiply the
+    chunking/embedding work (the same region re-chunked once per span).
+    """
+    if not isinstance(spans, list) or len(spans) > MAX_PAGE_SPANS:
+        return False
+    prev_page, prev_end = 0, 0
+    for s in spans:
+        if not isinstance(s, dict):
+            return False
+        page, start, end = s.get("page"), s.get("start"), s.get("end")
+        # `type(...) is int`, not isinstance: bool is an int subclass.
+        if type(page) is not int or type(start) is not int or type(end) is not int:
+            return False
+        if page <= prev_page or start < prev_end or end < start:
+            return False
+        if end > norm_len + _SPAN_SLACK:
+            return False
+        prev_page, prev_end = page, end
+    return True
+
+
 def _spans_match(norm: str, spans) -> bool:
     """Do these page spans actually describe THIS text?
 
@@ -99,8 +143,12 @@ def _spans_match(norm: str, spans) -> bool:
     confidently wrong page. Better to fall back to unbounded chunking and cite
     passage numbers than to cite the wrong page.
     """
+    if not valid_page_spans(spans, len(norm)):
+        logger.warning("ignoring %d malformed page span(s); chunking without pages",
+                       len(spans) if isinstance(spans, list) else -1)
+        return False
     covered = max((s["end"] for s in spans), default=0)
-    return bool(covered) and abs(covered - len(norm)) <= 2
+    return bool(covered) and abs(covered - len(norm)) <= _SPAN_SLACK
 
 
 def _walk_chunks(segment, base, target_chars, overlap_chars, page, chunks):
@@ -185,10 +233,22 @@ def chunk_document(text, target_chars: int = 700, overlap_chars: int = 120, span
                 norm[span["start"]:span["end"]], span["start"],
                 target_chars, overlap_chars, span["page"], chunks,
             )
-        if chunks:
+            if len(chunks) > MAX_CHUNKS:
+                break
+        if chunks and len(chunks) <= MAX_CHUNKS:
             return chunks
+        if chunks:
+            logger.warning("page-bounded chunking passed %d chunks; chunking without pages",
+                           MAX_CHUNKS)
+        chunks = []
 
     _walk_chunks(norm, 0, target_chars, overlap_chars, None, chunks)
+    if len(chunks) > MAX_CHUNKS:
+        # Only reachable with a tiny target_chars on a huge text; never for
+        # real inputs (see MAX_CHUNKS). Truncate rather than blow up.
+        logger.warning("document produced %d chunks; keeping the first %d",
+                       len(chunks), MAX_CHUNKS)
+        del chunks[MAX_CHUNKS:]
     return chunks
 
 

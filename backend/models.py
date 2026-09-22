@@ -1042,20 +1042,29 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
 # ---------------------------------------------------------------------------
 
 def safe_json(text: str) -> dict:
-    """Best-effort extraction of a JSON object from messy model output."""
+    """Best-effort extraction of a JSON object from messy model output.
+
+    Always returns a dict: every caller does `data.get(...)`, so valid JSON
+    that is not an object (a list, a number, a string) is treated like
+    unparseable output and becomes {}.
+    """
     if not text:
         return {}
     text = text.strip()
 
     try:
-        return json.loads(text)
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
     except Exception:
         pass
 
     fenced = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     fenced = re.sub(r"\s*```$", "", fenced).strip()
     try:
-        return json.loads(fenced)
+        data = json.loads(fenced)
+        if isinstance(data, dict):
+            return data
     except Exception:
         pass
 
