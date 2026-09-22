@@ -35,4 +35,7 @@ EXPOSE 8000
 # Single uvicorn worker keeps SSE/streaming connections simple and reliable.
 # --proxy-headers so request.client.host is the real caller and not the
 # platform's router — without it every visitor shares one rate-limit bucket.
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+# --timeout-graceful-shutdown is a backstop: the app already ends open streams
+# on SIGTERM, but anything still open after 8s is cancelled rather than
+# holding shutdown until the platform's SIGKILL (Docker's default is 10s).
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*' --timeout-graceful-shutdown 8"]

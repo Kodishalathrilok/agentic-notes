@@ -11,11 +11,13 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
 
 import os
 import re
+import logging
 import queue as _queue
 from concurrent.futures import ThreadPoolExecutor
 
 from models import (call_model, call_model_stream, safe_json, helper_model, IncompleteStreamError,
-                    UserFacingError, ProvidersUnavailableError, log_unexpected_error)
+                    UserFacingError, ProvidersUnavailableError, log_unexpected_error,
+                    PipelineCancelled, cancel_scope, raise_if_cancelled)
 from retriever import Retriever, page_for_offset
 
 # Quality thresholds for the self-improvement loop
@@ -50,7 +52,17 @@ SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
 # are independent (each has its own retrieved context), so overlapping the
 # model calls cuts wall-clock time; keep this modest to respect free-tier
 # rate limits (failover still covers 429s). Override with SECTION_CONCURRENCY.
+# This is PER RUN: server-wide, at most MAX_CONCURRENT_GENERATIONS (main.py)
+# x SECTION_CONCURRENCY section streams are in flight at once.
 SECTION_CONCURRENCY = int(os.getenv("SECTION_CONCURRENCY", "2"))
+
+_logger = logging.getLogger("agentic")
+
+
+def _cancel_kw(cancel):
+    # Only pass `cancel` when there is one, so fakes of the writer/stream
+    # functions without that parameter keep working (same trick as `strict`).
+    return {"cancel": cancel} if cancel is not None else {}
 
 # Corrective re-retrieval (CRAG-style): when the critique reports missing
 # topics, run a fresh retrieval PER TOPIC and add those chunks to the context
@@ -1014,13 +1026,14 @@ def write_notes(context, mode, tone, length, fmt, plan, model=None, instructions
 
 
 def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instructions="",
-                       doc_type="explanatory", on_serve=None):
+                       doc_type="explanatory", on_serve=None, cancel=None):
     yield from call_model_stream(
         _write_prompt(context, mode, tone, length, fmt, plan, instructions, doc_type=doc_type),
         max_tokens=_max_tokens(length),
         model=model,
         temperature=0.5,
         on_serve=on_serve,
+        **_cancel_kw(cancel),
     )
 
 
@@ -1030,7 +1043,7 @@ def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instr
 
 def write_section_stream(section, context, mode, tone, length, fmt, checklist=None, model=None,
                          instructions="", doc_type="explanatory", on_serve=None,
-                         is_part=False):
+                         is_part=False, cancel=None):
     """Write ONE unit of a larger set of notes from its own context (streamed).
 
     `is_part` distinguishes the two callers. An outline section has a topical
@@ -1090,6 +1103,7 @@ CONTEXT (numbered passages retrieved for THIS section — cite these):
         model=model,
         temperature=0.5,
         on_serve=on_serve,
+        **_cancel_kw(cancel),
     )
 
 
@@ -1382,7 +1396,7 @@ def revise_notes(notes, critique, mode, plan, fmt, model=None, instructions="", 
 
 
 def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructions="", context="",
-                        length="medium", on_serve=None, chunk_map=None, added_ids=()):
+                        length="medium", on_serve=None, chunk_map=None, added_ids=(), cancel=None):
     yield from call_model_stream(
         _revise_prompt(notes, critique, mode, plan, fmt, context, instructions,
                        chunk_map=chunk_map, added_ids=added_ids),
@@ -1390,6 +1404,7 @@ def revise_notes_stream(notes, critique, mode, plan, fmt, model=None, instructio
         model=model,
         temperature=0.4,
         on_serve=on_serve,
+        **_cancel_kw(cancel),
     )
 
 
@@ -2047,7 +2062,7 @@ NOTES:
 # Chat: ask questions grounded in the notes
 # ---------------------------------------------------------------------------
 
-def chat_about_notes_stream(notes, question, history=None, model=None):
+def chat_about_notes_stream(notes, question, history=None, model=None, cancel=None):
     """Stream a tutor-style answer grounded in the provided notes."""
     history = history or []
     convo = ""
@@ -2068,7 +2083,7 @@ Conversation so far:
 Student: {question}
 Tutor:"""
 
-    yield from call_model_stream(prompt, max_tokens=900, model=model)
+    yield from call_model_stream(prompt, max_tokens=900, model=model, **_cancel_kw(cancel))
 
 
 # ---------------------------------------------------------------------------
@@ -2172,9 +2187,57 @@ def _page_tagger(retriever, spans):
 
 
 def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
-              include_quiz=True, include_flashcards=True, page_spans=None):
+              include_quiz=True, include_flashcards=True, page_spans=None, cancel=None):
     """
     Drive the full pipeline, yielding event dicts as each stage progresses.
+
+    `cancel` is an optional threading.Event. Once it is set the pipeline stops
+    at the next stage boundary (before forwarding another event), the
+    streaming model calls stop at their next delta, the non-streaming ones are
+    not started, and queued section writers never start. A cancelled run
+    yields nothing more - no `error`, no `done` - is logged at INFO, and is
+    never recorded as lost coverage or a cut-off stream. Closing this
+    generator closes the pipeline (and waits for its section writers when
+    cancelled).
+
+    Event types and ordering are documented on _run_agent_events.
+    """
+    inner = _run_agent_events(
+        text, mode, tone, length, fmt, model=model, instructions=instructions,
+        include_quiz=include_quiz, include_flashcards=include_flashcards,
+        page_spans=page_spans, cancel=cancel,
+    )
+    try:
+        while True:
+            if cancel is not None and cancel.is_set():
+                _logger.info("[pipeline] cancelled; stopped at a stage boundary")
+                return
+            try:
+                if cancel is None:
+                    event = next(inner)
+                else:
+                    # Ambient flag for the non-streaming call_model() calls made
+                    # during this step - scoped to the step, never a yield.
+                    with cancel_scope(cancel):
+                        event = next(inner)
+            except StopIteration:
+                return
+            except PipelineCancelled:
+                _logger.info("[pipeline] cancelled mid-stage; stopped")
+                return
+            if cancel is not None and cancel.is_set():
+                _logger.info("[pipeline] cancelled; stopped at a stage boundary")
+                return
+            yield event
+    finally:
+        inner.close()
+
+
+def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions="",
+                      include_quiz=True, include_flashcards=True, page_spans=None,
+                      cancel=None):
+    """
+    The pipeline body behind run_agent (which adds cancellation).
 
     Event types:
       status, plan_done, sources, notes_delta, notes_done, critique_done,
@@ -2326,33 +2389,46 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 #
                 # Only a window that emitted NOTHING is retried, so a retry can
                 # never duplicate text the client has already been streamed.
+                #
+                # Cancellation (PipelineCancelled, a BaseException) is not caught
+                # by `except Exception`, so it is never retried or reported as a
+                # failed window; the `finally` still terminates the queue so the
+                # consumer can never hang on it.
                 err = None
-                for attempt in (1, 2):
-                    sent = False
-                    try:
-                        for delta in write_section_stream(
-                            sec, ctx, mode, tone, length, active_fmt,
-                            checklist=checklist, model=model, instructions=instructions,
-                            doc_type=doc_type, on_serve=_record_serve, is_part=True,
-                        ):
-                            sent = True
-                            out_q.put(("delta", delta))
-                    except Exception as exc:  # noqa: BLE001
-                        err = exc
+                try:
+                    for attempt in (1, 2):
+                        raise_if_cancelled(cancel)
+                        sent = False
+                        try:
+                            for delta in write_section_stream(
+                                sec, ctx, mode, tone, length, active_fmt,
+                                checklist=checklist, model=model, instructions=instructions,
+                                doc_type=doc_type, on_serve=_record_serve, is_part=True,
+                                **_cancel_kw(cancel),
+                            ):
+                                raise_if_cancelled(cancel)
+                                sent = True
+                                out_q.put(("delta", delta))
+                        except Exception as exc:  # noqa: BLE001
+                            err = exc
+                            if sent:
+                                break  # partial output already streamed - do not redo it
+                            continue
                         if sent:
-                            break  # partial output already streamed - do not redo it
-                        continue
-                    if sent:
-                        err = None
-                        break
-                    err = err or _WindowProducedNothing(
-                        f"no provider produced output for {sec}")
-                if err is not None:
-                    out_q.put(("error", err))
-                out_q.put(("end", None))
+                            err = None
+                            break
+                        err = err or _WindowProducedNothing(
+                            f"no provider produced output for {sec}")
+                except PipelineCancelled:
+                    err = None
+                finally:
+                    if err is not None:
+                        out_q.put(("error", err))
+                    out_q.put(("end", None))
 
             queues = [_queue.Queue() for _ in section_ctx]
-            pool = ThreadPoolExecutor(max_workers=max(1, SECTION_CONCURRENCY))
+            pool = ThreadPoolExecutor(max_workers=max(1, SECTION_CONCURRENCY),
+                                      thread_name_prefix="section")
             # One window is no longer one run. With up to COVERAGE_MAX_WINDOWS
             # generation calls the chance that at least one hits a provider
             # error is that many times higher, and raising would discard every
@@ -2383,6 +2459,9 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                             err = payload
                         else:  # "end"
                             break
+                    # A cancelled writer ends its queue early; that is not a
+                    # failed window and must never be recorded as lost coverage.
+                    raise_if_cancelled(cancel)
                     if err is not None:
                         failed.append({"window": sec, "pages": sec_pages,
                                        "reason": _failure_slug(err)})
@@ -2393,9 +2472,14 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                             continue
                     yield _push("\n\n")
             finally:
-                # If the client disconnects mid-stream, cancel sections that
-                # haven't started; running ones finish into abandoned queues.
-                pool.shutdown(wait=False, cancel_futures=True)
+                # Sections that haven't started are always dropped. When the run
+                # was CANCELLED, also wait for the running writers - they stop at
+                # their next delta - so that once this generator is closed no
+                # writer thread is still spending tokens (the caller releases
+                # the generation slot only after that). Uncancelled early exits
+                # keep the old non-blocking behaviour.
+                pool.shutdown(wait=cancel is not None and cancel.is_set(),
+                              cancel_futures=True)
 
             # Durable coverage record. Until now a lost window survived only
             # as a transient status message, so once the stream ended a run
@@ -2459,6 +2543,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                 for delta in write_notes_stream(
                     context, mode, tone, length, active_fmt, plan, model=model,
                     instructions=instructions, doc_type=doc_type, on_serve=_record_serve,
+                    **_cancel_kw(cancel),
                 ):
                     parts.append(delta)
                     yield _emit("notes_delta", "write", delta)
@@ -2564,6 +2649,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                     notes, critique, mode, plan, active_fmt, model=model,
                     instructions=instructions, context=context, length=revise_length,
                     on_serve=_record_serve, chunk_map=chunk_map, added_ids=round_added,
+                    **_cancel_kw(cancel),
                 ):
                     parts.append(delta)
                     yield _emit("notes_delta", "revise", delta)

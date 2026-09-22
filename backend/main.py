@@ -13,14 +13,18 @@ Endpoints:
 import os
 import re
 import json
+import sys
+import signal
 import socket
 import asyncio
 import logging
+import threading
 import ipaddress
 from io import BytesIO
-from typing import Optional
+from typing import Any, Optional
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse, urljoin
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +61,7 @@ from models import (
     validate_model_id,
     UnknownModelError,
     log_unexpected_error,
+    PipelineCancelled,
 )
 
 # Anchored to backend/, not the cwd — see the note in models.py.
@@ -87,7 +92,20 @@ if not _agentic_logger.handlers:
 # Must run before the app accepts a single request.
 verify_auth_config()
 
-app = FastAPI(title="Agentic AI Notes Generator", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(_app):
+    restore = _hook_shutdown_signals()
+    try:
+        yield
+    finally:
+        for sig, handler in restore.items():
+            signal.signal(sig, handler)
+        # Shutdown: stop every open pipeline/chat stream and its model calls.
+        # See _shutdown_streams.
+        await _shutdown_streams()
+
+
+app = FastAPI(title="Agentic AI Notes Generator", version="1.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,8 +143,290 @@ EXECUTOR = ThreadPoolExecutor(max_workers=WORKER_THREADS, thread_name_prefix="wo
 
 # Hard cap on how many /api/generate pipelines may run at once. Excess
 # requests get a clear 503 instead of silently queueing behind the pool.
+# Each pipeline writes up to agent.SECTION_CONCURRENCY sections at once, so the
+# server-wide ceiling on concurrent section streams is
+# MAX_CONCURRENT_GENERATIONS x SECTION_CONCURRENCY.
 MAX_CONCURRENT_GENERATIONS = int(os.getenv("MAX_CONCURRENT_GENERATIONS", "4"))
-_generation_slots = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+
+# End-to-end budget for one /api/generate stream. When it runs out the
+# pipeline is cancelled and the client gets one final, user-safe error event.
+GENERATION_DEADLINE_S = float(os.getenv("GENERATION_DEADLINE_S", "900"))
+
+# How long shutdown waits for open streams to stop before giving up on them.
+SHUTDOWN_GRACE_S = 5.0
+
+GENERATION_TIMEOUT_MESSAGE = (
+    "Generating your notes took too long and was stopped. Please try again - "
+    "a shorter source or length usually finishes sooner."
+)
+
+
+class _SlotCounter:
+    """Thread-safe, non-blocking capacity counter.
+
+    Replaces an asyncio.Semaphore whose `locked()` pre-check and later
+    `async with` were two separate steps: several requests could pass the
+    check together and then queue invisibly inside the stream. try_acquire()
+    checks and takes a slot in one step, synchronously in the handler, so a
+    request is either admitted with its slot or rejected with a 503.
+    """
+
+    def __init__(self, limit: int):
+        self.limit = max(0, int(limit))  # 0 rejects everything, as Semaphore(0) did
+        self._in_use = 0
+        self._lock = threading.Lock()
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self._in_use >= self.limit:
+                return False
+            self._in_use += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            if self._in_use <= 0:
+                raise RuntimeError("generation slot released more times than acquired")
+            self._in_use -= 1
+
+    @property
+    def in_use(self) -> int:
+        with self._lock:
+            return self._in_use
+
+
+_generation_slots = _SlotCounter(MAX_CONCURRENT_GENERATIONS)
+
+_END = object()        # the stepped generator is exhausted (or stopped)
+_TERMINAL_EVENTS = {"done", "error", "blocked"}  # run_agent ends after any of these
+_TIMED_OUT = object()  # a step did not finish within the time allowed
+
+# Every open generate/chat stream, until its cleanup has finished.
+_active_runs: "set[_StreamRun]" = set()
+
+
+def _consume_outcome(fut: "asyncio.Future") -> None:
+    # Mark the outcome as retrieved: when nobody reads a wrapped step (timeout,
+    # client gone, cleanup's plain wait), asyncio would otherwise log "Future
+    # exception was never retrieved" with a traceback for every failed step.
+    if not fut.cancelled():
+        fut.exception()
+
+
+def _wrap_step(fut: Future) -> "asyncio.Future":
+    wrapped = asyncio.wrap_future(fut)
+    wrapped.add_done_callback(_consume_outcome)
+    return wrapped
+
+
+class _StreamRun:
+    """One streaming response driven by a synchronous generator on EXECUTOR.
+
+    Owns the cancel flag, the single in-flight step and (for /api/generate)
+    the capacity slot, and guarantees the cleanup below runs exactly once:
+
+        set cancel -> wait for the in-flight step -> gen.close() on EXECUTOR
+        -> release the slot -> leave the registry
+
+    Why this is race-free: `step` and `_cleanup` are only read and written
+    on the event loop thread, and next_item() checks `_cleanup`, submits the
+    step and records it with no await in between. So cleanup either starts
+    before a step is submitted (and next_item then submits nothing) or sees
+    that step and waits for it. At most one step exists at a time, so
+    gen.close() never runs while the generator is executing on another
+    thread ("generator already executing"), and the slot is released only
+    after close() has returned - i.e. after the pipeline's own `finally`
+    blocks, including waiting for its section writers, have run. begin_cleanup()
+    is idempotent, so the stream's `finally`, the response's `finally`, and
+    shutdown can all call it.
+    """
+
+    def __init__(self, kind: str, gen, cancel: threading.Event, slot: Optional[_SlotCounter] = None):
+        self.kind = kind
+        self.gen = gen
+        self.cancel = cancel
+        self.slot = slot
+        self.step: Optional[Future] = None
+        self.finished = False  # the generator ran to its natural end
+        self.shutdown_requested = False
+        self._cleanup: Optional[asyncio.Task] = None
+        # Set together with _cleanup. The stream races each step against it,
+        # so a stream stops at once even while a step is blocked in a call
+        # that cannot be interrupted; the cleanup task keeps the slot until
+        # that step has really finished.
+        self._closing = asyncio.Event()
+
+    @property
+    def closing(self) -> bool:
+        return self._cleanup is not None
+
+    async def next_item(self, timeout: Optional[float] = None) -> Any:
+        """Run one step of the generator on EXECUTOR.
+
+        Returns the item; _END when the generator is exhausted or the run is
+        closing (also while a step is still in flight - cleanup waits for
+        it); or _TIMED_OUT if the step is still running after `timeout`
+        seconds.
+        """
+        if self._cleanup is not None:
+            return _END
+        fut = EXECUTOR.submit(next, self.gen, _END)
+        self.step = fut
+        step = _wrap_step(fut)
+        closing = asyncio.ensure_future(self._closing.wait())
+        try:
+            done, _ = await asyncio.wait({step, closing}, timeout=timeout,
+                                         return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            closing.cancel()
+        if step not in done:
+            return _END if self._closing.is_set() else _TIMED_OUT
+        try:
+            item = step.result()
+        except PipelineCancelled:
+            return _END
+        except BaseException:
+            self.finished = True  # the exception ended the generator
+            raise
+        if item is _END and not self.cancel.is_set():
+            self.finished = True
+        return item
+
+    def begin_cleanup(self) -> "asyncio.Task":
+        """Start the one-time cleanup (idempotent); returns its task."""
+        if self._cleanup is None:
+            self.cancel.set()
+            self._closing.set()
+            if not self.finished:
+                _agentic_logger.info(
+                    "[%s] stream closed before the work finished; cancelling it", self.kind)
+            self._cleanup = asyncio.get_running_loop().create_task(self._run_cleanup())
+        return self._cleanup
+
+    async def _run_cleanup(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        try:
+            step = self.step
+            if step is not None and not step.done():
+                # asyncio.wait never raises for the awaited future, so a step
+                # that failed or was cancelled is fine.
+                await asyncio.wait({_wrap_step(step)})
+            try:
+                await loop.run_in_executor(EXECUTOR, self.gen.close)
+            except RuntimeError:
+                # EXECUTOR unusable (interpreter exiting): close on a plain
+                # thread instead of blocking the loop.
+                await asyncio.to_thread(self.gen.close)
+        except Exception as exc:  # noqa: BLE001
+            log_unexpected_error(f"{self.kind} cleanup", exc)
+        finally:
+            if self.slot is not None:
+                self.slot.release()
+            _active_runs.discard(self)
+            if not self.finished:
+                _agentic_logger.info("[%s] cancelled run stopped after %.2fs; resources released",
+                                     self.kind, loop.time() - started)
+
+
+class _RunCleanupMixin:
+    """Makes a streaming response always clean up its run.
+
+    The body generator's own `finally` is not enough: if the stream is torn
+    down before the generator starts, or while it is suspended at a `yield`
+    (the send is cancelled, not the generator), that `finally` only runs when
+    the generator is garbage-collected - if ever.
+    """
+
+    def __init__(self, content, run: _StreamRun, **kwargs: Any):
+        super().__init__(content, **kwargs)  # type: ignore[call-arg]
+        self._run = run
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)  # type: ignore[misc]
+        finally:
+            self._run.begin_cleanup()
+
+
+class _CleanupEventSourceResponse(_RunCleanupMixin, EventSourceResponse):
+    pass
+
+
+class _CleanupStreamingResponse(_RunCleanupMixin, StreamingResponse):
+    pass
+
+
+SERVER_RESTARTING_MESSAGE = (
+    "The server is restarting, so this generation was stopped. Please try "
+    "again in a moment."
+)
+
+
+def _stop_streams_for_shutdown() -> None:
+    """Cancel every open stream; each then ends at its next step boundary.
+
+    Needed because uvicorn only runs the lifespan shutdown AFTER every open
+    connection has closed - and an SSE stream would otherwise keep going for
+    up to GENERATION_DEADLINE_S. sse-starlette's own exit hook does not fire
+    under the uvicorn CLI (it patches Server.handle_exit after uvicorn has
+    already installed the bound method as the signal handler).
+    """
+    for run in list(_active_runs):
+        run.shutdown_requested = True
+        run.begin_cleanup()
+
+
+def _hook_shutdown_signals() -> dict:
+    """Chain a stream-stopping step in front of the server's SIGINT/SIGTERM
+    handlers. Returns the handlers to restore. Only possible (and only
+    needed) when the app runs on the main thread, as under the uvicorn CLI."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    loop = asyncio.get_running_loop()
+    restore: dict = {}
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if sys.platform == "win32":
+        sigs.append(signal.SIGBREAK)  # uvicorn handles it there too
+    for sig in sigs:
+        prev = signal.getsignal(sig)
+        if not callable(prev):
+            continue  # no server handler to chain onto
+
+        def _handler(signum, frame, _prev=prev):
+            try:
+                # A signal handler must not touch asyncio objects directly.
+                loop.call_soon_threadsafe(_stop_streams_for_shutdown)
+            finally:
+                # Whatever happens above (e.g. the loop is already closed),
+                # the server must still see its Ctrl+C / SIGTERM.
+                _prev(signum, frame)
+
+        signal.signal(sig, _handler)
+        restore[sig] = prev
+    return restore
+
+
+async def _shutdown_streams(timeout: Optional[float] = None) -> None:
+    """Cancel every open stream and wait (bounded) for their cleanup.
+
+    EXECUTOR is deliberately NOT shut down. uvicorn runs this only after every
+    connection has closed, so no request work is left queued on it, and
+    shutdown(wait=False) cannot interrupt a running step anyway - the
+    interpreter joins the pool's threads at exit either way. Shutting the
+    module-global pool down bought nothing and made the app unusable after
+    one lifespan cycle (e.g. a second `with TestClient(app)`). The backend
+    holds no DB pool or long-lived HTTP client: model and auth calls use
+    per-call `requests`."""
+    grace = SHUTDOWN_GRACE_S if timeout is None else timeout
+    _stop_streams_for_shutdown()
+    tasks = [run.begin_cleanup() for run in list(_active_runs)]
+    if tasks:
+        _, pending = await asyncio.wait(tasks, timeout=grace)
+        if pending:
+            _agentic_logger.warning(
+                "[shutdown] %d stream(s) still stopping after %.1fs; exiting anyway",
+                len(pending), grace)
 
 # Upload size caps (bytes). Without these, `await file.read()` loads whatever
 # the client sends straight into RAM.
@@ -356,7 +656,7 @@ def _load_eval_report() -> dict:
 async def eval_report():
     """Serve the latest eval report (eval/report.json) for the dashboard."""
     # File I/O + JSON parsing is blocking; keep it off the event loop.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(EXECUTOR, _load_eval_report)
 
 
@@ -387,19 +687,17 @@ async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600
         )
 
     # Reject immediately (don't queue invisibly) when the server is already
-    # running its maximum number of pipelines.
-    if _generation_slots.locked():
+    # running its maximum number of pipelines. The check and the acquire are one
+    # atomic step; from here on the stream owns the slot and its cleanup
+    # releases it.
+    slots = _generation_slots
+    if not slots.try_acquire():
         raise HTTPException(
             status_code=503,
             detail="The server is at capacity right now — please try again in a minute.",
         )
-
-    async def event_generator():
-      async with _generation_slots:
-        loop = asyncio.get_event_loop()
-
-        # run_agent is a synchronous generator; step through it in an executor
-        # so each blocking model call doesn't stall the event loop.
+    try:
+        cancel = threading.Event()
         gen = run_agent(
             text,
             req.mode,
@@ -411,23 +709,53 @@ async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600
             include_quiz=req.include_quiz,
             include_flashcards=req.include_flashcards,
             page_spans=req.page_spans,
+            cancel=cancel,
         )
-        sentinel = object()
+        run = _StreamRun("generate", gen, cancel, slot=slots)
+        response = _CleanupEventSourceResponse(_generation_events(run), run=run)
+    except BaseException:
+        slots.release()
+        raise
+    _active_runs.add(run)
+    return response
 
-        def _next():
-            return next(gen, sentinel)
 
+async def _generation_events(run: _StreamRun):
+    """SSE body: step the synchronous pipeline on EXECUTOR under a deadline."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + GENERATION_DEADLINE_S
+    try:
         while True:
-            event = await loop.run_in_executor(EXECUTOR, _next)
-            if event is sentinel:
-                break
+            remaining = deadline - loop.time()
+            event: Any = _TIMED_OUT if remaining <= 0 else await run.next_item(timeout=remaining)
+            if event is _TIMED_OUT:
+                # Stop the pipeline now (the slot is freed once it has
+                # actually stopped), then tell the client why.
+                _agentic_logger.info("[generate] deadline of %ss reached; cancelling",
+                                     GENERATION_DEADLINE_S)
+                run.begin_cleanup()
+                yield {"data": json.dumps({"type": "error", "step": "error",
+                                           "content": GENERATION_TIMEOUT_MESSAGE,
+                                           "data": None})}
+                return
+            if event is _END:
+                if run.shutdown_requested and not run.finished:
+                    yield {"data": json.dumps({"type": "error", "step": "error",
+                                               "content": SERVER_RESTARTING_MESSAGE,
+                                               "data": None})}
+                return
+            if event.get("type") in _TERMINAL_EVENTS:
+                # The pipeline's last word: nothing (e.g. a shutdown notice
+                # landing in the pacing sleep below) may follow it.
+                run.finished = True
             yield {"data": json.dumps(event)}
             # Pace discrete step events so the frontend can render each one,
             # but stream token deltas as fast as they arrive.
             if event.get("type") != "notes_delta":
                 await asyncio.sleep(0.05)
-
-    return EventSourceResponse(event_generator())
+    finally:
+        # Client disconnect (CancelledError here), deadline, or normal end.
+        run.begin_cleanup()
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +783,7 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
         # still exists — joining throws it away.
         return n_pages, joined, page_spans(parts)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         pages, text, spans = await loop.run_in_executor(EXECUTOR, _parse)
     except Exception as exc:  # noqa: BLE001
@@ -517,7 +845,7 @@ async def extract_image(file: UploadFile = File(...), user=Depends(limiter("extr
 
     raw = await _read_upload(file, MAX_IMAGE_BYTES, "Image")
     mime = file.content_type or "image/jpeg"
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         text = await loop.run_in_executor(EXECUTOR, lambda: extract_text_from_image(raw, mime))
     except Exception:  # noqa: BLE001 - message kept generic so the API key never leaks
@@ -546,7 +874,7 @@ async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract
     raw = await _read_upload(file, MAX_AUDIO_BYTES, "Audio file")
     mime = file.content_type or "audio/webm"
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         text = await loop.run_in_executor(EXECUTOR, lambda: transcribe_audio(raw, mime))
     except Exception:  # noqa: BLE001 - message kept generic so the API key never leaks
@@ -573,7 +901,7 @@ async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, d
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # This is the quiz users actually get (the pipeline's include_quiz path is
     # off in the UI), so its answer key is checked here, with the same model
@@ -598,7 +926,7 @@ async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     cards = await loop.run_in_executor(EXECUTOR, lambda: generate_flashcards(notes, 8, model))
     return {"flashcards": cards}
 
@@ -617,7 +945,7 @@ async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limite
     if not notes or not selection:
         raise HTTPException(
             status_code=422, detail="`notes` and `selection` are required.")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
             EXECUTOR, lambda: edit_selection(
@@ -654,7 +982,7 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, da
         raise HTTPException(status_code=422, detail="`notes` is required.")
     if req.direction not in ("shorter", "longer", "clarity"):
         raise HTTPException(status_code=422, detail="Invalid `direction`.")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
             EXECUTOR,
@@ -681,6 +1009,9 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, da
 # Chat with your notes (streaming plain text)
 # ---------------------------------------------------------------------------
 
+CHAT_CUT_OFF_NOTICE = "\n\n_[The answer was cut off \u2014 please ask again.]_"
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAILY_CHATS))):
     model = _require_known_model(req.model)
@@ -692,28 +1023,37 @@ async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAI
     if not question:
         raise HTTPException(status_code=422, detail="`question` is required.")
 
+    # Same cancel-on-disconnect as /api/generate: closing the stream sets the
+    # flag (the provider stream stops at its next delta) and closes the
+    # generator once its in-flight step is done. No capacity slot or deadline:
+    # a chat answer is one bounded model call.
+    cancel = threading.Event()
+    run = _StreamRun("chat", chat_about_notes_stream(notes, question, req.history, model=model,
+                                                     cancel=cancel), cancel)
+
     async def token_generator():
-        loop = asyncio.get_event_loop()
-        gen = chat_about_notes_stream(
-            notes, question, req.history, model=model)
-        sentinel = object()
+        try:
+            while True:
+                try:
+                    piece = await run.next_item()
+                except IncompleteStreamError:
+                    # The partial answer is already on screen; say so rather than
+                    # let it pass for the whole answer.
+                    yield CHAT_CUT_OFF_NOTICE
+                    break
+                if piece is _END:
+                    if run.shutdown_requested and not run.finished:
+                        # Stopped by a server restart, not by the client: the
+                        # reader is still there and must not take a partial
+                        # answer for the whole one.
+                        yield CHAT_CUT_OFF_NOTICE
+                    break
+                yield piece
+        finally:
+            run.begin_cleanup()
 
-        def _next():
-            return next(gen, sentinel)
-
-        while True:
-            try:
-                piece = await loop.run_in_executor(EXECUTOR, _next)
-            except IncompleteStreamError:
-                # The partial answer is already on screen; say so rather than
-                # let it pass for the whole answer.
-                yield "\n\n_[The answer was cut off \u2014 please ask again.]_"
-                break
-            if piece is sentinel:
-                break
-            yield piece
-
-    return StreamingResponse(token_generator(), media_type="text/plain")
+    _active_runs.add(run)
+    return _CleanupStreamingResponse(token_generator(), run=run, media_type="text/plain")
 
 
 # ---------------------------------------------------------------------------
@@ -811,7 +1151,7 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
 
     # YouTube: fetch the caption transcript (the real content) instead of HTML.
     yt_id = _youtube_id(url)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     if yt_id:
         try:
             # Blocking network call — keep it off the event loop (single
@@ -891,7 +1231,7 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
 
 @app.post("/api/export/pdf")
 async def export_pdf(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     pdf_bytes = await loop.run_in_executor(
         EXECUTOR, lambda: notes_to_pdf(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
@@ -903,7 +1243,7 @@ async def export_pdf(req: ExportRequest, user=Depends(limiter("export", 30, 600)
 
 @app.post("/api/export/markdown")
 async def export_markdown(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     md = await loop.run_in_executor(
         EXECUTOR, lambda: notes_to_markdown(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
@@ -915,7 +1255,7 @@ async def export_markdown(req: ExportRequest, user=Depends(limiter("export", 30,
 
 @app.post("/api/export/docx")
 async def export_docx(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(
         EXECUTOR, lambda: notes_to_docx(req.notes, req.quiz, req.flashcards))
     return StreamingResponse(
@@ -927,7 +1267,7 @@ async def export_docx(req: ExportRequest, user=Depends(limiter("export", 30, 600
 
 @app.post("/api/export/flashcards-csv")
 async def export_flashcards_csv(req: ExportRequest, user=Depends(limiter("export", 30, 600))):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     csv_text = await loop.run_in_executor(
         EXECUTOR, lambda: flashcards_to_csv(req.flashcards))
     return StreamingResponse(

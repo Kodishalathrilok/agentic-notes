@@ -36,6 +36,8 @@ import json
 import time
 import uuid
 import logging
+import threading
+from contextlib import contextmanager
 
 import requests
 from dotenv import load_dotenv
@@ -183,6 +185,52 @@ class IncompleteStreamError(RuntimeError):
         self.reason = reason
         self.chars = chars
         super().__init__(f"{provider} stream incomplete ({reason}) after {chars} chars")
+
+
+class PipelineCancelled(BaseException):
+    """The caller cancelled the work (client disconnect, deadline, shutdown).
+
+    Deliberately a BaseException, like asyncio.CancelledError, and NOT an
+    Exception: the pipeline has dozens of broad `except Exception` handlers
+    that turn a provider error into failover, a retried window, a "best
+    effort" skip or a coverage gap. Cancellation is none of those - it must
+    pass straight through every one of them to the orchestrator, which stops
+    quietly. Making each handler re-raise it explicitly would be one missed
+    handler away from a cancelled run failing over to the next provider and
+    spending more tokens. `finally` blocks still run, so streams and pools
+    are closed on the way out.
+    """
+
+
+# The cancel flag of the pipeline step running on THIS thread, set by
+# cancel_scope() only for the duration of one synchronous step (never across a
+# generator's yield). It lets the many non-streaming call_model() calls inside
+# a stage (critique, grounding batches, title, quiz...) check the flag before
+# they start without threading a parameter through every helper. Threads that
+# the pipeline starts itself (section writers) receive the flag explicitly.
+_cancel_local = threading.local()
+
+
+@contextmanager
+def cancel_scope(cancel):
+    """Make `cancel` the ambient cancel flag for code run inside the block."""
+    prev = getattr(_cancel_local, "event", None)
+    _cancel_local.event = cancel
+    try:
+        yield
+    finally:
+        _cancel_local.event = prev
+
+
+def _effective_cancel(cancel=None):
+    return cancel if cancel is not None else getattr(_cancel_local, "event", None)
+
+
+def raise_if_cancelled(cancel=None) -> None:
+    """Raise PipelineCancelled if `cancel` (or the ambient flag) is set."""
+    event = _effective_cancel(cancel)
+    if event is not None and event.is_set():
+        raise PipelineCancelled()
 
 
 def _check_finish(prov: str, finish) -> None:
@@ -887,6 +935,11 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
     # as before (tests and any other fakes of _dispatch keep their signature).
     extra = {"strict": True} if strict else {}
     for prov in _failover_chain(_provider_for(target)):
+        # A blocking `requests` call cannot be aborted once sent, so the
+        # ambient cancel flag (see cancel_scope) is honoured BEFORE each
+        # attempt; one already in flight runs to completion, bounded by its
+        # timeout.
+        raise_if_cancelled()
         if not _provider_ready(prov):
             continue
         try:
@@ -917,7 +970,8 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
     raise _providers_failed(errors)
 
 
-def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None,
+                      cancel=None):
     """Stream from the chosen provider; fail over if it errors before any output.
 
     `on_serve` fires on the FIRST delta — once a provider has emitted output it
@@ -926,16 +980,27 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
     Once output has been yielded a failure raises IncompleteStreamError rather
     than ending the stream: the caller already holds partial text and must be
     able to tell it from a finished answer.
+
+    `cancel` (a threading.Event; defaults to the ambient cancel_scope flag) is
+    checked before each provider and before each delta is yielded. When it is
+    set the provider stream is closed - which closes its HTTP response - and
+    PipelineCancelled is raised; there is no failover. A read already blocked
+    on the socket is only noticed when the next line arrives (or the read
+    times out).
     """
     target = resolve_model(model)
+    cancel = _effective_cancel(cancel)
     errors = []
     for prov in _failover_chain(_provider_for(target)):
+        raise_if_cancelled(cancel)
         if not _provider_ready(prov):
             continue
         yielded = False
         chars = 0
+        stream = _dispatch_stream(prov, prompt, max_tokens, target, temperature)
         try:
-            for delta in _dispatch_stream(prov, prompt, max_tokens, target, temperature):
+            for delta in stream:
+                raise_if_cancelled(cancel)
                 if not yielded and on_serve:
                     on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
                 yielded = True
@@ -952,6 +1017,13 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
                 raise IncompleteStreamError(prov, reason, chars) from exc
             print(f"[models] {prov} stream failed ({_safe(exc)}); trying next provider.")
             continue
+        finally:
+            # Deterministic, not left to GC: on cancellation, or when our own
+            # consumer closes us, the provider generator is suspended inside
+            # its `with resp:` - closing it releases the HTTP connection now.
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
         if yielded:
             return
         # A clean stream that produced NOTHING is a failure, not a success.
