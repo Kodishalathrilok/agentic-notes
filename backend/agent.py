@@ -14,7 +14,8 @@ import re
 import queue as _queue
 from concurrent.futures import ThreadPoolExecutor
 
-from models import call_model, call_model_stream, safe_json, helper_model, IncompleteStreamError
+from models import (call_model, call_model_stream, safe_json, helper_model, IncompleteStreamError,
+                    UserFacingError, ProvidersUnavailableError, log_unexpected_error)
 from retriever import Retriever, page_for_offset
 
 # Quality thresholds for the self-improvement loop
@@ -2416,7 +2417,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             }
 
             if failed and len(failed) == len(section_ctx):
-                raise RuntimeError(
+                raise UserFacingError(
                     "Every part of the document failed to generate. That is "
                     "usually a transient provider problem rather than an issue "
                     "with your source — please try again."
@@ -2431,7 +2432,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
 
             notes = "".join(parts).strip()
             if not notes:
-                raise RuntimeError(
+                raise UserFacingError(
                     "The model returned an empty draft. That is usually a transient "
                     "provider hiccup rather than a problem with your source — "
                     "please try again."
@@ -2475,7 +2476,7 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
                             "keeping what was written.")
             notes = "".join(parts).strip()
             if not notes:
-                raise RuntimeError(
+                raise UserFacingError(
                     "The model returned an empty draft. That is usually a transient "
                     "provider hiccup rather than a problem with your source — "
                     "please try again."
@@ -2694,5 +2695,16 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
             "coverage": coverage,
         })
 
+    except UserFacingError as exc:
+        if isinstance(exc, ProvidersUnavailableError):
+            # Keep the per-provider reasons for the operator; the user only
+            # learns that the providers are unavailable.
+            log_unexpected_error("pipeline", exc)
+        yield _emit("error", "error", exc.user_message)
     except Exception as exc:  # noqa: BLE001
-        yield _emit("error", "error", f"Pipeline error: {exc}")
+        # Raw exception text can carry provider errors, URLs or internal
+        # paths: log it with an id and give the user only the id.
+        error_id = log_unexpected_error("pipeline", exc)
+        yield _emit("error", "error",
+                    "Something went wrong while generating your notes. Please "
+                    f"try again. (error id: {error_id})")

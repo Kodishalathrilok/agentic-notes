@@ -92,8 +92,17 @@ def _auth_with(monkeypatch, **env):
 
 
 @pytest.fixture(autouse=True)
-def _restore_auth():
+def _restore_auth(monkeypatch):
+    """Reload auth under the ORIGINAL environment after each test.
+
+    The reload must not depend on fixture teardown order: another autouse
+    fixture (conftest's _no_real_network) also requests monkeypatch, so
+    monkeypatch may be torn down AFTER this fixture. Undo the test's env
+    patches explicitly first, otherwise the reload would read e.g. DEV=0 +
+    SUPABASE_URL and leak REQUIRE_AUTH=True into the next test.
+    """
     yield
+    monkeypatch.undo()
     importlib.reload(auth)
 
 

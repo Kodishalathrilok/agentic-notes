@@ -234,6 +234,9 @@ class _JsonResp:
 
 def test_truncated_part_fails_whole_rewrite_with_502(monkeypatch):
     monkeypatch.setattr(models, "_provider_ready", lambda p: p == "nvidia")
+    # The endpoint only accepts ids /api/models lists: offer this one.
+    monkeypatch.setattr(models, "_nvidia_available", lambda: True)
+    monkeypatch.setenv("NVIDIA_MODELS", "nvidia/some-model")
     seen = []
 
     def post(body, stream=False):

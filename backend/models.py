@@ -34,6 +34,8 @@ import os
 import re
 import json
 import time
+import uuid
+import logging
 
 import requests
 from dotenv import load_dotenv
@@ -125,6 +127,37 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").strip().rstrip("/
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b").strip()
 
 
+class UserFacingError(RuntimeError):
+    """An error raised deliberately for the end user.
+
+    `user_message` is written for people and is safe to show them; str(exc)
+    may carry more detail for the server log. Anything that is NOT one of
+    these must never reach a client verbatim - it can hold provider error
+    text, URLs or internal paths.
+    """
+
+    def __init__(self, message: str, user_message: str = ""):
+        super().__init__(message)
+        self.user_message = user_message or message
+
+
+PROVIDERS_UNAVAILABLE_MESSAGE = (
+    "The AI providers are unavailable right now. Please try again in a few minutes."
+)
+
+
+class ProvidersUnavailableError(UserFacingError):
+    """Every provider failed (or none is configured). str() keeps the
+    per-provider detail for logs; users only ever see the generic message."""
+
+    def __init__(self, detail: str):
+        super().__init__(detail, PROVIDERS_UNAVAILABLE_MESSAGE)
+
+
+class UnknownModelError(ValueError):
+    """A caller asked for a model id this deployment does not offer."""
+
+
 class RateLimitError(RuntimeError):
     """Kept for compatibility; failover now handles rate limits transparently."""
 
@@ -181,6 +214,21 @@ def _strict_finish(prov: str, finish, text: str) -> None:
 def _safe(exc) -> str:
     """Strip API keys out of error text before logging (handles ?key= and &key=)."""
     return re.split(r"[?&]key=", str(exc))[0]
+
+
+_log = logging.getLogger("agentic")
+
+
+def log_unexpected_error(where: str, exc: BaseException) -> str:
+    """Log an unexpected exception server-side and return a short error id.
+
+    The client gets only the id; the (key-stripped) exception text stays in
+    the server log, where the id finds it.
+    """
+    error_id = uuid.uuid4().hex[:8]
+    _log.error("[%s] error_id=%s %s: %s", where, error_id,
+               type(exc).__name__, _safe(exc))
+    return error_id
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +361,28 @@ def available_models():
 def default_model() -> str:
     av = available_models()
     return av[0]["id"] if av else DEFAULT_GEMINI_MODEL
+
+
+def selectable_model_ids() -> set:
+    """Every id a client may pass as `model`: exactly what /api/models lists."""
+    return {m["id"] for m in available_models()}
+
+
+def validate_model_id(model) -> str:
+    """Check a CLIENT-supplied model id against the allowlist.
+
+    Empty means "use the default" and is returned as "". Anything else must be
+    one of the ids /api/models offers: _provider_for sends unknown ids to
+    NVIDIA, so without this a caller could spend credits on any catalog
+    model. Internal callers (helper_model) don't come through here.
+    """
+    mid = (model or "").strip()
+    if not mid:
+        return ""
+    if mid not in selectable_model_ids():
+        raise UnknownModelError(
+            "Unknown model. Choose one of the models listed by /api/models.")
+    return mid
 
 
 def resolve_model(model):
@@ -779,17 +849,21 @@ def _fallback_reason(errors) -> str:
     return f"{prov}_{kind}".lower()
 
 
-def _providers_failed(errors) -> RuntimeError:
+def _providers_failed(errors) -> ProvidersUnavailableError:
     """Build an actionable error. Reports each configured provider's real reason
-    (hosted ones first — a dead local Ollama fallback shouldn't hide the cause)."""
+    (hosted ones first — a dead local Ollama fallback shouldn't hide the cause).
+
+    The detail is for the server log (str(exc)); the user-facing message says
+    only that the providers are unavailable.
+    """
     if not errors:
-        return RuntimeError(
+        return ProvidersUnavailableError(
             "No model provider is configured. Set NVIDIA_API_KEY or "
             "GEMINI_API_KEY in the server environment."
         )
     ordered = sorted(errors, key=lambda e: e[0] == "ollama")  # non-ollama first
     detail = " | ".join(f"{prov}: {_safe(exc)}" for prov, exc in ordered)
-    return RuntimeError(f"All model providers failed — {detail}")
+    return ProvidersUnavailableError(f"All model providers failed — {detail}")
 
 
 def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False,

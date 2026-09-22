@@ -284,6 +284,9 @@ def test_interrupted_single_pass_draft_is_marked_incomplete(monkeypatch):
 
 def test_chat_interrupted_answer_ends_with_cut_off_notice(monkeypatch):
     monkeypatch.setattr(models, "_provider_ready", lambda p: p == "nvidia")
+    # The endpoint only accepts ids /api/models lists: offer this one.
+    monkeypatch.setattr(models, "_nvidia_available", lambda: True)
+    monkeypatch.setenv("NVIDIA_MODELS", "nvidia/some-model")
 
     def stream(prov, prompt, max_tokens, model, temperature):
         yield "The answer is "

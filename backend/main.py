@@ -54,6 +54,9 @@ from models import (
     gemini_available,
     extract_text_from_image,
     transcribe_audio,
+    validate_model_id,
+    UnknownModelError,
+    log_unexpected_error,
 )
 
 # Anchored to backend/, not the cwd — see the note in models.py.
@@ -69,6 +72,16 @@ if not _retrieval_logger.handlers:
     _retrieval_logger.addHandler(_h)
     _retrieval_logger.setLevel(logging.INFO)
     _retrieval_logger.propagate = False
+
+# Server-side record of unexpected errors (see models.log_unexpected_error):
+# clients get a short error id, the detail lands here.
+_agentic_logger = logging.getLogger("agentic")
+if not _agentic_logger.handlers:
+    _ah = logging.StreamHandler()
+    _ah.setFormatter(logging.Formatter("%(levelname)s [agentic] %(message)s"))
+    _agentic_logger.addHandler(_ah)
+    _agentic_logger.setLevel(logging.INFO)
+    _agentic_logger.propagate = False
 
 # Fail fast if this is a production start with authentication switched off.
 # Must run before the app accepts a single request.
@@ -225,6 +238,18 @@ def _fetch_url_safely(url: str) -> "object":
     raise HTTPException(422, "Too many redirects.")
 
 
+def _require_known_model(model: str) -> str:
+    """422 unless `model` is empty (use the default) or one /api/models lists.
+
+    Called first thing by every handler that takes a `model`, so a caller
+    can't route requests to arbitrary (paid) catalog models.
+    """
+    try:
+        return validate_model_id(model)
+    except UnknownModelError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
@@ -315,9 +340,7 @@ async def health():
     }
 
 
-@app.get("/api/eval-report")
-async def eval_report():
-    """Serve the latest eval report (eval/report.json) for the dashboard."""
+def _load_eval_report() -> dict:
     path = os.path.join(os.path.dirname(
         os.path.abspath(__file__)), "eval", "report.json")
     if not os.path.isfile(path):
@@ -327,6 +350,14 @@ async def eval_report():
             return {"available": True, "report": json.load(f)}
     except Exception:  # noqa: BLE001
         return {"available": False}
+
+
+@app.get("/api/eval-report")
+async def eval_report():
+    """Serve the latest eval report (eval/report.json) for the dashboard."""
+    # File I/O + JSON parsing is blocking; keep it off the event loop.
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(EXECUTOR, _load_eval_report)
 
 
 @app.get("/api/models")
@@ -345,6 +376,7 @@ async def list_models():
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600, daily=DAILY_GENERATIONS))):
+    model = _require_known_model(req.model)
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="`text` is required.")
@@ -374,7 +406,7 @@ async def generate(req: GenerateRequest, user=Depends(limiter("generate", 6, 600
             req.tone,
             req.length,
             req.format,
-            model=req.model,
+            model=model,
             instructions=req.instructions,
             include_quiz=req.include_quiz,
             include_flashcards=req.include_flashcards,
@@ -427,8 +459,12 @@ async def extract_pdf(file: UploadFile = File(...), user=Depends(limiter("extrac
     try:
         pages, text, spans = await loop.run_in_executor(EXECUTOR, _parse)
     except Exception as exc:  # noqa: BLE001
+        # The parser's exception text is not for users; log it with an id.
+        error_id = log_unexpected_error("extract-pdf", exc)
         raise HTTPException(
-            status_code=422, detail=f"Could not read PDF: {exc}")
+            status_code=422,
+            detail="Could not read this PDF - it may be damaged, encrypted or "
+            f"not a PDF. (error id: {error_id})") from None
 
     if not text:
         raise HTTPException(
@@ -533,6 +569,7 @@ async def transcribe(file: UploadFile = File(...), user=Depends(limiter("extract
 
 @app.post("/api/quiz")
 async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
+    model = _require_known_model(req.model)
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -544,9 +581,9 @@ async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, d
     # fails open, and `verification.checked: false` says the key wasn't checked
     # instead of passing an unchecked key off as a checked one.
     def _quiz_job():
-        quiz = generate_quiz(notes, 5, req.model)
+        quiz = generate_quiz(notes, 5, model)
         try:
-            return verify_quiz_detailed(notes, quiz, req.model)
+            return verify_quiz_detailed(notes, quiz, model)
         except Exception:  # noqa: BLE001
             return quiz, {"checked": False, "questions": 0, "judged": 0,
                           "corrected": 0, "rejected": 0, "disputed": []}
@@ -557,16 +594,18 @@ async def regen_quiz(req: RegenRequest, user=Depends(limiter("regen", 20, 600, d
 
 @app.post("/api/flashcards")
 async def regen_flashcards(req: RegenRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
+    model = _require_known_model(req.model)
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
     loop = asyncio.get_event_loop()
-    cards = await loop.run_in_executor(EXECUTOR, lambda: generate_flashcards(notes, 8, req.model))
+    cards = await loop.run_in_executor(EXECUTOR, lambda: generate_flashcards(notes, 8, model))
     return {"flashcards": cards}
 
 
 @app.post("/api/edit-selection")
 async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
+    model = _require_known_model(req.model)
     raw = req.notes or ""
     notes = raw.strip()
     # The anchors index the notes as the client rendered them; stripping
@@ -582,7 +621,7 @@ async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limite
     try:
         result = await loop.run_in_executor(
             EXECUTOR, lambda: edit_selection(
-                notes, selection, req.instruction, req.model,
+                notes, selection, req.instruction, model,
                 line_start=line_start, line_end=line_end)
         )
     except SelectionNotFoundError:
@@ -609,6 +648,7 @@ async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(limite
 
 @app.post("/api/rewrite")
 async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, daily=DAILY_REGENS))):
+    model = _require_known_model(req.model)
     notes = (req.notes or "").strip()
     if not notes:
         raise HTTPException(status_code=422, detail="`notes` is required.")
@@ -619,7 +659,7 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, da
         result = await loop.run_in_executor(
             EXECUTOR,
             lambda: rewrite_notes(notes, req.direction, req.mode,
-                                  req.tone, req.format, req.model),
+                                  req.tone, req.format, model),
         )
     except RewriteTooLongError:
         raise HTTPException(
@@ -643,6 +683,7 @@ async def rewrite(req: RewriteRequest, user=Depends(limiter("regen", 20, 600, da
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAILY_CHATS))):
+    model = _require_known_model(req.model)
     notes = (req.notes or "").strip()
     question = (req.question or "").strip()
     if not notes:
@@ -654,7 +695,7 @@ async def chat(req: ChatRequest, user=Depends(limiter("chat", 40, 600, daily=DAI
     async def token_generator():
         loop = asyncio.get_event_loop()
         gen = chat_about_notes_stream(
-            notes, question, req.history, model=req.model)
+            notes, question, req.history, model=model)
         sentinel = object()
 
         def _next():
@@ -796,9 +837,24 @@ async def extract_url(req: UrlRequest, user=Depends(limiter("extract", 20, 600, 
         resp = await loop.run_in_executor(EXECUTOR, lambda: _fetch_url_safely(url))
     except HTTPException:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except _requests.HTTPError as exc:
+        # The remote status is ours to report; the exception text is not.
+        status = getattr(exc.response, "status_code", None)
         raise HTTPException(
-            status_code=422, detail=f"Could not fetch URL: {exc}")
+            status_code=422,
+            detail=f"Could not fetch URL: the page returned HTTP {status}."
+            if status else "Could not fetch URL: the page returned an error.") from None
+    except _requests.Timeout:
+        raise HTTPException(
+            status_code=422, detail="Could not fetch URL: the site took too long to respond.") from None
+    except _requests.ConnectionError:
+        raise HTTPException(
+            status_code=422, detail="Could not fetch URL: couldn't connect to the site.") from None
+    except Exception as exc:  # noqa: BLE001
+        error_id = log_unexpected_error("extract-url", exc)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not fetch URL. (error id: {error_id})") from None
 
     soup = BeautifulSoup(resp.safe_text, "html.parser")
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):

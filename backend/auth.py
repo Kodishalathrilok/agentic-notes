@@ -242,6 +242,28 @@ async def require_user(
 _hits: dict = {}  # (bucket, window_sec, identity) -> [timestamps]
 _hits_lock = threading.Lock()
 
+# Memory bound for _hits. A key's list is only pruned when that identity calls
+# again, so keys of identities that never return would live forever. Once the
+# dict passes the threshold, one sweep drops expired stamps from EVERY key and
+# deletes the keys left empty. The threshold then moves to twice the surviving
+# size, so a population of genuinely active identities can't make every
+# request pay for a full sweep - the cost stays amortised O(1) per request.
+_HITS_SWEEP_MIN = 5000
+_hits_sweep_at = _HITS_SWEEP_MIN
+
+
+def _sweep_expired_hits(now: float) -> None:
+    """Drop expired timestamps across all keys. Caller holds _hits_lock."""
+    global _hits_sweep_at
+    for key in list(_hits):
+        win = key[1]
+        live = [t for t in _hits[key] if now - t < win]
+        if live:
+            _hits[key] = live
+        else:
+            del _hits[key]
+    _hits_sweep_at = max(_HITS_SWEEP_MIN, 2 * len(_hits))
+
 DAY_SEC = 86400
 
 
@@ -284,11 +306,10 @@ def limiter(bucket: str, limit: int, window_sec: int, daily: int = 0):
             for key, stamps in pruned:
                 stamps.append(now)
                 _hits[key] = stamps
-            # Opportunistic cleanup — daily windows keep keys alive for 24h, so
-            # without this the dict grows with every identity ever seen.
-            if len(_hits) > 5000:
-                for key in [k for k, v in _hits.items() if not v]:
-                    del _hits[key]
+            # Bounded memory — daily windows keep keys alive for 24h, and a
+            # key is otherwise only pruned when its identity calls again.
+            if len(_hits) > _hits_sweep_at:
+                _sweep_expired_hits(now)
         return user
 
     return _dep
