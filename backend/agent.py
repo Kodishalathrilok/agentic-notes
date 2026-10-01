@@ -618,15 +618,21 @@ Respond with ONLY JSON:
 
 
 def _keeps_provenance(original: str, fix: str) -> bool:
-    """A repair may not throw away a citation the claim already had.
+    """A repair may narrow a claim's citations, never change them.
 
-    Losing provenance is worse than leaving a slightly over-reaching claim,
-    so such a fix is refused. A claim that never carried a citation has none
-    to lose, and its repair is accepted as written.
+    Every citation in the fix must be one the original line already had: the
+    verdict was reached on THOSE passages, and a new number - even a real
+    one - points at evidence nobody checked. Observed: [1] came back as
+    [999], after validate_citations had already run. A cited claim must also
+    keep at least one citation, because losing provenance is worse than
+    leaving a slightly over-reaching claim. A claim that never carried a
+    citation has none to lose, but may not gain one either.
     """
-    if not _CITATION_RE.search(original):
-        return True
-    return bool(_CITATION_RE.search(fix))
+    had = {int(m) for m in _CITATION_RE.findall(original)}
+    has = {int(m) for m in _CITATION_RE.findall(fix)}
+    if not has <= had:
+        return False
+    return bool(has) or not had
 
 
 def verify_claim_support(notes, chunk_map, model=None, batch_size=6, retriever=None):
@@ -2931,7 +2937,10 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             timings.end(outcome="ok" if gstats is not None else "failed_open",
                         claims=(gstats or {}).get("checked", 0))
             if gstats and (gstats["removed"] or gstats["rewritten"]):
-                notes = grounded
+                # Grounding rewrites lines, so the citation guarantee above
+                # must be re-established on what it returns.
+                notes = validate_citations(grounded, chunk_map,
+                                           page_count=len(page_spans or []))
                 yield _emit(
                     "status", "critique",
                     f"Grounding: {gstats['rewritten']} claim(s) tightened, "
