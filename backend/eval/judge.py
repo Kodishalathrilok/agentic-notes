@@ -44,10 +44,20 @@ NOTES:
     data = safe_json(call_model(prompt, max_tokens=600, model=model, temperature=0.0, json_mode=True))
 
     def clamp(v):
+        """A score, or None when the judge did not return one.
+
+        This used to return 0, which is a VERDICT: on a 1-10 scale it reads as
+        notes so bad they score below the floor. A provider hiccup therefore
+        became indistinguishable from a catastrophic quality result — and being
+        the lowest possible value, it dominated the mean. Observed: one
+        unparseable judge reply dragged a baseline of 10.0 down to 7.5 and
+        manufactured a +1.25 "lift" for the full pipeline out of nothing.
+        None means "not measured", and the caller drops the sample.
+        """
         try:
             return max(1, min(10, int(v)))
         except (TypeError, ValueError):
-            return 0
+            return None
 
     return {
         "faithfulness": clamp(data.get("faithfulness")),

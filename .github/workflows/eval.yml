@@ -3,11 +3,22 @@ name: Eval (faithfulness gate)
 # Runs the LLM-judge eval and FAILS if the full pipeline's faithfulness drops
 # below the threshold. Manual + weekly (not on every push) to control API cost.
 # Requires repository secrets: NVIDIA_API_KEY and/or GEMINI_API_KEY.
+#
+# This gate failed 12 times in a row, from its first run, without anyone
+# noticing: it referenced secrets that were never created, so every run died
+# before a single model call and reported "faithfulness 0.00" — which reads
+# exactly like a catastrophic quality regression. Two things below exist
+# because of that: a preflight that names the real cause, and an issue opened
+# on failure, because a gate nobody hears about is not a gate.
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+  issues: write # so a failed gate can raise an issue
 
 jobs:
   eval:
@@ -22,19 +33,65 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      # Fail on the real reason. Without this, a missing key surfaces as
+      # "0 samples -> faithfulness 0.00", indistinguishable from the pipeline
+      # having got catastrophically worse.
+      - name: Check a provider key is available
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$NVIDIA_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error title=Eval cannot run::No model provider key. Add NVIDIA_API_KEY or GEMINI_API_KEY under Settings -> Secrets and variables -> Actions. This is a configuration problem, NOT a quality regression."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # The judge and the writer both run on Flash-Lite: cheap, and the gate
+      # measures the PIPELINE's faithfulness, not a big model's ceiling.
+      # NVIDIA stays configured as failover only — no NVIDIA_MODEL pin here,
+      # because the previous pin (nemotron-3-nano-30b-a3b) reached end of life
+      # on 2026-09-01 and now returns 410. Unset, the router falls back to a
+      # served default.
       - name: Run eval and gate on faithfulness
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          NVIDIA_MODEL: nvidia/nemotron-3-nano-30b-a3b
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # A small model keeps the weekly gate cheap; the gate measures the
-          # pipeline's faithfulness, not the biggest model's ceiling.
-        run: python -m eval.run_eval --variant full --delay 2 --check-faithfulness 7.0
+        run: >
+          python -m eval.run_eval --variant full --model gemini-3.5-flash-lite
+          --delay 2 --check-faithfulness 7.0
+
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
           path: backend/eval/report.*
+
+      # Scheduled runs only e-mail whoever last touched the cron, which is how
+      # 12 failures went unseen. An issue is visible in the repo itself.
+      - name: Report a failing gate as an issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `The weekly faithfulness gate failed.\n\n- Run: ${run}\n- Commit: ${context.sha}\n\nCheck whether this is a real regression or a configuration problem (missing key, retired model id) before changing pipeline code.`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: "open", labels: "eval-gate",
+            });
+            if (open.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: "Eval gate is failing", labels: ["eval-gate"], body,
+              });
+            }

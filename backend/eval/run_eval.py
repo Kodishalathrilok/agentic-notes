@@ -18,6 +18,7 @@ Writes eval/report.md and eval/report.json.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -37,6 +38,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------------------
 # Variant runners
 # ---------------------------------------------------------------------------
+
+# The pipeline prepends this when a window or a draft could not be completed.
+# It is a statement ABOUT THE RUN, not a claim about the subject, so the judge
+# must not see it: judged as content it is by definition unsupported by the
+# source, and the pipeline gets marked down precisely for being honest that a
+# provider cut it off. Observed: it cost one fixture 5 faithfulness points and
+# produced the run's only "hallucination".
+_BANNER_RE = re.compile(r"^>\s*\*\*Incomplete coverage\*\*.*?(?:\n\n|\Z)", re.DOTALL)
+
+
+def judgeable(notes: str) -> str:
+    """The notes as the judge should see them: content only, no run banners."""
+    return _BANNER_RE.sub("", notes or "", count=1).lstrip()
+
 
 def run_baseline(text, model=None):
     """Pre-Tier-1 behaviour: plan + single write, no critique/revise/verify."""
@@ -140,12 +155,23 @@ def main():
                 print(f"  running {label} …", flush=True)
                 try:
                     gen = runner(fx["source"], model=model)
-                    jn = judge_notes(fx["source"], gen["notes"], model=judge_model)
-                    jq = judge_quiz(fx["source"], gen["notes"], gen["quiz"], model=judge_model)
+                    graded = judgeable(gen["notes"])
+                    jn = judge_notes(fx["source"], graded, model=judge_model)
+                    jq = judge_quiz(fx["source"], graded, gen["quiz"], model=judge_model)
                 except Exception as exc:  # noqa: BLE001
                     failures[variant]["count"] += 1
                     failures[variant]["last"] = str(exc)
                     print(f"    ! FAILED: {exc}")
+                    continue
+
+                # A judge that returned no usable score has measured NOTHING.
+                # Recording it as a number - any number - lets provider
+                # flakiness masquerade as a quality result, which is exactly
+                # how a clean 10.0 baseline was once reported as 7.5.
+                if None in (jn["faithfulness"], jn["coverage"], jn["clarity"]):
+                    failures[variant]["count"] += 1
+                    failures[variant]["last"] = "judge returned no usable scores"
+                    print("    ! JUDGE RETURNED NO SCORES — sample dropped (not scored 0)")
                     continue
 
                 results[variant].append(
