@@ -156,7 +156,10 @@ class Judge:
             ok = bool(ks) and all(_support_key(k) in evidence + full for k in ks)
             for k in ks:
                 self.grounding_visible[k] = self.grounding_visible.get(k, False) or ok
-            verdicts.append({"n": int(n_str), "status": "supported" if ok else "unsupported"})
+            # Like a real judge under the evidence rule, every verdict quotes
+            # the passage of THIS claim's evidence closest to it, word for word.
+            verdicts.append({"n": int(n_str), "status": "supported" if ok else "unsupported",
+                             "evidence_quote": _first_passage(evidence + full)})
         return __import__("json").dumps({"verdicts": verdicts})
 
     def call_model(self, prompt, max_tokens=1024, model=None, temperature=0.4,
@@ -173,6 +176,12 @@ class Judge:
         if "gatekeeper" in prompt:
             return '{"academic":true,"subject":"science","doc_type":"explanatory"}'
         return "Title"
+
+
+def _first_passage(evidence):
+    """The first passage shown in an evidence block, as a verbatim quote."""
+    m = re.search(r"\[\d+\] (.+)", evidence)
+    return m.group(1).strip() if m else ""
 
 
 def _has(fn, param):

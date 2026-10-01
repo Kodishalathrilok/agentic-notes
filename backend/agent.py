@@ -545,15 +545,18 @@ def _full_source_block(items, chunk_map, uncited_evidence=None):
     )
 
 
-def _verify_batch(items, chunk_map, model=None, uncited_evidence=None):
-    """Rule on a batch of (claim, its own evidence) pairs.
+def _claim_evidence(item, chunk_map, uncited_evidence=None) -> str:
+    """The exact evidence text a claim was judged against, for quote checks."""
+    line_i, _text, ids = item
+    if ids:
+        return " ".join((chunk_map.get(i) or {}).get("text", "") for i in ids)
+    if uncited_evidence and line_i in uncited_evidence:
+        return " ".join(c.get("text", "") for c in uncited_evidence[line_i])
+    return _source_body(chunk_map)[:GROUNDING_SOURCE_CHARS]
 
-    Done in TWO passes on purpose. Asking one call for a verdict AND a rewritten
-    sentence per claim overruns the output budget on a reasoning model: the JSON
-    truncates and most claims come back unjudged, which silently lets a
-    fabrication through. Verdicts alone are short and reliable; the rewrite is
-    only needed for the rare "partial", so it gets its own small call.
-    """
+
+def _verdict_pass(items, chunk_map, model=None, uncited_evidence=None):
+    """One verdict call: {n: (status, evidence_quote)} for the batch."""
     verdict_prompt = f"""You are the GROUNDING agent. For each claim decide whether the
 evidence shown with it actually states or directly entails it.
 
@@ -569,35 +572,71 @@ SOURCE. If the source does not contain it, it is "unsupported" — however true
 or standard the statement is. Terminology, syntax, code examples and technique
 names that do not appear in the source are NOT supported by it.
 
+For EVERY verdict also give "evidence_quote": the one sentence from THAT
+claim's own evidence (its passages, or the FULL SOURCE for an uncited claim)
+that comes closest to the claim, copied word for word - whatever the verdict.
+
 Judge only against the evidence shown. Do not use outside knowledge.
 Return a verdict for EVERY claim.
 
 Respond with ONLY JSON:
-{{"verdicts": [{{"n": 1, "status": "supported"}}]}}
+{{"verdicts": [{{"n": 1, "status": "supported", "evidence_quote": "..."}}]}}
 
 {_evidence_block(items, chunk_map, uncited_evidence)}{_full_source_block(items, chunk_map, uncited_evidence)}"""
 
-    data = safe_json(call_model(verdict_prompt, max_tokens=900, model=model,
-                                temperature=0.0, json_mode=True))
+    data = safe_json(call_model(verdict_prompt, max_tokens=900 + 60 * len(items),
+                                model=model, temperature=0.0, json_mode=True))
     out = {}
     for v in (data.get("verdicts") or []):
         try:
-            out[int(v.get("n"))] = (str(v.get("status", "")).lower(), "")
-        except (TypeError, ValueError):
+            n = int(v.get("n"))
+        except (TypeError, ValueError, AttributeError):
             continue
+        out[n] = (str(v.get("status", "")).lower(), str(v.get("evidence_quote") or ""))
+    return out
+
+
+def _verify_batch(items, chunk_map, model=None, uncited_evidence=None):
+    """Rule on a batch of (claim, its own evidence) pairs.
+
+    Returns {n: (status, fix)} where status is supported / partial /
+    unsupported / unverified. Only verdicts that survived checking come back:
+
+    - "unsupported" deletes the line downstream, so it needs evidence: the
+      judge must quote the sentence of THAT claim's evidence closest to it,
+      and the quote must really be there. A verdict without one - a bare
+      label, an invented quote, or a quote from another claim's passages
+      (a misnumbered verdict) - becomes "unverified", and the line is kept.
+    - a "partial" rewrite is judged again, against the same evidence, before
+      it may replace the line. Unless that re-check says "supported" with a
+      real quote, the claim is "unverified" and the original stays.
+
+    Verdicts and rewrites are separate calls on purpose. Asking one call for
+    a verdict AND a rewritten sentence per claim overruns the output budget
+    on a reasoning model: the JSON truncates and most claims come back
+    unjudged, which silently lets a fabrication through.
+    """
+    raw = _verdict_pass(items, chunk_map, model, uncited_evidence)
+    out = {}
+    for n, (status, quote) in raw.items():
+        if not 1 <= n <= len(items):
+            continue
+        if status == "unsupported" and not _evidence_supported(
+                quote, _claim_evidence(items[n - 1], chunk_map, uncited_evidence)):
+            status = "unverified"
+        out[n] = (status, "")
 
     # Second pass only for claims that need a rewrite.
-    partial = [n for n, (status, _) in out.items()
-               if status == "partial" and 1 <= n <= len(items)]
-    if partial:
-        wanted = [(n, items[n - 1]) for n in partial]
-        listing = "\n\n".join(
-            f"CLAIM {n}: {items[n - 1][1].strip()}\nEVIDENCE:\n"
-            + "\n".join(f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}"
-                        for i in items[n - 1][2])
-            for n, _ in wanted
-        )
-        fix_prompt = f"""Rewrite each claim so it says ONLY what its evidence supports.
+    partial = [n for n, (status, _) in out.items() if status == "partial"]
+    if not partial:
+        return out
+    listing = "\n\n".join(
+        f"CLAIM {n}: {items[n - 1][1].strip()}\nEVIDENCE:\n"
+        + "\n".join(f"  [{i}] {(chunk_map.get(i) or {}).get('text', '')}"
+                    for i in items[n - 1][2])
+        for n in partial
+    )
+    fix_prompt = f"""Rewrite each claim so it says ONLY what its evidence supports.
 Remove the unsupported specifics; keep the wording natural and keep the [n]
 citation markers exactly as they appear. Do not add anything new.
 
@@ -605,15 +644,31 @@ Respond with ONLY JSON:
 {{"fixes": [{{"n": 1, "text": "the corrected line"}}]}}
 
 {listing}"""
-        fixes = safe_json(call_model(fix_prompt, max_tokens=1200, model=model,
-                                     temperature=0.0, json_mode=True))
-        for f in (fixes.get("fixes") or []):
-            try:
-                n = int(f.get("n"))
-            except (TypeError, ValueError):
-                continue
-            if n in out:
-                out[n] = (out[n][0], f.get("text") or "")
+    fixes = safe_json(call_model(fix_prompt, max_tokens=1200, model=model,
+                                 temperature=0.0, json_mode=True))
+    proposed = {}
+    for f in (fixes.get("fixes") or []):
+        try:
+            n = int(f.get("n"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        text = str(f.get("text") or "").strip()
+        if n in partial and text and _keeps_provenance(items[n - 1][1], text):
+            proposed[n] = text
+
+    # Re-check each rewrite against the evidence its original was judged on.
+    for n in partial:
+        if n not in proposed:
+            out[n] = ("unverified", "")
+    if proposed:
+        order = sorted(proposed)
+        recheck_items = [(items[n - 1][0], proposed[n], items[n - 1][2]) for n in order]
+        again = _verdict_pass(recheck_items, chunk_map, model, uncited_evidence)
+        for k, n in enumerate(order, 1):
+            status, quote = again.get(k, ("", ""))
+            ok = status == "supported" and _evidence_supported(
+                quote, _claim_evidence(recheck_items[k - 1], chunk_map, uncited_evidence))
+            out[n] = ("partial", proposed[n]) if ok else ("unverified", "")
     return out
 
 
@@ -659,7 +714,7 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6, retriever=N
     # returns nothing must not be indistinguishable from a clean pass.
     stats = {"checked": len(items), "supported": 0, "rewritten": 0,
              "removed": 0, "unjudged": 0, "uncited_retrieved": 0,
-             "skipped_partial_view": 0}
+             "skipped_partial_view": 0, "unverified": 0, "unverified_lines": []}
     if not items:
         return notes, stats
 
@@ -737,6 +792,14 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6, retriever=N
             if CITATION_DEBUG:
                 print(f"[grounding] REWROTE partial: {original.strip()[:70]}")
                 print(f"[grounding]           -> {fix.strip()[:70]}")
+        elif status in ("unverified", "partial"):
+            # Judged, but nothing checkable backs acting on it (no real quote
+            # for a deletion, or no re-checked rewrite): kept as written, and
+            # said so rather than counted as supported.
+            stats["unverified"] += 1
+            stats["unverified_lines"].append(original.strip()[:300])
+            if CITATION_DEBUG:
+                print(f"[grounding] KEPT unverified: {original.strip()[:90]}")
         else:
             stats["supported"] += 1
 
