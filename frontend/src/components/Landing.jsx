@@ -163,10 +163,22 @@ function RotatingWord({ words }) {
 // The glass hugs the two controls instead of spanning the page as one bar, so
 // the hero artwork runs unbroken behind them. Same treatment as the workspace
 // header. Launching happens from the hero CTA, the closing CTA and the menu.
+// Past the threshold the same two pills slide inward into one floating glass
+// pill (styles in .nav-shell). Only the boolean lives in React; CSS morphs.
+const NAV_FLOAT_THRESHOLD = 40
+
 function Nav({ onMenu }) {
+  const [floating, setFloating] = useState(false)
+  useEffect(() => {
+    const onScroll = () => setFloating(window.scrollY > NAV_FLOAT_THRESHOLD)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-      <div className="flex w-full items-start justify-between">
+      <div className="nav-shell flex items-center justify-between" data-floating={floating || undefined}>
         <div className="glass-pill flex items-center gap-2.5 rounded-full py-1.5 pl-2 pr-4">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-espresso-700 to-espresso-900 text-white shadow-lift">
             <Icon.Book className="h-5 w-5" />

@@ -241,6 +241,79 @@ button.glass-pill:focus-visible,
   outline-offset: 2px;
 }
 
+/* ---- Landing nav: two edge pills morph into one floating pill on scroll ----
+   The shell's glass lives on ::before so it can fade (gradients can't
+   interpolate); the inner pills drop their own glass as it arrives. */
+.nav-shell {
+  --nav-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative;
+  isolation: isolate;
+  margin-inline: auto;
+  max-width: 100%;
+  padding: 0;
+  border-radius: 9999px;
+  transition:
+    max-width 0.6s var(--nav-ease),
+    padding 0.45s var(--nav-ease),
+    transform 0.6s var(--nav-ease);
+}
+.nav-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgb(255 253 248 / 0.78), rgb(255 250 242 / 0.62));
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid rgb(255 255 255 / 0.6);
+  box-shadow:
+    0 10px 34px rgb(58 40 30 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
+  opacity: 0;
+  transform: scale(0.98);
+  transition:
+    opacity 0.4s ease,
+    transform 0.6s var(--nav-ease);
+}
+.nav-shell[data-floating] {
+  max-width: 560px;
+  padding: 4px;
+  transform: translateY(-4px);
+}
+.nav-shell[data-floating]::before {
+  opacity: 1;
+  transform: none;
+  transition-delay: 0.08s;
+}
+.nav-shell .glass-pill {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.4s ease,
+    border-color 0.4s ease,
+    background 0.25s ease,
+    background-image 0.3s allow-discrete,
+    backdrop-filter 0.4s ease;
+}
+.nav-shell[data-floating] .glass-pill {
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.nav-shell[data-floating] button.glass-pill:hover {
+  background-color: rgb(58 40 30 / 0.06);
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-shell,
+  .nav-shell::before,
+  .nav-shell .glass-pill {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+  }
+}
+
 /* A glass panel wrapping an input (the "Ask anything" bar) brightens while
    the field inside has focus — the focus-within utilities it replaced could
    not override the unlayered box-shadow above. */
