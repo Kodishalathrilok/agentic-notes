@@ -31,11 +31,29 @@
       "dataset": "backend/eval/retrieval_dataset.py: one 1,415-character document, 3 chunks, 9 queries",
       "top_k": 10,
       "results": {
-        "semantic": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0},
-        "bm25": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0},
-        "hybrid": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0}
+        "semantic": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "bm25": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "hybrid": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
       },
       "caveat": "Degenerate: the document splits into 3 chunks and a k=10 budget (7,000 characters) covers all of them, so every query returns every chunk and recall@5/@10 are 1.0 by construction."
+    },
+    "grounding_fix_tests": {
+      "file": "backend/tests/test_grounding_fixes.py (added later, run against this commit's agent.py)",
+      "total": 23,
+      "passed": 6,
+      "failed": 17
     }
   }
 }

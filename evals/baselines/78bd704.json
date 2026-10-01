@@ -1,0 +1,63 @@
+{
+  "commit": "78bd7044267bb9fb4ec7a5385210c892697fb835",
+  "date": "2026-10-01",
+  "models": {
+    "writer": "gemini-3.5-flash-lite",
+    "judge": "nvidia/llama-3.1-nemotron-70b-instruct",
+    "note": "The models the weekly gate runs at this commit (eval.yml). The judge is now required and must be a different model family from the writer."
+  },
+  "legacy_eval": {
+    "status": "not_run",
+    "command": "python -m eval.run_eval --variant full --model gemini-3.5-flash-lite --judge-model nvidia/llama-3.1-nemotron-70b-instruct --delay 2 --check-faithfulness 7.0",
+    "reason": "The recording session had no NVIDIA_API_KEY or GEMINI_API_KEY; no model call could be made.",
+    "summary": null
+  },
+  "claim_eval": {
+    "status": "not_run",
+    "command": "JUDGE_MODEL=nvidia/llama-3.1-nemotron-70b-instruct evals/run_before_after.sh 329a031",
+    "reason": "Needs provider keys for both the writer (Gemini) and the judge (NVIDIA). evals/run_before_after.sh records this section and the matching one in 329a031.json with the same harness.",
+    "summary": null
+  },
+  "keyless_measurements": {
+    "tests": {
+      "command": "cd backend && pytest -o addopts='' -rN",
+      "passed": 656,
+      "failed": 0,
+      "note": "590 existing tests, plus 43 for the eval harness (test_claim_eval.py) and 23 for the grounding fixes (test_grounding_fixes.py)."
+    },
+    "grounding_fix_tests": {
+      "file": "backend/tests/test_grounding_fixes.py",
+      "total": 23,
+      "passed": 23,
+      "same_file_against_329a031": {
+        "passed": 6,
+        "failed": 17
+      }
+    },
+    "retrieval_benchmark": {
+      "command": "cd backend && python -m eval.benchmark_retrieval",
+      "embeddings": "unavailable (no GEMINI_API_KEY); the semantic and hybrid columns fell back to BM25, so only the BM25 numbers are meaningful",
+      "dataset": "evals/retrieval/queries.json: 42 queries over the three long fixtures",
+      "chunks_per_document": {
+        "cell_biology": 127,
+        "computing_history": 106,
+        "thermodynamics": 106
+      },
+      "top_k": 10,
+      "bm25": {
+        "recall@5": 0.893,
+        "recall@10": 0.893,
+        "mrr": 0.861
+      },
+      "bm25_recall@5_by_category": {
+        "formula": 1.0,
+        "keyword": 1.0,
+        "mixed": 1.0,
+        "numeric": 1.0,
+        "semantic": 0.625,
+        "technical_acronym": 1.0
+      },
+      "note": "Retrieval code is unchanged since 329a031, so these numbers describe 329a031's retrieval too; what changed is the dataset."
+    }
+  }
+}

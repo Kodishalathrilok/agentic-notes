@@ -19,9 +19,9 @@ Feed it anything — pasted text, a PDF, a lecture recording, a photo of notes, 
 What makes it more than an "AI wrapper":
 
 - **The pipeline checks its own work.** A critique agent judges the draft against the passages the writer was given, flags unsupported claims and missing topics, triggers corrective re-retrieval for the missing topics, and revises (up to 2 rounds) — a revision replaces the kept version only if it scores strictly higher.
-- **Claims are checked against their sources.** Notes cite retrieved passages inline (`[3]`). A deterministic check drops any citation that doesn't point at a passage the model was shown (or, for PDFs, at a passage with a valid page), and a per-claim grounding pass then asks a helper model whether each claim line is actually supported by the passage it cites — unsupported lines are removed, over-reaching ones tightened.
+- **Claims are checked against their sources.** Notes cite retrieved passages inline (`[3]`). A deterministic check drops any citation that doesn't point at a passage the model was shown (or, for PDFs, at a passage with a valid page), and a per-claim grounding pass then asks a helper model whether each claim line is actually supported by the passage it cites. A line is removed only when the verdict quotes that claim's own evidence and the quote is really there; otherwise it is kept and counted as unverified. An over-reaching line is tightened only if the rewrite passes a second check, may keep only citations it already had, and citations are validated again afterwards.
 - **Long documents are covered end to end.** Sources over 12,000 characters are split into coverage windows that partition the document — every chunk belongs to exactly one window and every window is written — and sources over 60,000 characters also get a full-document digest scan before planning. If a window fails, the notes say so with an "Incomplete coverage" banner naming the missing pages instead of passing as complete.
-- **It's engineered, not vibe-coded:** 300+ backend tests plus frontend unit tests, CI that gates deploys on green tests, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, per-user rate limiting, and an LLM-judge eval harness that scores faithfulness and coverage.
+- **It's engineered, not vibe-coded:** 300+ backend tests plus frontend unit tests, CI that gates deploys on green tests, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, per-user rate limiting, and a claim-level eval over long documents, graded by a judge from a different model family, that gates on a stored baseline.
 
 ## How it works
 
@@ -156,7 +156,29 @@ cd ../frontend
 npm test      # Vitest: SSE parser and inline-edit line-anchor resolution
 ```
 
-The eval harness (`backend/eval/`) runs the full pipeline on fixture documents and uses an LLM judge to score **faithfulness** (are claims supported by the source?), **coverage** (are key topics present?), and **quiz answer accuracy** — plus a retrieval hit-rate benchmark. Run with `python -m eval.run_eval`.
+Two evals live in `backend/eval/`, both graded by a judge that must be a different model family from the writer (`--judge-model` is required):
+
+- `python -m eval.claim_eval` runs the full pipeline 3 times on each of three long fixtures (over 61,000 characters each, one a 44-page PDF) with hand-labelled facts and planted traps: facts stated only at the end, an internal contradiction, and a question bank. It reports claim precision, miscitation rate, fact recall, contradictions caught, question-bank violations, claims removed by grounding, estimated tokens, cost and time, as mean and spread, and with `--gate` fails on any metric worse than the stored baseline by more than its margin.
+- `python -m eval.run_eval` is the older short-fixture eval (holistic faithfulness, coverage, quiz accuracy).
+- `python -m eval.benchmark_retrieval` measures recall@5/@10 and MRR on 42 queries over the long fixtures.
+
+See [`evals/README.md`](evals/README.md) for fixtures, metric definitions, baselines and the gate.
+
+### Phase 1 before/after (`329a031` → `78bd704`)
+
+Measured in a session **without provider keys**, so only what runs without a model is in this table. The model-graded numbers (claim precision, fact recall, contradictions caught and the rest) have **not been measured yet** for either commit; `evals/run_before_after.sh` records them for both with the same harness, into `evals/baselines/`.
+
+| Measurement | `329a031` | `78bd704` |
+| --- | --- | --- |
+| Backend tests passing | 590 | 656 |
+| Grounding-fix tests (`test_grounding_fixes.py`) passing | 6 of 23 | 23 of 23 |
+| Retrieval benchmark: chunks per document | 3 | 106–127 |
+| Retrieval benchmark: BM25 recall@5 | 1.000 (every query returned every chunk) | 0.893 |
+| Retrieval benchmark: BM25 MRR | 1.000 | 0.861 |
+| Eval fixtures that reach the long-document path | 0 of 4 | 3 of 3 |
+| Claim-level eval: claim precision, fact recall, miscitation, contradictions, cost | did not exist | built; not yet run (needs keys) |
+
+The retrieval rows do not mean retrieval got worse: retrieval code is unchanged, and the old 1.000 came from a dataset on which ranking could not fail. On the new dataset, BM25 finds no relevant chunk in the top 10 for 4 of the 12 paraphrased (semantic) queries; hybrid retrieval with Gemini embeddings was not measured here.
 
 ## Project structure
 
