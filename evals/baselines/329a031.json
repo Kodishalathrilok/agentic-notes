@@ -1,0 +1,41 @@
+{
+  "commit": "329a031e935c339435f62e24a534f1596f7e4d52",
+  "date": "2026-10-01",
+  "models": {
+    "writer": "gemini-3.5-flash-lite",
+    "judge": "gemini-3.5-flash-lite",
+    "note": "The models the weekly gate (.github/workflows/eval.yml) runs at this commit. At this commit the judge defaults to the writer model."
+  },
+  "legacy_eval": {
+    "status": "not_run",
+    "command": "python -m eval.run_eval --variant full --model gemini-3.5-flash-lite --delay 2 --check-faithfulness 7.0",
+    "reason": "The recording session had no NVIDIA_API_KEY or GEMINI_API_KEY, so no model call could be made. Every sample failed before reaching a provider ('The AI providers are unavailable right now'). The harness at this commit still printed faithfulness 0.00 for 0 samples; that is not a score and is not recorded here.",
+    "samples_succeeded": 0,
+    "samples_attempted": 4,
+    "summary": null
+  },
+  "claim_eval": {
+    "status": "not_run",
+    "reason": "The claim-level eval did not exist at this commit. Its numbers for this commit come from running the new harness against this commit's pipeline code (evals/run_before_after.sh), which needs provider keys.",
+    "summary": null
+  },
+  "keyless_measurements": {
+    "tests": {
+      "command": "cd backend && pytest -o addopts='' -rN",
+      "passed": 590,
+      "failed": 0
+    },
+    "retrieval_benchmark": {
+      "command": "cd backend && python -m eval.benchmark_retrieval",
+      "embeddings": "unavailable (no GEMINI_API_KEY); the semantic and hybrid columns fell back to BM25",
+      "dataset": "backend/eval/retrieval_dataset.py: one 1,415-character document, 3 chunks, 9 queries",
+      "top_k": 10,
+      "results": {
+        "semantic": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0},
+        "bm25": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0},
+        "hybrid": {"recall@5": 1.0, "recall@10": 1.0, "mrr": 1.0}
+      },
+      "caveat": "Degenerate: the document splits into 3 chunks and a k=10 budget (7,000 characters) covers all of them, so every query returns every chunk and recall@5/@10 are 1.0 by construction."
+    }
+  }
+}
