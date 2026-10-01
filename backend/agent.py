@@ -1307,6 +1307,44 @@ def _passages_within(ids, chunk_map, budget, priority=()):
     return context, shown_sorted, sorted(set(ids) - shown)
 
 
+def _numbered_lines(lines) -> str:
+    """Notes with each non-empty line prefixed "L<n>: " (1-based)."""
+    return "\n".join(f"L{i}: {ln}" if ln.strip() else ln
+                     for i, ln in enumerate(lines, 1))
+
+
+def _critique_flag(flag, notes_lines):
+    """(claim text, cited ids) for one unsupported_claims entry.
+
+    An entry may be a string (ids read from any [n] in it) or an object with
+    "claim", "line" and/or "citations". The line's own citations are the
+    claim's provenance, so a valid line number is read from the notes rather
+    than trusted to the critic's quoting. Without a valid line, explicit
+    citation ids and any [n] in the text are used.
+    """
+    if not isinstance(flag, dict):
+        text = str(flag or "").strip()
+        return text, {int(m) for m in _CITATION_RE.findall(text)}
+    text = str(flag.get("claim") or flag.get("text") or "").strip()
+    ids = {int(m) for m in _CITATION_RE.findall(text)}
+    for c in flag.get("citations") or []:
+        try:
+            ids.add(int(c))
+        except (TypeError, ValueError):
+            continue
+    try:
+        line = int(flag.get("line"))
+    except (TypeError, ValueError):
+        line = 0
+    if 1 <= line <= len(notes_lines):
+        # The notes, not the critic, say what the line cites - including
+        # that it cites nothing, which makes it grounding's to judge.
+        ids = {int(m) for m in _CITATION_RE.findall(notes_lines[line - 1])}
+        if not text:
+            text = _strip_markup(notes_lines[line - 1])
+    return text, ids
+
+
 def critique_notes(notes, plan, mode, source="", model=None, doc_sample="",
                    chunk_map=None) -> dict:
     """
@@ -1336,6 +1374,12 @@ def critique_notes(notes, plan, mode, source="", model=None, doc_sample="",
             context_text, shown, omitted_ids = _passages_within(
                 ids, chunk_map, CRITIQUE_CONTEXT_CHARS)
             shown_ids = set(shown)
+    notes_lines = (notes or "").split("\n")
+    if shown_ids is not None:
+        # Flags are acted on here only if they can be tied to the passages a
+        # claim cites. Critics quote claims WITHOUT their [n] markers, so the
+        # notes are numbered and the critic names the line instead.
+        notes_excerpt = _notes_excerpt(_numbered_lines(notes_lines), 20000)
     evidence_shown = sum(
         1 for i in cited_all if re.search(_PASSAGE_HEAD_RE.format(i), context_text))
 
@@ -1371,7 +1415,10 @@ do NOT use this block to judge faithfulness):
    List a claim as unsupported ONLY if the passage it cites IS shown and does
    not support it (fabricated, distorted, or not stated there). List an
    uncited claim only if the shown CONTEXT contradicts it — uncited claims are
-   verified separately."""
+   verified separately.
+   Each NOTES line starts with its number ("L12: "). Report every unsupported
+   claim as an object naming that line and the passage ids it cites:
+   {{"line": 12, "claim": "the claim, quoted", "citations": [3]}}"""
         context_header = ("CONTEXT (the passages cited by the notes, by id — the ground "
                           "truth for those claims):")
 
@@ -1432,7 +1479,10 @@ NOTES:
         score = 5
     score = max(1, min(10, score))
 
-    unsupported = data.get("unsupported_claims", []) or []
+    flags = [_critique_flag(u, notes_lines)
+             for u in (data.get("unsupported_claims", []) or [])]
+    flags = [f for f in flags if f[0]]
+    unsupported = [text for text, _ids in flags]
     deferred = []
     if shown_ids is not None:
         # Code guarantees behind the prompt rules - a prompt rule is not relied
@@ -1442,14 +1492,12 @@ NOTES:
         # claim's evidence could be anywhere in a source too big to show, so
         # grounding owns it (judged against passages retrieved for it); the
         # flag is deferred, and kept visible, rather than acted on here.
-        def _ids(claim):
-            return {int(m) for m in _CITATION_RE.findall(str(claim))}
-        deferred = [u for u in unsupported if not _ids(u)]
-        dropped = [u for u in unsupported if _ids(u) and not (_ids(u) & shown_ids)]
+        deferred = [text for text, ids in flags if not ids]
+        dropped = [text for text, ids in flags if ids and not (ids & shown_ids)]
         if dropped:
             print(f"[critique] ignored {len(dropped)} unsupported flag(s) on claims "
                   f"whose cited passages were not shown.")
-        unsupported = [u for u in unsupported if _ids(u) & shown_ids]
+        unsupported = [text for text, ids in flags if ids & shown_ids]
     missing = data.get("missing_topics", []) or []
     # missing_topics is deliberately NOT a trigger on its own — an LLM critic
     # almost always lists something, which previously forced a revision on

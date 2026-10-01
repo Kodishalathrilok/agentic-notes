@@ -5,6 +5,9 @@ a) A grounding rewrite could add a citation the line never had ([1] -> [999]),
 b) A bare "unsupported" verdict deleted the line - no evidence asked for, so a
    misnumbered or careless verdict silently removed true claims - and a
    "partial" rewrite was accepted without anyone checking the new wording.
+c) On a large source the critique only acts on a flag whose text carries an
+   [n] marker. Critics quote claims without their markers, so most real flags
+   were deferred and never acted on.
 """
 
 import json
@@ -214,3 +217,83 @@ def test_partial_rewrite_whose_recheck_has_no_real_quote_keeps_the_original(monk
         {"n": 1, "status": "supported", "evidence_quote": "not a sentence from the source"}))
     notes, stats = agent.verify_claim_support(ORIGINAL, CHUNKS)
     assert notes == ORIGINAL and stats["unverified"] == 1
+
+
+# ---------------------------------------------------------------------------
+# c) the critic names flagged claims by line number or citation id
+# ---------------------------------------------------------------------------
+
+BIG = {i: {"id": i, "text": f"Passage {i} says something specific about topic {i}. " * 8}
+       for i in range(1, 40)}
+BIG_SOURCE = agent._format_context(list(BIG.values()))
+BIG_NOTES = ("**Sorting:**\n"
+             "• Quicksort is a stable sorting algorithm in every case [3]\n"
+             "• Merge sort splits the input in half recursively [4]\n"
+             "• Heapsort was first described by a committee of five")
+
+
+def _critic(unsupported):
+    def model(prompt, **kw):
+        return json.dumps({"score": 9, "needs_revision": False,
+                           "unsupported_claims": unsupported, "missing_topics": [],
+                           "issues": [], "strengths": []})
+    return model
+
+
+def _critique(monkeypatch, unsupported, prompts=None):
+    def model(prompt, **kw):
+        if prompts is not None:
+            prompts.append(prompt)
+        return _critic(unsupported)(prompt)
+    monkeypatch.setattr(agent, "call_model", model)
+    assert len(BIG_SOURCE) > agent.CRITIQUE_SOURCE_CHARS
+    return agent.critique_notes(BIG_NOTES, {"checklist": []}, "exam",
+                                source=BIG_SOURCE, chunk_map=BIG)
+
+
+def test_a_flag_named_by_line_number_is_acted_on(monkeypatch):
+    c = _critique(monkeypatch, [{"line": 2, "claim": "Quicksort is a stable sorting algorithm"}])
+    assert c["needs_revision"] is True
+    assert c["unsupported_claims"] == ["Quicksort is a stable sorting algorithm"]
+    assert c["deferred_to_grounding"] == []
+
+
+def test_a_flag_naming_its_citation_ids_is_acted_on(monkeypatch):
+    c = _critique(monkeypatch, [{"claim": "Quicksort is a stable sorting algorithm",
+                                 "citations": [3]}])
+    assert c["needs_revision"] is True and len(c["unsupported_claims"]) == 1
+
+
+def test_a_flag_on_an_uncited_line_is_still_deferred_to_grounding(monkeypatch):
+    c = _critique(monkeypatch, [{"line": 4, "claim": "Heapsort was described by a committee"}])
+    assert c["unsupported_claims"] == []
+    assert c["deferred_to_grounding"] == ["Heapsort was described by a committee"]
+    assert c["needs_revision"] is False
+
+
+def test_an_uncited_line_stays_deferred_even_if_the_critic_invents_an_id(monkeypatch):
+    c = _critique(monkeypatch, [{"line": 4, "claim": "Heapsort was described by a committee",
+                                 "citations": [3]}])
+    assert c["unsupported_claims"] == []
+    assert c["deferred_to_grounding"] == ["Heapsort was described by a committee"]
+
+
+def test_a_flag_on_a_line_whose_passages_were_not_shown_is_dropped(monkeypatch):
+    c = _critique(monkeypatch, [{"line": 2, "claim": "Quicksort is stable", "citations": [999]}])
+    # Line 2 cites [3], which IS shown, so the line's own citation decides.
+    assert c["needs_revision"] is True
+    c = _critique(monkeypatch, [{"claim": "Something", "citations": [999]}])
+    assert c["unsupported_claims"] == [] and c["deferred_to_grounding"] == []
+
+
+def test_the_critic_is_shown_line_numbers_and_asked_for_them(monkeypatch):
+    prompts = []
+    _critique(monkeypatch, [], prompts)
+    assert "L2: • Quicksort is a stable sorting algorithm in every case [3]" in prompts[0]
+    assert '"line"' in prompts[0]
+
+
+def test_plain_string_flags_keep_working(monkeypatch):
+    c = _critique(monkeypatch, ["Quicksort is a stable sorting algorithm [3]"])
+    assert c["needs_revision"] is True
+    assert c["unsupported_claims"] == ["Quicksort is a stable sorting algorithm [3]"]
