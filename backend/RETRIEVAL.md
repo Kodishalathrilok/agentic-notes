@@ -99,9 +99,13 @@ python -m pytest tests/test_retriever.py      # unit + citation-integrity regres
 python -m eval.benchmark_retrieval            # semantic vs bm25 vs hybrid
 ```
 
-The benchmark uses the reusable dataset in `eval/retrieval_dataset.py` (queries
-categorized as keyword / semantic / mixed / technical_acronym / formula) and
-reports Recall@5, Recall@10, MRR, and average latency.
+The benchmark runs the queries in `evals/retrieval/queries.json` (categorized as
+keyword / semantic / mixed / technical_acronym / formula / numeric) against the
+three long eval fixtures in `evals/fixtures/`, chunked as the pipeline chunks
+them (page-bounded for the PDF): 106-127 chunks per document, so a query's top
+10 is under a tenth of the document and recall@5 measures ranking. It reports
+Recall@5, Recall@10, MRR, and average latency. (The previous dataset was one
+3-chunk document on which every query returned every chunk.)
 
 ## Next
 

@@ -1,0 +1,73 @@
+{
+  "fixture": "computing_history",
+  "title": "A Short History of Computing (HIST 2310 reading)",
+  "source": {"type": "text", "path": "source.txt"},
+  "facts": [
+    {"id": "F01", "fact": "The word computer originally referred to a person who carried out calculations.", "quote": "the word computer originally referred to a person"},
+    {"id": "F02", "fact": "John Napier published logarithms in 1614.", "quote": "Logarithms, published by John Napier in 1614"},
+    {"id": "F03", "fact": "Blaise Pascal built the Pascaline adding machine in 1642.", "quote": "Blaise Pascal built an adding machine, later called the Pascaline, in 1642"},
+    {"id": "F04", "fact": "Leibniz's calculator used a stepped drum.", "quote": "using a stepped drum"},
+    {"id": "F05", "fact": "The Difference Engine project was abandoned in 1833.", "quote": "the project was abandoned in 1833"},
+    {"id": "F06", "fact": "The Science Museum completed a Difference Engine No. 2 in 1991.", "quote": "constructed by the Science Museum in London and completed in 1991"},
+    {"id": "F07", "fact": "The Analytical Engine separated a store holding numbers from a mill performing arithmetic.", "quote": "Its design separated a store, which held numbers, from a mill, which performed arithmetic on them"},
+    {"id": "F08", "fact": "Ada Lovelace's Note G described computing the Bernoulli numbers on the Analytical Engine.", "quote": "In the last of these notes, Note G, she described in detail how the engine could compute the Bernoulli numbers"},
+    {"id": "F09", "fact": "Hollerith's tabulator used pins passing through holes into mercury to complete a circuit.", "quote": "a pin passed through into a cup of mercury and completed an electrical circuit"},
+    {"id": "F10", "fact": "The combined company was renamed International Business Machines in 1924.", "quote": "in 1924 the combined company was renamed International Business Machines"},
+    {"id": "F11", "fact": "Vannevar Bush's differential analyser was completed in 1931.", "quote": "completed in 1931"},
+    {"id": "F12", "fact": "Zuse's Z3 of 1941 was built from about 2,600 telephone relays.", "quote": "built from about 2,600 telephone relays"},
+    {"id": "F13", "fact": "The first Colossus was designed by Tommy Flowers and contained about 1,600 vacuum tubes.", "quote": "It contained about 1,600 vacuum tubes"},
+    {"id": "F14", "fact": "ENIAC contained about 18,000 vacuum tubes and could perform about 5,000 additions per second.", "quote": "It could perform about 5,000 additions per second"},
+    {"id": "F15", "fact": "Von Neumann wrote the First Draft of a Report on the EDVAC in June 1945.", "quote": "In June 1945 von Neumann wrote the First Draft of a Report on the EDVAC"},
+    {"id": "F16", "fact": "The Manchester Baby ran its first program on 21 June 1948.", "quote": "It ran its first program on 21 June 1948"},
+    {"id": "F17", "fact": "EDSAC ran its first program on 6 May 1949.", "quote": "EDSAC ran its first program on 6 May 1949"},
+    {"id": "F18", "fact": "UNIVAC predicted Eisenhower's landslide on CBS in 1952.", "quote": "it predicted a landslide victory for Dwight Eisenhower"},
+    {"id": "F19", "fact": "About 2,000 IBM 650 computers were installed.", "quote": "with about 2,000 installed"},
+    {"id": "F20", "fact": "FORTRAN was developed at IBM by a team led by John Backus and released in 1957.", "quote": "developed at IBM by a team led by John Backus and released in 1957"},
+    {"id": "F21", "fact": "The transistor was invented at Bell Laboratories in 1947 by Bardeen, Brattain and Shockley.", "quote": "invented at Bell Laboratories in 1947 by John Bardeen, Walter Brattain and William Shockley"},
+    {"id": "F22", "fact": "In 1975 Moore revised his prediction to a doubling about every two years.", "quote": "In 1975 he revised the rate to a doubling about every two years"},
+    {"id": "F23", "fact": "The Intel 4004 of 1971 contained about 2,300 transistors.", "quote": "The 4004 contained about 2,300 transistors"},
+    {"id": "F24", "fact": "IBM's 305 RAMAC of 1956 stored about five megabytes on fifty platters.", "quote": "used fifty spinning metal platters"},
+    {"id": "F25", "fact": "The System/360 made the 8-bit byte the standard unit of computer memory.", "quote": "The System/360 also made the 8-bit byte the standard unit of computer memory"},
+    {"id": "F26", "fact": "Brooks's law says adding programmers to a late software project makes it later.", "quote": "adding programmers to a late software project makes it later"},
+    {"id": "F27", "fact": "Edgar F. Codd proposed the relational model of data in 1970.", "quote": "In 1970 Edgar F. Codd"},
+    {"id": "F28", "fact": "The ARPANET switched to TCP/IP on 1 January 1983.", "quote": "The ARPANET switched to TCP/IP on 1 January 1983"},
+    {"id": "F29", "fact": "Tim Berners-Lee proposed the World Wide Web at CERN in 1989.", "quote": "The World Wide Web was proposed in 1989 by Tim Berners-Lee"},
+    {"id": "F30", "fact": "The Morris worm began spreading on 2 November 1988.", "quote": "On 2 November 1988 a program written by Robert Tappan Morris"},
+    {"id": "F31", "fact": "The Advanced Encryption Standard replaced DES in 2001.", "quote": "it was replaced in 2001 by the Advanced Encryption Standard"},
+    {"id": "F32", "fact": "Linus Torvalds began writing the Linux kernel in 1991.", "quote": "In 1991 Linus Torvalds, a student at the University of Helsinki, began writing a kernel"},
+    {"id": "F33", "fact": "The term artificial intelligence was coined by John McCarthy for the 1956 Dartmouth workshop.", "quote": "The term artificial intelligence was coined by John McCarthy"},
+    {"id": "F34", "fact": "Seymour Cray's CDC 6600 of 1964 was the fastest computer in the world for several years.", "quote": "His CDC 6600 of 1964 was the fastest computer in the world for several years"},
+    {"id": "F35", "fact": "The TOP500 list has been published twice a year since 1993.", "quote": "The TOP500 list, published twice a year since 1993"},
+    {"id": "F36", "fact": "In 2022 Frontier at Oak Ridge became the first machine on the TOP500 list to exceed one exaflop.", "quote": "In 2022 the Frontier supercomputer at Oak Ridge National Laboratory in the United States became the first machine on the list to exceed one exaflop"}
+  ],
+  "traps": {
+    "late_fact": {
+      "fact_ids": ["F34", "F35", "F36"],
+      "min_position": 0.9,
+      "note": "Stated only in the last part (Supercomputers and Parallel Computing)."
+    },
+    "contradictions": [
+      {
+        "id": "C1",
+        "about": "the year the university acquired its first electronic computer",
+        "quote_a": "The university in which this course is taught acquired its first electronic computer in 1958",
+        "quote_b": "The university acquired its first electronic computer in 1962",
+        "value_a": "1958",
+        "value_b": "1962"
+      }
+    ],
+    "question_bank": {
+      "heading_quote": "Seminar Questions",
+      "note": "Discussion questions that go beyond the reading; no answers are given.",
+      "questions": [
+        {"id": "Q1", "quote": "Why did the Soviet Union's MESM computer of 1951 have so little influence", "topic": "MESM"},
+        {"id": "Q3", "quote": "What role did the SAGE air defence system play", "topic": "SAGE"},
+        {"id": "Q4", "quote": "How did the Japanese Fifth Generation Computer Systems project of the 1980s influence research", "topic": "Fifth Generation project"},
+        {"id": "Q5", "quote": "Compare the business strategies of Apple and Microsoft in the 1990s", "topic": "Apple and Microsoft strategy in the 1990s"},
+        {"id": "Q6", "quote": "Why did the Minitel network in France decline", "topic": "Minitel"},
+        {"id": "Q7", "quote": "Should Konrad Zuse's Plankalkül be regarded as the first high-level programming language", "topic": "Plankalkül"},
+        {"id": "Q8", "quote": "What lessons does the failure of the Multics project offer", "topic": "lessons of Multics"}
+      ]
+    }
+  }
+}

@@ -37,39 +37,59 @@ jobs:
       # Fail on the real reason. Without this, a missing key surfaces as
       # "0 samples -> faithfulness 0.00", indistinguishable from the pipeline
       # having got catastrophically worse.
-      - name: Check a provider key is available
+      # The writer (Gemini) and the judge (NVIDIA) must be different model
+      # families, so the gate needs BOTH keys. Without them every run fails
+      # before a model call; fail here with the real reason instead.
+      - name: Check both provider keys are available
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$NVIDIA_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error title=Eval cannot run::No model provider key. Add NVIDIA_API_KEY or GEMINI_API_KEY under Settings -> Secrets and variables -> Actions. This is a configuration problem, NOT a quality regression."
+          if [ -z "$NVIDIA_API_KEY" ] || [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error title=Eval cannot run::The writer (Gemini) and the judge (NVIDIA) are different model families, so both NVIDIA_API_KEY and GEMINI_API_KEY are needed. Add them under Settings -> Secrets and variables -> Actions. This is a configuration problem, NOT a quality regression."
             exit 1
           fi
 
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      # The judge and the writer both run on Flash-Lite: cheap, and the gate
-      # measures the PIPELINE's faithfulness, not a big model's ceiling.
-      # NVIDIA stays configured as failover only — no NVIDIA_MODEL pin here,
-      # because the previous pin (nemotron-3-nano-30b-a3b) reached end of life
-      # on 2026-09-01 and now returns 410. Unset, the router falls back to a
-      # served default.
-      - name: Run eval and gate on faithfulness
+      # The writer runs on Flash-Lite: cheap, and the gate measures the
+      # PIPELINE, not a big model's ceiling. The judge must be a different
+      # family; JUDGE_MODEL (a repository variable) overrides the default.
+      # No NVIDIA_MODEL pin for the writer: the previous pin
+      # (nemotron-3-nano-30b-a3b) reached end of life on 2026-09-01 and now
+      # returns 410. A retired JUDGE id fails the run loudly (judge calls never
+      # fail over), which the gate reports as unmeasured, not as a score.
+      - name: Run the short-fixture eval and gate on faithfulness
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct' }}
         run: >
           python -m eval.run_eval --variant full --model gemini-3.5-flash-lite
-          --delay 2 --check-faithfulness 7.0
+          --judge-model "$JUDGE_MODEL" --delay 2 --check-faithfulness 7.0
+
+      # Long documents, claim by claim, 3 runs per fixture, compared with the
+      # baseline named in evals/gate.json; any metric worse than its margin
+      # fails the job.
+      - name: Run the claim-level eval and gate against the baseline
+        if: always()
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct' }}
+        run: >
+          python -m eval.claim_eval --writer-model gemini-3.5-flash-lite
+          --judge-model "$JUDGE_MODEL" --runs 3 --delay 2 --gate ../evals/gate.json
 
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
-          path: backend/eval/report.*
+          path: |
+            backend/eval/report.*
+            evals/reports/
 
       # Scheduled runs only e-mail whoever last touched the cron, which is how
       # 12 failures went unseen. An issue is visible in the repo itself.
@@ -79,7 +99,7 @@ jobs:
         with:
           script: |
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = `The weekly faithfulness gate failed.\n\n- Run: ${run}\n- Commit: ${context.sha}\n\nCheck whether this is a real regression or a configuration problem (missing key, retired model id) before changing pipeline code.`;
+            const body = `The weekly eval gate (faithfulness or claim-level baseline) failed.\n\n- Run: ${run}\n- Commit: ${context.sha}\n\nCheck whether this is a real regression or a configuration problem (missing key, retired model id) before changing pipeline code.`;
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: "open", labels: "eval-gate",

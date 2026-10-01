@@ -9,10 +9,16 @@ two variants so the Tier-1 improvements are measurable:
   full      — the complete run_agent pipeline (grounded critique + revise loop)
 
 Usage (from the backend/ directory):
-  python -m eval.run_eval                 # both variants, 1 run each
-  python -m eval.run_eval --runs 2        # average over 2 runs per fixture
-  python -m eval.run_eval --variant full  # only the full pipeline
-  python -m eval.run_eval --model llama-3.1-8b-instant
+  python -m eval.run_eval --judge-model nvidia/llama-3.1-nemotron-70b-instruct
+  python -m eval.run_eval --runs 2 --judge-model ...        # 2 runs per fixture
+  python -m eval.run_eval --variant full --judge-model ...  # full pipeline only
+
+--judge-model is required and must be from a different model family than the
+writer (--model, or the server default): a model grading its own family's
+output shares its blind spots.
+
+These are the four short fixtures; they never reach the long-document path.
+The claim-level eval over long documents is eval.claim_eval.
 
 Writes eval/report.md and eval/report.json.
 """
@@ -28,8 +34,13 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent import run_agent, plan_outline, write_notes  # noqa: E402
+import uuid  # noqa: E402
+
+import agent  # noqa: E402
+from agent import plan_outline, write_notes  # noqa: E402
+from eval.families import SameFamilyError, require_different_families  # noqa: E402
 from eval.fixtures import FIXTURES  # noqa: E402
+from eval.instrument import GroundingCapture, TimingCapture  # noqa: E402
 from eval.judge import judge_notes, judge_quiz  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,27 +71,56 @@ def run_baseline(text, model=None):
     return {"notes": notes, "quiz": "", "revisions": 0, "self_unsupported": 0}
 
 
-def run_full(text, model=None):
-    """The complete pipeline (consume the SSE-style event generator)."""
+def run_full(text, model=None, page_spans=None):
+    """The complete pipeline (consume the SSE-style event generator).
+
+    Besides the notes it keeps what the run reported about itself, so a
+    score can be read next to the conditions that produced it:
+      coverage  - the coverage record from the `done` event
+      grounding - one stats dict per verify_claim_support call, and totals
+      timings   - run_agent's per-stage "[timing]" records for this run
+      sources   - the last `sources` payload (the passages notes may cite)
+      done      - the rest of the `done` payload (provider, model, doc_type)
+    """
     notes = ""
     quiz = ""
     revisions = 0
     self_unsupported = 0
-    for ev in run_agent(text, "exam", "academic", "medium", "bullet", model=model):
-        t = ev["type"]
-        if t == "notes_done":
-            notes = ev["content"]
-        elif t == "notes_revised":
-            notes = ev["content"]
-        elif t == "status" and ev["step"] == "revise" and "Revising" in (ev["content"] or ""):
-            revisions += 1
-        elif t == "critique_done" and ev.get("data"):
-            self_unsupported += len(ev["data"].get("unsupported_claims", []) or [])
-        elif t == "quiz_done":
-            quiz = ev["content"]
-        elif t == "error":
-            raise RuntimeError(ev["content"])
-    return {"notes": notes, "quiz": quiz, "revisions": revisions, "self_unsupported": self_unsupported}
+    sources = []
+    done = {}
+    gen_id = uuid.uuid4().hex[:12]
+    started = time.time()
+    with GroundingCapture(agent) as grounding, TimingCapture(gen_id) as timing:
+        for ev in agent.run_agent(text, "exam", "academic", "medium", "bullet", model=model,
+                                  page_spans=page_spans, generation_id=gen_id):
+            t = ev["type"]
+            if t == "notes_done":
+                notes = ev["content"]
+            elif t == "notes_revised":
+                notes = ev["content"]
+            elif t == "status" and ev["step"] == "revise" and "Revising" in (ev["content"] or ""):
+                revisions += 1
+            elif t == "critique_done" and ev.get("data"):
+                self_unsupported += len(ev["data"].get("unsupported_claims", []) or [])
+            elif t == "quiz_done":
+                quiz = ev["content"]
+            elif t == "sources":
+                sources = list(ev.get("data") or [])
+            elif t == "done":
+                done = dict(ev.get("data") or {})
+            elif t == "error":
+                raise RuntimeError(ev["content"])
+    return {
+        "notes": notes, "quiz": quiz, "revisions": revisions,
+        "self_unsupported": self_unsupported,
+        "coverage": done.get("coverage"),
+        "grounding": {"calls": grounding.calls, "totals": grounding.totals()},
+        "timings": timing.stages,
+        "sources": sources,
+        "done": {k: v for k, v in done.items() if k != "coverage"},
+        "gen_id": gen_id,
+        "elapsed_s": round(time.time() - started, 2),
+    }
 
 
 VARIANTS = {"baseline": run_baseline, "full": run_full}
@@ -125,7 +165,9 @@ def main():
     ap.add_argument("--runs", type=int, default=1, help="runs per fixture (averaged)")
     ap.add_argument("--variant", choices=["baseline", "full", "both"], default="both")
     ap.add_argument("--model", default="", help="model id override (e.g. gemini-flash-lite-latest)")
-    ap.add_argument("--judge-model", default="", help="model for the judge (defaults to --model)")
+    ap.add_argument("--judge-model", required=True,
+                    help="model for the judge; required, and from a different model "
+                         "family than the writer")
     ap.add_argument("--delay", type=float, default=0.0, help="seconds to pause between runs (avoids rate limits)")
     ap.add_argument(
         "--check-faithfulness",
@@ -136,7 +178,12 @@ def main():
     args = ap.parse_args()
 
     model = args.model or None
-    judge_model = args.judge_model or model
+    judge_model = args.judge_model
+    try:
+        from models import resolve_model
+        require_different_families(resolve_model(model), judge_model)
+    except SameFamilyError as exc:
+        ap.error(str(exc))
     variants = ["baseline", "full"] if args.variant == "both" else [args.variant]
 
     print(f"\nEval: variants={variants} runs={args.runs} model={args.model or 'default'}\n")

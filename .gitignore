@@ -33,3 +33,6 @@ STATUS.md
 
 # Local eval run logs
 backend/eval-run.log
+
+# Claim-eval run reports (the summaries live in evals/baselines/)
+evals/reports/
