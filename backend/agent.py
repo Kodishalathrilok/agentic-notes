@@ -343,7 +343,10 @@ def _format_context(chunks) -> str:
 # Deterministic citation verification: [n] markers are only kept if n is a
 # chunk ID that was actually retrieved and shown to the model. This turns
 # "don't invent citations" from a prompt instruction into a code guarantee.
-_CITATION_RE = re.compile(r"\[(\d{1,3})\]")
+# Any number of digits: chunk ids reach retriever.MAX_CHUNKS (6000), and the
+# UI renders every bracketed number as a citation (NotesOutput.jsx), so a
+# marker this pattern missed would be shown to the reader yet never checked.
+_CITATION_RE = re.compile(r"\[(\d+)\]")
 
 
 def enforce_citations(notes: str, valid_ids) -> str:

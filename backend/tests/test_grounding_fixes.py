@@ -8,6 +8,9 @@ b) A bare "unsupported" verdict deleted the line - no evidence asked for, so a
 c) On a large source the critique only acts on a flag whose text carries an
    [n] marker. Critics quote claims without their markers, so most real flags
    were deferred and never acted on.
+d) The citation pattern matched 1-3 digits. Chunk ids go up to MAX_CHUNKS
+   (6,000), and a 4-digit marker was invisible to every check - neither
+   validated nor removed.
 """
 
 import json
@@ -297,3 +300,30 @@ def test_plain_string_flags_keep_working(monkeypatch):
     c = _critique(monkeypatch, ["Quicksort is a stable sorting algorithm [3]"])
     assert c["needs_revision"] is True
     assert c["unsupported_claims"] == ["Quicksort is a stable sorting algorithm [3]"]
+
+
+# ---------------------------------------------------------------------------
+# d) citations of any length are checked
+# ---------------------------------------------------------------------------
+
+def test_a_four_digit_citation_that_does_not_exist_is_removed():
+    out = agent.enforce_citations("• A claim with a bad citation [4321]", {1, 2})
+    assert "[4321]" not in out
+
+
+def test_a_four_digit_citation_that_exists_is_kept():
+    out = agent.validate_citations("• A claim citing a late passage [1234]",
+                                   {1234: {"id": 1234, "text": "x", "page": 400}},
+                                   page_count=500)
+    assert "[1234]" in out
+
+
+def test_four_digit_citations_are_seen_by_grounding_and_critique():
+    lines = agent._claim_lines("• A substantive claim about a late passage [1234]")
+    assert lines and lines[0][2] == [1234]
+    assert agent._cited_ids("see [1234] and [7]", {1234: {}, 7: {}}) == [7, 1234]
+
+
+def test_chunk_ids_can_exceed_three_digits():
+    import retriever
+    assert retriever.MAX_CHUNKS > 999
