@@ -233,6 +233,39 @@ def raise_if_cancelled(cancel=None) -> None:
         raise PipelineCancelled()
 
 
+# Per-run call accounting for the server-side timing logs, carried exactly
+# like the cancel flag: set per pipeline step on the thread running it, and
+# re-entered by the worker threads the pipeline starts. The sink only ever
+# sees a provider name and a model id - never a prompt or a completion.
+_stats_local = threading.local()
+
+
+@contextmanager
+def call_stats_scope(sink):
+    """Make `sink` (anything with record(provider, model_id, ok)) the ambient
+    recipient of model-call accounting for code run inside the block."""
+    prev = getattr(_stats_local, "sink", None)
+    _stats_local.sink = sink
+    try:
+        yield
+    finally:
+        _stats_local.sink = prev
+
+
+def current_call_stats():
+    return getattr(_stats_local, "sink", None)
+
+
+def _record_call(prov: str, model_id: str, ok: bool) -> None:
+    sink = current_call_stats()
+    if sink is None:
+        return
+    try:
+        sink.record(prov, model_id, ok)
+    except Exception:  # noqa: BLE001 - accounting must never break a call
+        pass
+
+
 def _check_finish(prov: str, finish) -> None:
     """Raise if a parser saw the provider's explicit token-cap finish reason.
 
@@ -291,6 +324,48 @@ RATE_LIMIT_RETRIES = int(os.getenv("RATE_LIMIT_RETRIES", "3"))
 _RETRYABLE_STATUS = (429, 503)
 
 
+def _env_num(name, default, cast=float, minimum=0):
+    """Parse a numeric env var, falling back to `default` when unset/invalid."""
+    try:
+        return max(minimum, cast(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# NVIDIA 503 ("busy"): retry once, then fail over, and let that model cool
+# down so the next calls go straight to the fallback instead of hitting the
+# same busy endpoint. Gemini keeps the full retry above: it is the last real
+# fallback, so waiting for it beats failing the call.
+NVIDIA_503_RETRIES = _env_num("NVIDIA_503_RETRIES", 1, int)
+NVIDIA_503_RETRY_DELAY = _env_num("NVIDIA_503_RETRY_DELAY", 1.0)
+NVIDIA_503_COOLDOWN_S = _env_num("NVIDIA_503_COOLDOWN_S", 60.0)
+_nvidia_cooldown = {}  # model id -> time.monotonic() when it may be tried again
+_cooldown_lock = threading.Lock()
+
+
+def _start_cooldown(model_id: str) -> None:
+    if NVIDIA_503_COOLDOWN_S <= 0:
+        return
+    with _cooldown_lock:
+        _nvidia_cooldown[model_id] = time.monotonic() + NVIDIA_503_COOLDOWN_S
+
+
+def _clear_cooldown(model_id: str) -> None:
+    with _cooldown_lock:
+        _nvidia_cooldown.pop(model_id, None)
+
+
+def _cooling_down(model_id: str) -> bool:
+    with _cooldown_lock:
+        until = _nvidia_cooldown.get(model_id)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            del _nvidia_cooldown[model_id]
+            return False
+        return True
+
+
 def _retry_wait(resp, attempt: int) -> float:
     """Seconds to wait before retrying. Honour Retry-After, else back off."""
     headers = getattr(resp, "headers", None) or {}
@@ -303,19 +378,35 @@ def _retry_wait(resp, attempt: int) -> float:
     return min(2.0 * (2 ** attempt), 20.0)
 
 
-def _post_retrying(label: str, **kwargs):
+def _post_retrying(label: str, max_503_retries=None, **kwargs):
     """requests.post that retries 429/503 with backoff before giving up.
 
     Returns the final response either way — the caller still calls
     raise_for_status(), so a persistent limit becomes a normal provider error
     and failover takes over from there.
+
+    `max_503_retries` (NVIDIA only, see _nvidia_post) caps retries of a 503
+    and waits NVIDIA_503_RETRY_DELAY instead of the exponential backoff unless
+    the provider sent Retry-After. A 503 means "busy right now", and another
+    provider is usually faster than 2+4+8 s of waiting. 429 and every other
+    status behave exactly as before.
     """
     resp = None
+    retries_503 = 0
     for attempt in range(RATE_LIMIT_RETRIES + 1):
         resp = requests.post(**kwargs)
         if resp.status_code not in _RETRYABLE_STATUS or attempt >= RATE_LIMIT_RETRIES:
             return resp
-        wait = _retry_wait(resp, attempt)
+        fast_503 = max_503_retries is not None and resp.status_code == 503
+        if fast_503:
+            if retries_503 >= max_503_retries:
+                return resp
+            retries_503 += 1
+            headers = getattr(resp, "headers", None) or {}
+            has_ra = bool(headers.get("retry-after") or headers.get("Retry-After"))
+            wait = _retry_wait(resp, attempt) if has_ra else NVIDIA_503_RETRY_DELAY
+        else:
+            wait = _retry_wait(resp, attempt)
         status = resp.status_code
         resp.close()
         print(f"[models] {label} returned {status}; retrying in {wait:.0f}s "
@@ -744,11 +835,14 @@ def _nvidia_post(body, stream=False):
         stream=stream,
         timeout=300 if stream else 180,
     )
-    resp = _post_retrying(label, json=body, **kwargs)
+    fast = {"max_503_retries": NVIDIA_503_RETRIES}
+    resp = _post_retrying(label, json=body, **fast, **kwargs)
     if resp.status_code == 400 and "response_format" in body:
         resp.close()
         retry = {k: v for k, v in body.items() if k != "response_format"}
-        resp = _post_retrying(label, json=retry, **kwargs)
+        resp = _post_retrying(label, json=retry, **fast, **kwargs)
+    if resp.status_code == 503:
+        _start_cooldown(body.get("model"))
     resp.raise_for_status()
     return resp
 
@@ -914,6 +1008,20 @@ def _providers_failed(errors) -> ProvidersUnavailableError:
     return ProvidersUnavailableError(f"All model providers failed — {detail}")
 
 
+def _skip_cooling(prov: str, target: str, chain) -> bool:
+    """Skip NVIDIA while this model is cooling down after a 503 - but only when
+    a later provider in the chain can take the call, so an NVIDIA-only
+    deployment still tries NVIDIA rather than failing instantly."""
+    if prov != "nvidia" or not _cooling_down(_nvidia_model(target)):
+        return False
+    later = chain[chain.index(prov) + 1:]
+    if not any(_provider_ready(p) for p in later):
+        return False
+    print(f"[models] nvidia {_nvidia_model(target)} is cooling down after a 503; "
+          f"using the next provider.")
+    return True
+
+
 def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=False,
                on_serve=None, strict=False):
     """Call the chosen provider, failing over to the next available one on error.
@@ -934,21 +1042,26 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
     # Only pass the flag when set, so non-strict calls reach _dispatch exactly
     # as before (tests and any other fakes of _dispatch keep their signature).
     extra = {"strict": True} if strict else {}
-    for prov in _failover_chain(_provider_for(target)):
+    chain = _failover_chain(_provider_for(target))
+    for prov in chain:
         # A blocking `requests` call cannot be aborted once sent, so the
         # ambient cancel flag (see cancel_scope) is honoured BEFORE each
         # attempt; one already in flight runs to completion, bounded by its
         # timeout.
         raise_if_cancelled()
-        if not _provider_ready(prov):
+        if not _provider_ready(prov) or _skip_cooling(prov, target, chain):
             continue
         try:
             out = _dispatch(prov, prompt, max_tokens, target, temperature, json_mode, **extra)
         except Exception as exc:  # noqa: BLE001
+            _record_call(prov, _served_model(prov, target), False)
             errors.append((prov, exc))
             print(f"[models] {prov} call failed ({_safe(exc)}); trying next provider.")
             continue
+        _record_call(prov, _served_model(prov, target), bool(out and out.strip()))
         if out and out.strip():
+            if prov == "nvidia":
+                _clear_cooldown(_nvidia_model(target))
             if on_serve:
                 on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
             return out
@@ -991,9 +1104,10 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
     target = resolve_model(model)
     cancel = _effective_cancel(cancel)
     errors = []
-    for prov in _failover_chain(_provider_for(target)):
+    chain = _failover_chain(_provider_for(target))
+    for prov in chain:
         raise_if_cancelled(cancel)
-        if not _provider_ready(prov):
+        if not _provider_ready(prov) or _skip_cooling(prov, target, chain):
             continue
         yielded = False
         chars = 0
@@ -1007,6 +1121,7 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
                 chars += len(delta)
                 yield delta
         except Exception as exc:  # noqa: BLE001
+            _record_call(prov, _served_model(prov, target), False)
             errors.append((prov, exc))
             if yielded:
                 # No failover here: the text is already on its way to the
@@ -1024,7 +1139,10 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
             close = getattr(stream, "close", None)
             if close is not None:
                 close()
+        _record_call(prov, _served_model(prov, target), yielded)
         if yielded:
+            if prov == "nvidia":
+                _clear_cooldown(_nvidia_model(target))
             return
         # A clean stream that produced NOTHING is a failure, not a success.
         # NVIDIA intermittently answers 200 with an empty SSE body under load,

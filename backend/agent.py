@@ -11,13 +11,18 @@ Standalone helpers (used by the regenerate / chat / title endpoints):
 
 import os
 import re
+import json
+import time
+import uuid
 import logging
+import threading
 import queue as _queue
 from concurrent.futures import ThreadPoolExecutor
 
 from models import (call_model, call_model_stream, safe_json, helper_model, IncompleteStreamError,
                     UserFacingError, ProvidersUnavailableError, log_unexpected_error,
-                    PipelineCancelled, cancel_scope, raise_if_cancelled)
+                    PipelineCancelled, cancel_scope, raise_if_cancelled,
+                    call_stats_scope, current_call_stats, _effective_cancel)
 from retriever import Retriever, page_for_offset
 
 # Quality thresholds for the self-improvement loop
@@ -59,10 +64,77 @@ SECTION_CONCURRENCY = int(os.getenv("SECTION_CONCURRENCY", "2"))
 _logger = logging.getLogger("agentic")
 
 
+def _concurrency(name, default):
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# Independent model calls run with at most this many in flight PER RUN.
+# Grounding batches and digest segments never read each other's results, so
+# overlapping them changes wall-clock time only; results are always merged in
+# input order. Server-wide the ceiling is MAX_CONCURRENT_GENERATIONS x this.
+GROUNDING_CONCURRENCY = _concurrency("GROUNDING_CONCURRENCY", 4)
+DIGEST_CONCURRENCY = _concurrency("DIGEST_CONCURRENCY", 3)
+
+
 def _cancel_kw(cancel):
     # Only pass `cancel` when there is one, so fakes of the writer/stream
     # functions without that parameter keep working (same trick as `strict`).
     return {"cancel": cancel} if cancel is not None else {}
+
+
+def _carry_scopes(fn):
+    """Bind fn to the CALLING thread's ambient cancel flag and call-stats sink.
+
+    Both are thread-locals (models.cancel_scope / call_stats_scope), so a pool
+    worker would otherwise run with neither: its model calls would ignore a
+    cancelled run and go uncounted in the timing log.
+    """
+    cancel, sink = _effective_cancel(), current_call_stats()
+
+    def run(*args, **kwargs):
+        with cancel_scope(cancel), call_stats_scope(sink):
+            return fn(*args, **kwargs)
+    return run
+
+
+def _run_bounded(fn, items, limit, name):
+    """Return [(result, exc)] for fn(item) over `items`, in INPUT order.
+
+    At most `limit` calls are in flight. An Exception from one item is
+    returned in its slot (the caller keeps its own fail-open handling);
+    PipelineCancelled is a BaseException and propagates, and items not yet
+    started are then never started. limit 1 (or a single item) runs inline,
+    exactly the old sequential loop.
+    """
+    if limit <= 1 or len(items) <= 1:
+        out = []
+        for item in items:
+            try:
+                out.append((fn(item), None))
+            except Exception as exc:  # noqa: BLE001
+                out.append((None, exc))
+        return out
+
+    cancel = _effective_cancel()
+    work = _carry_scopes(fn)
+    pool = ThreadPoolExecutor(max_workers=min(limit, len(items)), thread_name_prefix=name)
+    try:
+        futures = [pool.submit(work, item) for item in items]
+        out = []
+        for fut in futures:
+            try:
+                out.append((fut.result(), None))
+            except Exception as exc:  # noqa: BLE001
+                out.append((None, exc))
+        return out
+    finally:
+        # Queued items are always dropped on the way out. On cancellation also
+        # wait for the running ones (they stop before their next provider
+        # attempt), so no worker is still spending tokens once the run ends.
+        pool.shutdown(wait=cancel is not None and cancel.is_set(), cancel_futures=True)
 
 # Corrective re-retrieval (CRAG-style): when the critique reports missing
 # topics, run a fresh retrieval PER TOPIC and add those chunks to the context
@@ -620,16 +692,22 @@ def verify_claim_support(notes, chunk_map, model=None, batch_size=6, retriever=N
                   f"and no evidence was retrieved for them; left as written.")
         items = kept
 
+    batches = [items[start:start + batch_size] for start in range(0, len(items), batch_size)]
+
+    def _judge(batch):
+        if uncited_evidence is None:
+            return _verify_batch(batch, chunk_map, model=model)
+        return _verify_batch(batch, chunk_map, model=model,
+                             uncited_evidence=uncited_evidence)
+
+    # Batches are independent: each is judged only against its own claims'
+    # evidence, and no batch reads another's verdicts. So they run
+    # concurrently, and the verdicts are merged below in batch order - the
+    # same merge the sequential loop did.
     verdicts = {}
-    for start in range(0, len(items), batch_size):
-        batch = items[start:start + batch_size]
-        try:
-            if uncited_evidence is None:
-                got = _verify_batch(batch, chunk_map, model=model)
-            else:
-                got = _verify_batch(batch, chunk_map, model=model,
-                                    uncited_evidence=uncited_evidence)
-        except Exception as exc:  # noqa: BLE001
+    for batch, (got, exc) in zip(batches, _run_bounded(_judge, batches,
+                                                       GROUNDING_CONCURRENCY, "grounding")):
+        if exc is not None:
             print(f"[grounding] batch failed ({exc}); keeping those claims as written.")
             continue
         for local_n, verdict in got.items():
@@ -877,8 +955,8 @@ def digest_document(text, model=None) -> str:
         for i in range(0, len(text), DIGEST_SEGMENT_CHARS)
     ][:DIGEST_MAX_SEGMENTS]
 
-    inventory = []
-    for i, seg in enumerate(segments, 1):
+    def _scan(numbered):
+        i, seg = numbered
         prompt = f"""You are scanning part {i} of {len(segments)} of a document to build a
 topic inventory. List the distinct topics and key concepts covered in THIS part.
 
@@ -887,9 +965,14 @@ specific topic phrase (3-8 words). No commentary, no numbering, no headers.
 
 PART {i}:
 \"\"\"{seg}\"\"\""""
-        try:
-            out = call_model(prompt, max_tokens=250, model=model, temperature=0.1)
-        except Exception:  # noqa: BLE001
+        return call_model(prompt, max_tokens=250, model=model, temperature=0.1)
+
+    # Segments are independent (each prompt holds only its own slice), so
+    # they are scanned concurrently and joined back in document order.
+    inventory = []
+    for out, exc in _run_bounded(_scan, list(enumerate(segments, 1)),
+                                 DIGEST_CONCURRENCY, "digest"):
+        if exc is not None:
             continue
         if out and out.strip():
             inventory.append(out.strip())
@@ -2190,8 +2273,81 @@ def _page_tagger(retriever, spans):
     return tag
 
 
+class _RunTimings:
+    """Server-side stage timings for one generation, logged as JSON lines.
+
+    Each stage logs start/end (epoch ms), duration_ms, the model calls made
+    while it was open (every provider attempt, failovers included), the
+    provider:model pairs that answered, and stage-specific counts such as
+    concurrency. Only names and numbers - never text, titles, prompts or ids
+    of the user. Doubles as the models.call_stats_scope sink: calls from any
+    thread carrying this run's scope land in the stage currently open.
+    """
+
+    def __init__(self, gen_id=None):
+        self.gen_id = gen_id or uuid.uuid4().hex[:12]
+        self._lock = threading.Lock()
+        self._current = None
+        self.started = time.time()
+        self.model_calls = 0
+
+    def record(self, provider, model_id, ok):
+        with self._lock:
+            self.model_calls += 1
+            stage = self._current
+            if stage is None:
+                return
+            stage["model_calls"] += 1
+            if ok:
+                stage["providers"].add(f"{provider}:{model_id}")
+
+    def begin(self, name, **extra):
+        """Open a stage (stages are sequential; an open one is closed first)."""
+        self.end()
+        with self._lock:
+            self._current = {"stage": name, "start": time.time(), "model_calls": 0,
+                             "providers": set(), **extra}
+
+    def end(self, outcome="ok", **extra):
+        with self._lock:
+            stage, self._current = self._current, None
+        if stage is not None:
+            stage.update(extra)
+            self._log(stage.pop("start"), time.time(), outcome=outcome, **stage)
+
+    def log_stage(self, name, start, end, **extra):
+        """Log a stage timed elsewhere (e.g. on a background thread)."""
+        self._log(start, end, stage=name, model_calls=0, providers=(), outcome="ok", **extra)
+
+    def _log(self, start, end, **fields):
+        providers = sorted(fields.pop("providers", ()) or ())
+        payload = {"gen_id": self.gen_id, "stage": fields.pop("stage"),
+                   "start_ms": int(start * 1000), "end_ms": int(end * 1000),
+                   "duration_ms": int((end - start) * 1000),
+                   "model_calls": fields.pop("model_calls", 0),
+                   "providers": providers, **fields}
+        _logger.info("[timing] %s", json.dumps(payload))
+
+    def finish(self, outcome):
+        # A stage still open here was interrupted by the run's ending.
+        self.end(outcome={"done": "ok", "blocked": "ok", "cancelled": "cancelled",
+                          "closed": "cancelled"}.get(outcome, "error"))
+        self._log(self.started, time.time(), stage="total", model_calls=self.model_calls,
+                  providers=(), outcome=outcome)
+
+
+def _build_index(text, page_spans, timings):
+    """Build the retrieval index (runs on a background thread, see below)."""
+    start = time.time()
+    retriever = Retriever(text, spans=page_spans)
+    timings.log_stage("index_build", start, time.time(),
+                      chunks=len(getattr(retriever, "chunks_meta", []) or []))
+    return retriever
+
+
 def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
-              include_quiz=True, include_flashcards=True, page_spans=None, cancel=None):
+              include_quiz=True, include_flashcards=True, page_spans=None, cancel=None,
+              generation_id=None):
     """
     Drive the full pipeline, yielding event dicts as each stage progresses.
 
@@ -2205,43 +2361,60 @@ def run_agent(text, mode, tone, length, fmt, model=None, instructions="",
     cancelled).
 
     Event types and ordering are documented on _run_agent_events.
+
+    Every run logs "[timing]" JSON lines per stage plus a "total", all sharing
+    one gen_id (`generation_id`, or a random one) so lines from concurrent
+    runs can be told apart.
     """
+    timings = _RunTimings(generation_id)
     inner = _run_agent_events(
         text, mode, tone, length, fmt, model=model, instructions=instructions,
         include_quiz=include_quiz, include_flashcards=include_flashcards,
-        page_spans=page_spans, cancel=cancel,
+        page_spans=page_spans, cancel=cancel, timings=timings,
     )
+    outcome = "closed"
     try:
         while True:
             if cancel is not None and cancel.is_set():
                 _logger.info("[pipeline] cancelled; stopped at a stage boundary")
+                outcome = "cancelled"
                 return
             try:
-                if cancel is None:
-                    event = next(inner)
-                else:
-                    # Ambient flag for the non-streaming call_model() calls made
-                    # during this step - scoped to the step, never a yield.
-                    with cancel_scope(cancel):
+                # Steps may run on different executor threads, so the call-stats
+                # sink is (re)bound per step, exactly like the cancel flag.
+                with call_stats_scope(timings):
+                    if cancel is None:
                         event = next(inner)
+                    else:
+                        # Ambient flag for the non-streaming call_model() calls made
+                        # during this step - scoped to the step, never a yield.
+                        with cancel_scope(cancel):
+                            event = next(inner)
             except StopIteration:
+                if outcome == "closed":
+                    outcome = "ended"
                 return
             except PipelineCancelled:
                 _logger.info("[pipeline] cancelled mid-stage; stopped")
+                outcome = "cancelled"
                 return
             if cancel is not None and cancel.is_set():
                 _logger.info("[pipeline] cancelled; stopped at a stage boundary")
+                outcome = "cancelled"
                 return
+            if event.get("type") in ("done", "error", "blocked"):
+                outcome = event["type"]
             yield event
     finally:
         inner.close()
+        timings.finish(outcome)
 
 
 def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions="",
                       include_quiz=True, include_flashcards=True, page_spans=None,
-                      cancel=None):
+                      cancel=None, timings=None):
     """
-    The pipeline body behind run_agent (which adds cancellation).
+    The pipeline body behind run_agent (which adds cancellation and timing).
 
     Event types:
       status, plan_done, sources, notes_delta, notes_done, critique_done,
@@ -2253,6 +2426,16 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
     full merged list (a superset of the previous one), so clients can simply
     replace their sources state.
     """
+    timings = timings or _RunTimings()
+    # Overlap: the retrieval index is built on a background thread WHILE the
+    # topic check runs. Dependency-safe: the index reads only `text` and
+    # `page_spans`, the topic check reads only `text`, and neither consumes the
+    # other's output. The index is still first USED (and any build error still
+    # raised) at the same point as before - right after the gate - so the event
+    # order and error handling are unchanged. A blocked document just abandons
+    # the build (it makes no model calls; at most one embedding batch).
+    index_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="index")
+    index_future = index_pool.submit(_build_index, text, page_spans, timings)
     try:
         # Mechanical packaging agents (gatekeeper, title, quiz, flashcards) run
         # on a cheaper model with its OWN free-tier daily quota, so they don't
@@ -2262,7 +2445,9 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
         # 0. Academic gatekeeper — this tool only handles study material.
         yield _emit("status", "gate", "Checking topic…")
+        timings.begin("topic_check")
         gate = classify_academic(text, model=helper)
+        timings.end()
         doc_type = gate.get("doc_type", "explanatory")
 
         # Which provider ACTUALLY produced the notes. Recorded from the writer
@@ -2291,10 +2476,10 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         if doc_type != "explanatory":
             yield _emit("status", "gate", f"Detected document type: {doc_type.replace('_', ' ')}.")
 
-        # Build the retrieval index over the source (RAG)
+        # The retrieval index over the source (RAG), started above.
         # Spans make chunking page-bounded: a chunk is cut from inside one
         # page, so its page is a fact rather than an offset lookup.
-        retriever = Retriever(text, spans=page_spans)
+        retriever = index_future.result()
 
         # Trace each retrieved chunk back to the page it came from, so a
         # citation can point at the document rather than at an opaque passage
@@ -2313,14 +2498,18 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 DIGEST_MAX_SEGMENTS,
             )
             yield _emit("status", "plan", f"Scanning full document ({n_parts} parts)…")
+            timings.begin("digest", concurrency=DIGEST_CONCURRENCY, segments=n_parts)
             topic_inventory = digest_document(text, model=helper)
+            timings.end()
 
         yield _emit("status", "plan", "Planning outline...")
+        timings.begin("plan")
         plan = plan_outline(
             retriever.sample(24000), mode, tone, length,
             model=model, instructions=instructions, doc_chars=len(text),
             topic_inventory=topic_inventory,
         )
+        timings.end()
         yield _emit("plan_done", "plan", "", plan)
 
         # Coverage starts complete and is narrowed only by real failures, so
@@ -2344,6 +2533,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         sectioned = len(text) > SECTION_DOC_THRESHOLD
 
         if sectioned:
+            timings.begin("write", mode="sectioned", concurrency=max(1, SECTION_CONCURRENCY))
             # COVERAGE FIRST. Windows partition the document, so every chunk
             # is written about exactly once; retrieval then ADDS related
             # evidence from elsewhere. Previously each outline topic ran its own
@@ -2441,8 +2631,11 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             # staying quiet about it would be worse than either.
             failed = []
             try:
+                # _carry_scopes: the writers' model calls count toward this
+                # run's timing record (the cancel flag is also passed explicitly).
                 for (sec, sec_chunks, _pp), out_q in zip(section_ctx, queues):
-                    pool.submit(_write_worker, sec, _format_context(sec_chunks), out_q)
+                    pool.submit(_carry_scopes(_write_worker), sec,
+                                _format_context(sec_chunks), out_q)
 
                 for i, ((sec, _sec_chunks, sec_pages), out_q) in enumerate(
                         zip(section_ctx, queues), 1):
@@ -2525,8 +2718,10 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     "provider hiccup rather than a problem with your source — "
                     "please try again."
                 )
+            timings.end(windows=len(section_ctx), failed_windows=len(failed))
             yield _emit("notes_done", "write", notes)
         else:
+            timings.begin("write", mode="single_pass")
             # Small sources: single-pass write over one retrieval (fast path).
             # Pull a length-scaled slice so "long" actually has enough source
             # material to hit its word target.
@@ -2570,6 +2765,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     "provider hiccup rather than a problem with your source — "
                     "please try again."
                 )
+            timings.end()
             yield _emit("notes_done", "write", notes)
 
         # Critique: FAITHFULNESS is judged against the CONTEXT the writer was
@@ -2591,10 +2787,12 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         # 5-6. Critique (grounded against the writer's CONTEXT for faithfulness,
         # plus a breadth sample for coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
+        timings.begin("critique", round=0)
         critique = critique_notes(
             notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
             chunk_map=chunk_map,
         )
+        timings.end()
         yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         best_notes = notes
@@ -2620,6 +2818,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             # with each missing topic and merge any new chunks into the context
             # before revising; the frontend gets the merged sources list.
             missing = critique.get("missing_topics") or []
+            timings.begin("revise", round=rounds)
             # Ids added this round, so the reviser is shown them even when the
             # full context is too big to send.
             round_added = []
@@ -2665,6 +2864,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 parts = []
 
             revised = "".join(parts).strip()
+            timings.end(outcome="ok" if revised else "discarded")
             # A revision that comes back empty is a FAILED revision, never an
             # instruction to delete the notes. This used to overwrite good
             # notes with "" — the provider intermittently closes the stream
@@ -2684,10 +2884,12 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
             # Re-critique the revised notes (against the possibly augmented context).
             yield _emit("status", "critique", f"Re-checking (round {rounds})...")
+            timings.begin("critique", round=rounds)
             critique = critique_notes(
                 notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
                 chunk_map=chunk_map,
             )
+            timings.end()
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
             # Strictly better only: a revision that merely ties has not earned
@@ -2719,12 +2921,15 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         # mechanical per-claim judgement, not the writing that decides quality.
         if GROUNDING_CHECK and chunk_map:
             yield _emit("status", "critique", "Checking every claim against its source…")
+            timings.begin("grounding", concurrency=GROUNDING_CONCURRENCY)
             try:
                 grounded, gstats = verify_claim_support(notes, chunk_map, model=helper,
                                                         retriever=retriever)
             except Exception as exc:  # noqa: BLE001
                 print(f"[grounding] check failed ({exc}); notes left as written.")
                 grounded, gstats = notes, None
+            timings.end(outcome="ok" if gstats is not None else "failed_open",
+                        claims=(gstats or {}).get("checked", 0))
             if gstats and (gstats["removed"] or gstats["rewritten"]):
                 notes = grounded
                 yield _emit(
@@ -2734,27 +2939,35 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 )
                 yield _emit("notes_revised", "revise", notes)
 
-        # Auto-title (best effort)
+        # Auto-title (best effort). NOT overlapped with grounding: the title is
+        # generated from the notes AFTER grounding has edited them, so running
+        # the two together would change the title.
+        timings.begin("title")
         try:
             title = generate_title(notes, model=helper)
-            if title:
-                yield _emit("title_done", "title", title)
         except Exception:  # noqa: BLE001
-            pass
+            title = ""
+        timings.end()
+        if title:
+            yield _emit("title_done", "title", title)
 
         # 8-9. Quiz (generate, then verify the answer key against the notes).
         # Skipped by default in the app — the user generates these on demand
         # from the Learn sidebar via /api/quiz and /api/flashcards.
         if include_quiz:
             yield _emit("status", "quiz", "Generating quiz...")
+            timings.begin("quiz")
             quiz = generate_quiz(notes, n=5, model=helper)
             quiz = verify_quiz(notes, quiz, model=helper)
+            timings.end()
             yield _emit("quiz_done", "quiz", quiz)
 
         # 10-11. Flashcards
         if include_flashcards:
             yield _emit("status", "flashcards", "Creating flashcards...")
+            timings.begin("flashcards")
             cards = generate_flashcards(notes, n=8, model=helper)
+            timings.end()
             yield _emit("flashcards_done", "flashcards", cards)
 
         # 12. Done
@@ -2798,3 +3011,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         yield _emit("error", "error",
                     "Something went wrong while generating your notes. Please "
                     f"try again. (error id: {error_id})")
+    finally:
+        # Never waits: after a blocked gate, an error or a cancellation the
+        # index build is simply abandoned (it holds no slot and no model call).
+        index_pool.shutdown(wait=False)

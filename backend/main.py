@@ -769,6 +769,12 @@ def _pinned_adapter(host: str, ip: str):
     """
     from requests.adapters import HTTPAdapter
 
+    # The pin lives in build_connection_pool_key_attributes (requests >= 2.32).
+    # On an older requests that hook is never called and urllib3 would quietly
+    # resolve `host` again - so refuse to fetch rather than fetch unpinned.
+    if not hasattr(HTTPAdapter, "build_connection_pool_key_attributes"):
+        raise RuntimeError("requests >= 2.32 is required for pinned URL fetches")
+
     class _PinnedIPAdapter(HTTPAdapter):
         def add_headers(self, request, **kwargs):
             # urllib3 would otherwise derive Host from the pool's host - the
