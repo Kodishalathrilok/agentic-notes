@@ -145,7 +145,7 @@ Critically, **the outline size scales with document size.** A short document get
 
 **Limitations:**
 
-- The digest adds one helper-model call per 25,000 characters (up to 12 for a maximum-size upload), which adds some seconds of latency and spends helper-quota tokens before writing even starts — the price of genuine full coverage.
+- The digest adds one helper-model call per 25,000 characters (up to 12 for a maximum-size upload), which adds some seconds of latency and spends helper-quota tokens before writing even starts — the price of genuine full coverage. Segments are scanned up to 3 at a time (`DIGEST_CONCURRENCY`), so the wait is closer to a third of what the call count suggests.
 - The inventory's quality depends on the helper model's summarization: it reads everything, but if it describes a topic too vaguely, the planner may group it away rather than giving it a proper section. The inventory is also cut to 8,000 characters in the planner prompt.
 - On the long-document path the outline does not structure the notes. Coverage windows are defined by position in the document, each window writes its own topical headings, and each is handed only the first 6 checklist items (the same 6 for every window). The plan's main downstream effect there is on the critique's coverage checklist.
 - The plan is made once and never revisited. If the Critique step later finds a big gap, the fix happens through targeted revision, not by re-running the planner with new information.
@@ -261,6 +261,10 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **How it works:** After the revise loop, every citation marker is checked against `chunk_map` — every passage the writer (or reviser, after corrective re-retrieval) was shown. A citation survives only if that passage exists and, for a document with pages, carries a page inside `1..page_count`. Anything else is stripped. The model never supplies a page number: it names a passage, and the retriever's metadata decides which page that passage came from. `CITATION_DEBUG=1` prints the claim → passage → page trace.
 
+**A marker is any bracketed number, of any length** (`_CITATION_RE` is `\[(\d+)\]`). It used to be `\[(\d{1,3})\]`, but chunk ids go up to `retriever.MAX_CHUNKS` (6,000) and the UI renders every bracketed number as a citation chip, so a 4-digit marker reached the reader without being validated, grounded or seen by the critique. The cost of the wider pattern: a bracketed number that is not a citation, such as `[2024]`, is now treated as one and removed if no passage has that id.
+
+**It runs twice.** Once after the revise loop, and again after the grounding check whenever grounding removed or rewrote a line — grounding edits the notes, so the guarantee has to be re-established on what it returns.
+
 **Strengths:** Pure code, so it can't be talked out of its answer. "Don't invent citations" becomes a guarantee rather than a prompt instruction.
 
 **Limitations:**
@@ -276,11 +280,14 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **Job:** Ask the question citation validation can't: does the cited evidence actually *support* the claim?
 
-**How it works:** Every line that asserts something is treated as a claim — headings, rules, fully bold lines and lines under 5 words are skipped, but an *uncited* line is checked too (selecting only cited lines would let an invented, uncited claim through untouched). Claims go to the helper model in batches of 6, each with its own evidence: the full text of the passages it cites, or, for an uncited claim, the whole retrieved context. When that context is over 14,000 characters (`GROUNDING_SOURCE_CHARS`) it is not truncated to fit: each uncited claim is judged against the passages the retriever finds for it instead (`GROUNDING_RETRIEVE_K` = 4, limited to passages the writer or reviser was shown), and a claim with nothing retrieved is left as written and counted as `skipped_partial_view`, because deleting on a view known to be partial is how true claims about later pages used to be lost. On a synthetic ~200,000-character source with 40 facts, the share of needed evidence shown to the critique and grounding went from 0.05 to 1.00; before the fix only 2 of the 40 true late-document facts survived critique and revision. The model returns a verdict per claim at temperature 0:
+**How it works:** Every line that asserts something is treated as a claim — headings, rules, fully bold lines and lines under 5 words are skipped, but an *uncited* line is checked too (selecting only cited lines would let an invented, uncited claim through untouched). Claims go to the helper model in batches of 6 — up to 4 batches at a time (`GROUNDING_CONCURRENCY`), since each batch is judged only on its own claims' evidence and the verdicts are merged in batch order — each with its own evidence: the full text of the passages it cites, or, for an uncited claim, the whole retrieved context. When that context is over 14,000 characters (`GROUNDING_SOURCE_CHARS`) it is not truncated to fit: each uncited claim is judged against the passages the retriever finds for it instead (`GROUNDING_RETRIEVE_K` = 4, limited to passages the writer or reviser was shown), and a claim with nothing retrieved is left as written and counted as `skipped_partial_view`, because deleting on a view known to be partial is how true claims about later pages used to be lost. On a synthetic ~200,000-character source with 40 facts, the share of needed evidence shown to the critique and grounding went from 0.05 to 1.00; before the fix only 2 of the 40 true late-document facts survived critique and revision. The model returns a verdict per claim at temperature 0:
 
 - `supported` — kept as written.
-- `unsupported` — the line is removed.
-- `partial` — the general point is there but it adds specifics the evidence doesn't state; a second small call rewrites it to say only what the evidence supports, and the rewrite is accepted only if it keeps the citation the original had.
+- `unsupported` — the line is removed, **but only if the verdict can show its work**: the judge must quote the sentence of that claim's own evidence closest to it, and the quote must really be in that evidence (`_evidence_supported()`). A bare label, an invented quote, or a quote lifted from another claim's passages (a misnumbered verdict) is downgraded to `unverified` and the line stays.
+- `partial` — the general point is there but it adds specifics the evidence doesn't state. A second small call rewrites it to say only what the evidence supports. The rewrite must pass two checks before it replaces the line:
+  - **Provenance** (`_keeps_provenance()`): it may keep only a subset of the citations the original line had. A cited claim must keep at least one; an uncited claim may not gain one. A new number — even a real one — points at evidence nobody checked. Observed before this rule: `[1]` came back as `[999]`, after citation validation had already run.
+  - **Re-check:** the rewrite is judged again against the same evidence, and is accepted only if that second verdict says `supported` with a real quote.
+- `unverified` — the outcome of any verdict or rewrite that failed the checks above. The original line is kept exactly as written and counted in the run's stats.
 
 The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupported claim(s) removed."* It is on by default (`GROUNDING_CHECK=0` turns it off).
 
@@ -293,7 +300,7 @@ The UI gets a status line such as *"Grounding: 2 claim(s) tightened, 1 unsupport
 **Limitations:**
 
 - It is an LLM judgment by the smaller helper model, not a proof.
-- It fails open: if a batch call fails or returns no verdict, those claims are left exactly as written. The count of unjudged claims is logged on the server but not shown to the user.
+- It fails open: if a batch call fails or returns no verdict, those claims are left exactly as written. The count of unjudged claims is logged on the server but not shown to the user. The same is true of `unverified` claims — requiring evidence before deleting protects true claims from a careless judge, at the price that a false claim the judge could not quote against also stays.
 - The unit is a line. In paragraph format a whole paragraph is one claim, so a single `unsupported` verdict removes the entire paragraph.
 - On large sources an uncited claim is only as well judged as retrieval is: if the retriever misses the passage it came from, a true claim can still be judged unsupported and removed. With nothing retrieved at all, the claim ships unjudged.
 
