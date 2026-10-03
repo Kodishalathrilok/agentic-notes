@@ -6,8 +6,10 @@ venv/
 env/
 *.egg-info/
 
-# Env
-.env
+# Env. Every variant (.env.local, .env.production, ...) holds real keys; the
+# .example files are documentation and must stay tracked.
+.env*
+!.env.example
 
 # Node / Vite
 node_modules/
