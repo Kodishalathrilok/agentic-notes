@@ -8,46 +8,68 @@ app_port: 8000
 pinned: false
 ---
 
-# 📚 Agentic Notes — a self-correcting multi-agent study engine
+# 📚 Agentic Notes
 
 [![CI](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/Kodishalathrilok/agentic-notes/actions/workflows/ci.yml)
 
-**Live demo:** [huggingface.co/spaces/Thrilokkk/agentic-notes](https://huggingface.co/spaces/Thrilokkk/agentic-notes)
+**Turns any study source — text, PDF, audio, a photo, a URL or a YouTube video — into study notes where every claim is traced to the page it came from, and claims the source doesn't support are removed by code rather than left to the prompt.**
 
-Feed it anything — pasted text, a PDF, a lecture recording, a photo of notes, an article URL, or a YouTube video — and a pipeline of cooperating AI agents turns it into **cited, verified study notes**, then quizzes you on them.
+**Live:** [thrilokkk-agentic-notes.hf.space](https://thrilokkk-agentic-notes.hf.space) · [Space page](https://huggingface.co/spaces/Thrilokkk/agentic-notes) · [3-minute demo script and interview Q&A](DEMO.md)
 
-What makes it more than an "AI wrapper":
+### Try it without signing up
+
+Generating notes needs an account, but shared notes open for anyone — no sign-in, real output, real citations:
+
+<!-- ============================================================
+     PASTE SHARE LINKS HERE (replace the placeholder line below).
+     Generate notes in the app, press Share, paste the link.
+     ============================================================ -->
+- _Example notes: **links not added yet** — see the placeholder comment in this file._
+
+### What makes this different
+
+- **Per-claim grounding.** Every line that asserts something is judged against its own evidence, and removed only when the verdict quotes that evidence and the quote is really there — `verify_claim_support()` in [`backend/agent.py`](backend/agent.py).
+- **Citation validation in code.** A `[n]` survives only if it points at a passage the model was actually shown, on a real page. No model call, and it runs again after grounding edits the notes — `validate_citations()`.
+- **Coverage windows.** Sources over 12,000 characters are partitioned so every chunk is written about exactly once. The retrieval-only approach this replaced showed the writer about 9% of a 100-page source (measured; see the comment above `_document_windows()`).
+- **Offline tests.** 600+ backend tests run with no network and no API keys, because the model calls are replaced by fakes — [`backend/tests/`](backend/tests), 29 files.
+- **A claim-level eval harness.** Three long fixtures with hand-labelled facts and planted traps, graded by a judge from a different model family — [`backend/eval/claim_eval.py`](backend/eval/claim_eval.py). Built and tested; **its first full run is still pending**, so no model-graded score is quoted anywhere in this README.
+
+### In more detail
 
 - **The pipeline checks its own work.** A critique agent judges the draft against the passages the writer was given, flags unsupported claims and missing topics, triggers corrective re-retrieval for the missing topics, and revises (up to 2 rounds) — a revision replaces the kept version only if it scores strictly higher.
 - **Claims are checked against their sources.** Notes cite retrieved passages inline (`[3]`). A deterministic check drops any citation that doesn't point at a passage the model was shown (or, for PDFs, at a passage with a valid page), and a per-claim grounding pass then asks a helper model whether each claim line is actually supported by the passage it cites. A line is removed only when the verdict quotes that claim's own evidence and the quote is really there; otherwise it is kept and counted as unverified. An over-reaching line is tightened only if the rewrite passes a second check, may keep only citations it already had, and citations are validated again afterwards.
 - **Long documents are covered end to end.** Sources over 12,000 characters are split into coverage windows that partition the document — every chunk belongs to exactly one window and every window is written — and sources over 60,000 characters also get a full-document digest scan before planning. If a window fails, the notes say so with an "Incomplete coverage" banner naming the missing pages instead of passing as complete.
-- **It's engineered, not vibe-coded:** 300+ backend tests plus frontend unit tests, CI that gates deploys on green tests, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, per-user rate limiting, and a claim-level eval over long documents, graded by a judge from a different model family, that gates on a stored baseline.
+- **The engineering around it:** 600+ backend tests plus frontend unit tests, CI that deploys only when the tests and the build pass, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, and per-user rate limiting. The claim-level eval can compare a run against a stored baseline (`--gate`), but no baseline has been recorded with model-graded numbers yet, so today that comparison has nothing to compare against.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     A[Source\ntext · PDF · audio · image · URL · YouTube] --> B[Gatekeeper\nacademic check + doc type]
-    B --> C[Hybrid index\nBM25 + embeddings, rank fusion]
-    C --> D[Digest scan\nwhole document, large sources only]
+    A --> C[Hybrid index\nBM25 + embeddings, rank fusion]
+    B -->|study material| D[Digest scan\nwhole document, sources over 60k chars]
+    C --> D
+    B -.->|not study material| X[Stopped\nindex discarded]
     D --> E[Planner\noutline + checklist]
-    E --> F[Writer\nsingle pass or coverage windows]
-    F --> G[Critique\nclaims vs. writer context]
+    E --> F[Writer\nsingle pass, or coverage windows over 12k chars]
+    F --> G[Critique\nclaims vs. cited passages]
     G -->|needs revision| H[Corrective re-retrieval\n+ Revise]
     H --> G
     G -->|approved or 2 rounds| I[Citation validation\ndeterministic]
     I --> J[Grounding check\nper claim, helper model]
-    J --> K[Title]
+    J -->|lines removed or rewritten| I2[Citation validation\nagain]
+    I2 --> K[Title]
+    J -->|nothing changed| K
     K --> L[Notes]
     L -.->|on demand| M[Quiz · Flashcards · Tutor chat]
 ```
 
 1. **Gatekeeper** rejects non-study material and classifies the document type (explanatory, question bank, exam, mixed…); task-shaped documents get a writer rule that forbids turning a task into a statement of fact.
-2. **Index**: the source is chunked (page-bounded for PDFs) and indexed for hybrid retrieval.
+2. **Index**: the source is chunked (page-bounded for PDFs) and indexed for hybrid retrieval. This runs on a background thread *while* the gatekeeper decides, so a rejected document does not wait for an index nobody will use.
 3. **Digest** (sources over 60,000 characters): a helper model reads the whole document in 25,000-character segments and builds a topic inventory the planner must cover.
 4. **Planner** produces an outline and a checklist of must-cover points.
 5. **Writer**: sources up to 12,000 characters are written in one streamed pass from a length-scaled retrieval (the whole source when it fits). Larger sources are split into contiguous coverage windows — at most 12 by default, each targeted at the larger of 6,000 characters and one-twelfth of the source, and capped so a window plus its supplements fits the writer's 40,000-character context (past that cap more windows are added; nothing is truncated). Each window is written from its own chunks plus a few retrieved passages from elsewhere, two at a time, and streamed to the UI in document order.
-6. **Critique → revise** loop (max 2 rounds), then **citation validation** and the **grounding check**, then an auto-generated **title**.
+6. **Critique → revise** loop (max 2 rounds), then **citation validation** and the **grounding check** — with citations validated a second time if grounding removed or rewrote anything — then an auto-generated **title**.
 
 Quiz and flashcards are not part of the notes run: the UI generates them on demand through `/api/quiz` and `/api/flashcards`. Every stage of the notes run streams to the UI in real time over SSE, so you watch the agents plan, write, critique, and revise live.
 
@@ -150,7 +172,7 @@ primary with Gemini as automatic failover:
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-pytest        # 300+ tests: pipeline, long-document coverage, judge evidence on long sources, rewrite/edit integrity, quiz answer-key verification, parsers, retrieval, security, Supabase RLS / share links (real PostgreSQL via pgserver; skipped if it isn't installed), stream integrity, event-loop blocking, truncation-safety
+pytest        # 600+ tests: pipeline, long-document coverage, judge evidence on long sources, rewrite/edit integrity, quiz answer-key verification, parsers, retrieval, security, Supabase RLS / share links (real PostgreSQL via pgserver; skipped if it isn't installed), stream integrity, event-loop blocking, truncation-safety
 
 cd ../frontend
 npm test      # Vitest: SSE parser and inline-edit line-anchor resolution
@@ -193,7 +215,7 @@ agentic-notes/
 │   ├── eval/                # LLM-judge eval harness + retrieval benchmark
 │   ├── auth.py              # Supabase JWT verification + rate limiting
 │   ├── pdf_export.py        # PDF / Markdown / DOCX / CSV rendering
-│   └── tests/               # 300+ backend tests
+│   └── tests/               # 600+ backend tests
 ├── frontend/
 │   └── src/                 # React app: streaming UI, quiz, flashcards, chat, auth
 └── .github/workflows/       # CI: test → build → deploy
