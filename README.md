@@ -186,21 +186,45 @@ Two evals live in `backend/eval/`, both graded by a judge that must be a differe
 
 See [`evals/README.md`](evals/README.md) for fixtures, metric definitions, baselines and the gate.
 
-### Phase 1 before/after (`329a031` → `78bd704`)
+### What has been measured, before and after Phase 1
 
-Measured in a session **without provider keys**, so only what runs without a model is in this table. The model-graded numbers (claim precision, fact recall, contradictions caught and the rest) have **not been measured yet** for either commit; `evals/run_before_after.sh` records them for both with the same harness, into `evals/baselines/`.
+Every number in this table comes from a run that needs **no model and no API key**. Nothing here is model-graded: see the last row.
 
-| Measurement | `329a031` | `78bd704` |
-| --- | --- | --- |
-| Backend tests passing | 590 | 656 |
-| Grounding-fix tests (`test_grounding_fixes.py`) passing | 6 of 23 | 23 of 23 |
-| Retrieval benchmark: chunks per document | 3 | 106–127 |
-| Retrieval benchmark: BM25 recall@5 | 1.000 (every query returned every chunk) | 0.893 |
-| Retrieval benchmark: BM25 MRR | 1.000 | 0.861 |
-| Eval fixtures that reach the long-document path | 0 of 4 | 3 of 3 |
-| Claim-level eval: claim precision, fact recall, miscitation, contradictions, cost | did not exist | built; not yet run (needs keys) |
+| Measurement | Before (`329a031`) | After | Where it comes from |
+| --- | --- | --- | --- |
+| Backend tests passing, each commit's own suite, on Linux | 590 | 656 (at `78bd704`) | recorded in `evals/baselines/` |
+| Backend tests passing, this branch, on Windows | n/a | 644 | run for this README. One file is skipped: the PostgreSQL row-level-security tests need `pgserver`, which has no Windows wheel. The Linux figures above include that file |
+| Frontend tests passing (Vitest) | n/a | 22 | run for this README |
+| Grounding-fix tests (`test_grounding_fixes.py`), run against each commit's `agent.py` | 6 of 23 | 23 of 23 | "before" recorded in `evals/baselines/329a031.json`; "after" re-run for this README |
+| Retrieval benchmark: chunks per document | 3 | 106–127 | re-run for this README |
+| Retrieval benchmark: BM25 recall@5 | 1.000 (every query returned every chunk) | 0.893 | re-run for this README, 42 queries |
+| Retrieval benchmark: BM25 MRR | 1.000 | 0.861 | re-run for this README |
+| Eval fixtures long enough to take the long-document path (over 12,000 characters) | 0 of 4 | 3 of 3 | measured from the fixture files |
+| Claim precision, fact recall, miscitation, contradictions caught, cost | did not exist | **Claim-level eval: harness built, first full run pending.** | `backend/eval/claim_eval.py` |
 
-The retrieval rows do not mean retrieval got worse: retrieval code is unchanged, and the old 1.000 came from a dataset on which ranking could not fail. On the new dataset, BM25 finds no relevant chunk in the top 10 for 4 of the 12 paraphrased (semantic) queries; hybrid retrieval with Gemini embeddings was not measured here.
+How to read it:
+
+- **590 and 656 are each commit's own test suite**, not today's tests run against the old code. The suite grew by 66 tests (43 for the eval harness, 23 for the grounding fixes) and every one passes. The 644 on Windows is the same suite with this branch's 7 new tests added and the PostgreSQL file skipped.
+- **The retrieval rows do not mean retrieval got worse.** Retrieval code is unchanged. The old 1.000 came from a 3-chunk document on which ranking could not fail: every query returned every chunk. On the new dataset BM25 finds no relevant chunk in the top 10 for 4 of the 12 paraphrased queries (recall 0.625 in that category, 1.000 in the other five).
+- **Hybrid retrieval is not measured here.** With no embeddings key, the semantic and hybrid columns of the benchmark fall back to BM25, so all three print the same numbers.
+
+Two caveats about the eval that hold even after its first full run:
+
+- The eval writes with `gemini-3.5-flash-lite`. **Production writes with Nemotron.** A result therefore measures the pipeline on a different writer from the one users get.
+- The judge must be a different model family from the writer. The default judge is a Nemotron model, so it can grade the Gemini eval writer but **could not grade the production writer**, which is the same family. Measuring production needs a different judge.
+
+An older run of the short-fixture eval scored faithfulness 9.5, with the writer and the judge being the same model. It is recorded in `evals/baselines/329a031.json` as "self-judged by the writer, not comparable" and is not quoted as a result.
+
+## Known limitations
+
+- **No model-graded result exists yet.** The claim-level eval is built and unit-tested; it has not had a full run.
+- **Edited text is not re-grounded.** A rewrite or inline edit cannot add a citation the notes did not have, and is marked "not re-verified", but the edited claim itself is not checked against the source.
+- **Grounding fails open.** A claim the judge could not rule on, or ruled on without quoting evidence, is kept as written.
+- **Rate limits live in process memory** (`backend/auth.py`), so a restart resets the daily caps. On a host that sleeps and restarts, "daily" is not really daily.
+- **One server process.** A single uvicorn worker, and at most 4 generations at once; the next request gets a 503.
+- **Free-tier model quotas.** Providers answer bursts with 429 and 503. The router retries and fails over, but a run can still be slow or fail.
+- **Retrieval has no reranker**, chunks are cut by length and page rather than by heading, and BM25 alone misses a third of paraphrased queries.
+- **No per-run trace.** Stage timings and the serving provider are logged; the prompts and responses of one run cannot be replayed.
 
 ## Project structure
 
@@ -221,8 +245,15 @@ agentic-notes/
 └── .github/workflows/       # CI: test → build → deploy
 ```
 
-## Roadmap
+## Next
 
+- First full run of the claim-level eval, and a recorded baseline to compare against
+- Split `backend/agent.py` (3,100+ lines) along its existing section banners
+- Ragas as a second opinion on the same fixtures
+- Per-run tracing: every prompt and response of one run, in order
+- Type hints and a type checker
+- Notes across several documents
+- Resumable runs, so a long generation survives a closed tab
 - Retrieval index caching across requests
 - Pairwise (A/B) critique comparison instead of absolute scoring
 - Keep-alive job for the free-tier database
