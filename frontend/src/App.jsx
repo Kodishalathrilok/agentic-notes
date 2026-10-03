@@ -157,6 +157,9 @@ export default function App() {
   // a complete one once the status stream ended.
   const [coverage, setCoverage] = useState(null)
   const [critique, setCritique] = useState(null)
+  // True once the notes on screen came out of a rewrite or an inline edit:
+  // those are not re-checked against the source, and the UI says so.
+  const [unverified, setUnverified] = useState(false)
   const [quiz, setQuiz] = useState('')
   const [flashcards, setFlashcards] = useState('')
 
@@ -205,6 +208,7 @@ export default function App() {
     setQuiz('')
     setFlashcards('')
     setCritique(null)
+    setUnverified(false)
     setPlan(null)
     setError(null)
     setBlocked(null)
@@ -448,6 +452,7 @@ export default function App() {
     setSources(s.sources || [])
     setNotesBefore(null)
     setCritique(null)
+    setUnverified(false)
     setPlan(null)
     setActiveTab('notes')
     // These notes came out of history, not out of whatever is in the input
@@ -484,6 +489,7 @@ export default function App() {
     setQuiz('')
     setFlashcards('')
     setCritique(null)
+    setUnverified(false)
     setPlan(null)
     setError(null)
     setBlocked(null)
@@ -658,6 +664,7 @@ export default function App() {
     }
     if (data.notes) {
       setNotesBefore(notes) // enable the diff view
+      setUnverified(!!data.unverified)
       setNotes(data.notes)
       showToast('Notes updated ✓')
     }
@@ -681,6 +688,7 @@ export default function App() {
       }
       if (data.notes) {
         setNotesBefore(notes) // enable diff vs the previous version
+        setUnverified(!!data.unverified)
         setNotes(data.notes)
         showToast(`Notes made ${direction} ✓`)
       }
@@ -1187,6 +1195,7 @@ export default function App() {
                     quiz={quiz}
                     flashcards={flashcards}
                     notesBefore={notesBefore}
+                    unverified={unverified}
                     onRewrite={rewriteNotes}
                     rewriting={rewriting}
                     sources={sources}

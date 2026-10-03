@@ -371,6 +371,25 @@ def enforce_citations(notes: str, valid_ids) -> str:
     return re.sub(r"[ \t]+(\n)", r"\1", cleaned)
 
 
+def strip_new_citations(before: str, after: str) -> str:
+    """Remove any [n] in `after` that `before` did not already carry.
+
+    For rewrite and inline edit, which are sent the notes and nothing else: no
+    sources, so nothing can check that a claim is supported. What can be
+    checked is that the model did not attach a citation the notes never had.
+    Such a marker points at a passage nobody verified for this text, and the
+    UI would render it as a clickable source.
+
+    When nothing is new the text is returned untouched - not passed through
+    enforce_citations, whose whitespace tidy would otherwise strip trailing
+    spaces (a markdown line break) from lines the edit never went near.
+    """
+    known = {int(n) for n in _CITATION_RE.findall(before or "")}
+    if all(int(n) in known for n in _CITATION_RE.findall(after or "")):
+        return after
+    return enforce_citations(after, known)
+
+
 # Per-claim grounding check before the notes are finalised. On by default;
 # set GROUNDING_CHECK=0 to skip it (one extra helper-model call per 8 claims).
 GROUNDING_CHECK = os.getenv("GROUNDING_CHECK", "1").strip().lower() not in ("0", "false", "no")

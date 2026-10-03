@@ -44,6 +44,7 @@ from agent import (
     rewrite_notes,
     chat_about_notes_stream,
     edit_selection,
+    strip_new_citations,
     CHAT_HISTORY_TURNS,
     SelectionNotFoundError,
     SelectionAmbiguousError,
@@ -1408,6 +1409,18 @@ async def regen_flashcards(req: RegenRequest, user=Depends(_REGEN_GUARD)):
     return {"flashcards": cards}
 
 
+def _edited_notes_response(original: str, result: str) -> dict:
+    """What /api/rewrite and /api/edit-selection return.
+
+    These endpoints are sent the notes and nothing else, so their output goes
+    through neither citation validation nor grounding. Two things follow:
+    a citation the original notes did not carry is removed (nobody verified
+    that passage for this text), and `unverified` tells the UI to say so
+    rather than let edited text pass for checked text.
+    """
+    return {"notes": strip_new_citations(original, result), "unverified": True}
+
+
 @app.post("/api/edit-selection")
 async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(_REGEN_GUARD)):
     model = _require_known_model(req.model)
@@ -1448,7 +1461,7 @@ async def edit_selection_endpoint(req: EditSelectionRequest, user=Depends(_REGEN
             status_code=502,
             detail="The edit couldn't be completed. Nothing was changed - "
             "please try again.")
-    return {"notes": result}
+    return _edited_notes_response(notes, result)
 
 
 @app.post("/api/rewrite")
@@ -1479,7 +1492,7 @@ async def rewrite(req: RewriteRequest, user=Depends(_REGEN_GUARD)):
             status_code=502,
             detail="The rewrite couldn't be completed. Nothing was changed - "
             "please try again.")
-    return {"notes": result}
+    return _edited_notes_response(notes, result)
 
 
 # ---------------------------------------------------------------------------

@@ -257,6 +257,7 @@ export default function NotesOutput({
   quiz,
   flashcards,
   notesBefore,
+  unverified = false,
   onRewrite,
   rewriting,
   sources = [],
@@ -446,6 +447,18 @@ export default function NotesOutput({
           Three live controls plus an overflow: the ones you reach for while
           reading stay out, the ones you use once at the end fold away. */}
       <div className="mb-4 flex items-center justify-end gap-1.5">
+        {/* Rewrites and inline edits are sent the notes only, never the
+            sources, so their output skips citation validation and grounding.
+            Say so, rather than let edited text pass for checked text. */}
+        {unverified && (
+          <span
+            role="status"
+            title="Rewrites and inline edits are not re-checked against the source. Citations the notes did not already have are removed, but the edited text has not been through citation validation or grounding."
+            className="mr-auto rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800"
+          >
+            Edited — not re-verified
+          </span>
+        )}
         <button onClick={copy} className={btn}>
           {copied ? <Icon.Check className="h-3.5 w-3.5 text-green-600" /> : <Icon.Copy className="h-3.5 w-3.5" />}
           {copied ? 'Copied' : 'Copy'}
