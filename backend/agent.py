@@ -1960,7 +1960,9 @@ def _valid_questions(data, n: int) -> list:
         if not all(norm.get(letter) for letter in "ABCD"):
             continue
         answer = str(q.get("answer") or "").strip().upper()[:1]
-        if answer not in "ABCD" or not text:
+        # `not answer` first: "" is a substring of every string, so
+        # `"" not in "ABCD"` is False and an answerless question got through.
+        if not answer or answer not in "ABCD" or not text:
             continue
         out.append({
             "question": text,

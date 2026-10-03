@@ -207,3 +207,39 @@ def test_flashcards_skip_incomplete_cards(monkeypatch):
     monkeypatch.setattr(agent, "call_model", lambda *a, **k: data)
     out = agent.generate_flashcards("notes")
     assert "CARD 1" in out and "CARD 2" not in out
+
+# ---------------------------------------------------------------------------
+# An answer letter must BE a letter
+# ---------------------------------------------------------------------------
+
+_OPTS = {"A": "one", "B": "two", "C": "three", "D": "four"}
+
+
+def test_question_with_no_answer_letter_is_rejected():
+    """`"" in "ABCD"` is True in Python, so `answer not in "ABCD"` let an empty
+    answer through and the quiz was rendered with a bare "Answer:" line - a
+    question the user can never get right."""
+    data = {"questions": [
+        {"question": "Answer is an empty string?", "options": _OPTS, "answer": ""},
+        {"question": "Answer is only whitespace?", "options": _OPTS, "answer": "   "},
+        {"question": "Answer key is missing?", "options": _OPTS},
+        {"question": "Answer is null?", "options": _OPTS, "answer": None},
+        {"question": "This one is fine?", "options": _OPTS, "answer": "c"},
+    ]}
+    kept = agent._valid_questions(data, 5)
+    assert [q["question"] for q in kept] == ["This one is fine?"]
+    assert kept[0]["answer"] == "C"
+
+
+def test_rendered_quiz_never_has_a_blank_answer_line(monkeypatch):
+    mixed = json.dumps({"questions": [
+        {"question": "No answer given?", "options": _OPTS, "answer": ""},
+        {"question": "Answer given?", "options": _OPTS, "answer": "B"},
+    ]})
+    monkeypatch.setattr(agent, "call_model", lambda *a, **k: mixed)
+    out = agent.generate_quiz("notes")
+    parsed = _frontend_parse_quiz(out)
+    assert len(parsed) == 1
+    for line in out.splitlines():
+        if line.startswith("Answer:"):
+            assert re.fullmatch(r"Answer: [A-D]", line), line
