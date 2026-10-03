@@ -1,0 +1,72 @@
+{
+  "fixture": "cell_biology",
+  "title": "BIOL 1020 Cell Biology lecture notes (paged PDF)",
+  "source": {"type": "pdf", "path": "source.pdf"},
+  "facts": [
+    {"id": "F01", "fact": "The cell theory was assembled from the work of Schleiden, Schwann and Virchow.", "quote": "Matthias Schleiden, who studied plants, Theodor Schwann, who studied animals, and Rudolf Virchow"},
+    {"id": "F02", "fact": "The final written examination is worth 60 percent of the module assessment.", "quote": "a final written examination worth 60 percent"},
+    {"id": "F03", "fact": "In prokaryotes the DNA lies in a region of the cytoplasm called the nucleoid.", "quote": "their DNA lies in a region of the cytoplasm called the nucleoid"},
+    {"id": "F04", "fact": "Gram-positive bacteria have a thick peptidoglycan layer and stain purple.", "quote": "Gram-positive bacteria have a thick peptidoglycan layer that retains the crystal violet stain and appear purple"},
+    {"id": "F05", "fact": "Penicillin blocks the enzymes that cross-link peptidoglycan.", "quote": "Penicillin, for example, blocks the enzymes that cross-link peptidoglycan"},
+    {"id": "F06", "fact": "The resolution of a light microscope is limited to about 200 nanometres.", "quote": "limited by the wavelength of visible light to about 200 nanometres"},
+    {"id": "F07", "fact": "The fluid mosaic model was proposed by Singer and Nicolson in 1972.", "quote": "proposed by S. J. Singer and Garth Nicolson in 1972"},
+    {"id": "F08", "fact": "Cholesterol acts as a fluidity buffer in animal cell membranes.", "quote": "Cholesterol, which is found in animal cell membranes, acts as a fluidity buffer"},
+    {"id": "F09", "fact": "Aquaporins are channel proteins that let water cross membranes rapidly.", "quote": "Aquaporins are channel proteins that allow water to cross membranes very rapidly"},
+    {"id": "F10", "fact": "Gap junctions let the electrical signal for contraction spread between heart muscle cells.", "quote": "they allow the electrical signal for contraction to spread rapidly from cell to cell"},
+    {"id": "F11", "fact": "Collagen accounts for about 40 percent of the total protein in the human body.", "quote": "accounts for about 40 percent of the total protein in the human body"},
+    {"id": "F12", "fact": "A typical resting nerve cell has a membrane potential of about minus 70 millivolts.", "quote": "the membrane potential is about minus 70 millivolts"},
+    {"id": "F13", "fact": "Cultured cells are kept at 37 degrees Celsius with 5 percent carbon dioxide.", "quote": "kept in an incubator at 37 degrees Celsius in an atmosphere containing 5 percent carbon dioxide"},
+    {"id": "F14", "fact": "Living cells exclude trypan blue while dead cells take it up.", "quote": "living cells with intact membranes exclude the dye while dead cells take it up and appear blue"},
+    {"id": "F15", "fact": "A nucleosome wraps about 147 base pairs of DNA around eight histone proteins.", "quote": "about 147 base pairs of DNA are wrapped around a core of eight histone proteins"},
+    {"id": "F16", "fact": "The lysosome interior is kept at about pH 5.", "quote": "maintained at about pH 5 by proton pumps"},
+    {"id": "F17", "fact": "Chemiosmosis was proposed by Peter Mitchell in 1961.", "quote": "was proposed by Peter Mitchell in 1961"},
+    {"id": "F18", "fact": "Mitochondrial genes are most closely related to those of alphaproteobacteria.", "quote": "most closely related to those of a group of bacteria called alphaproteobacteria"},
+    {"id": "F19", "fact": "Microtubules are hollow tubes about 25 nanometres in diameter built from tubulin.", "quote": "hollow tubes about 25 nanometres in diameter built from a protein called tubulin"},
+    {"id": "F20", "fact": "Paclitaxel stabilises microtubules so the mitotic spindle cannot function.", "quote": "paclitaxel works by stabilising microtubules"},
+    {"id": "F21", "fact": "Meselson and Stahl demonstrated semiconservative replication in 1958.", "quote": "Matthew Meselson and Franklin Stahl demonstrated semiconservative replication in 1958"},
+    {"id": "F22", "fact": "The human telomere repeat is TTAGGG.", "quote": "in humans the repeat is TTAGGG"},
+    {"id": "F23", "fact": "The human genome contains about 20,000 protein-coding genes.", "quote": "about 20,000 protein-coding genes"},
+    {"id": "F24", "fact": "Sixty-one of the 64 codons code for amino acids and three are stop codons.", "quote": "Sixty-one of them code for amino acids and three are stop codons"},
+    {"id": "F25", "fact": "Peptide bond formation is catalysed by ribosomal RNA, making the ribosome a ribozyme.", "quote": "which makes the ribosome a ribozyme"},
+    {"id": "F26", "fact": "Yamanaka reprogrammed mouse skin cells to pluripotency with four transcription-factor genes in 2006.", "quote": "In 2006 Shinya Yamanaka showed that mature mouse skin cells could be reprogrammed"},
+    {"id": "F27", "fact": "A typical human cell in culture divides about once every 24 hours.", "quote": "a typical human cell in culture divides about once every 24 hours"},
+    {"id": "F28", "fact": "Hartwell, Hunt and Nurse shared the 2001 Nobel Prize for discovering key cell-cycle regulators.", "quote": "Leland Hartwell, Tim Hunt and Paul Nurse shared the Nobel Prize in Physiology or Medicine in 2001"},
+    {"id": "F29", "fact": "p53 is mutated in more than half of human cancers.", "quote": "The tumour-suppressor gene p53 is mutated in more than half of human cancers"},
+    {"id": "F30", "fact": "Steroid hormones cross the plasma membrane and bind receptors inside the cell.", "quote": "they cross the plasma membrane and bind to receptors inside the cell"},
+    {"id": "F31", "fact": "Phalloidin binds filamentous actin specifically.", "quote": "binds tightly and specifically to filamentous actin"},
+    {"id": "F32", "fact": "Caspase-3 is the principal executioner caspase in human cells.", "quote": "Caspase-3 is the principal executioner caspase in human cells"},
+    {"id": "F33", "fact": "In the intrinsic pathway, cytochrome c binds Apaf-1 to form the apoptosome, which activates caspase-9.", "quote": "the resulting complex, called the apoptosome, activates the initiator caspase-9"},
+    {"id": "F34", "fact": "Exactly 131 of the 1,090 cells formed in a developing C. elegans hermaphrodite die by apoptosis.", "quote": "Exactly 131 of the 1,090 cells formed during the development of an adult hermaphrodite worm die by apoptosis"}
+  ],
+  "traps": {
+    "late_fact": {
+      "fact_ids": ["F32", "F33", "F34"],
+      "min_position": 0.9,
+      "note": "Stated only in Lecture 12, the last pages of the PDF."
+    },
+    "contradictions": [
+      {
+        "id": "C1",
+        "about": "the centrifugation setting used to pellet cultured cells in this course",
+        "quote_a": "In this course, cells are pelleted by centrifugation at 300 g for 5 minutes",
+        "quote_b": "In this course, cells are always pelleted by centrifugation at 1000 g for 5 minutes",
+        "value_a": "300 g",
+        "value_b": "1000 g"
+      }
+    ],
+    "question_bank": {
+      "heading_quote": "Problem Set 2 (assessed, 10 percent)",
+      "note": "Assessed problems whose answers the notes do not give; several need reading beyond the notes.",
+      "questions": [
+        {"id": "Q1", "quote": "Explain how the CRISPR-Cas9 system is used to cut a specific DNA sequence", "topic": "CRISPR-Cas9"},
+        {"id": "Q2", "quote": "Describe each of the eight steps of the citric acid cycle", "topic": "citric acid cycle steps"},
+        {"id": "Q3", "quote": "Explain how a Western blot is used to detect a single protein", "topic": "Western blot"},
+        {"id": "Q4", "quote": "Compare the mechanisms by which prions and viruses cause disease", "topic": "prions and viruses"},
+        {"id": "Q5", "quote": "explain how importin proteins carry cargo into the nucleus", "topic": "importins and the nuclear pore"},
+        {"id": "Q6", "quote": "Explain the role of the Na+/glucose cotransporter in oral rehydration therapy for cholera", "topic": "oral rehydration therapy"},
+        {"id": "Q7", "quote": "Outline the stages of meiosis and explain how crossing over increases genetic variation", "topic": "meiosis and crossing over"},
+        {"id": "Q8", "quote": "Explain how the polymerase chain reaction amplifies a DNA sequence", "topic": "PCR"}
+      ]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "_about": "USD per million tokens, keyed by the SERVED model id (as the eval report's usage.by_model shows it). Deliberately empty: fill it from the providers' current pricing pages. While any model a run used is missing here, that run's cost is reported as null (with the model named), never as a partial sum. Token counts are estimates (characters / 4).",
+  "models": {}
+}

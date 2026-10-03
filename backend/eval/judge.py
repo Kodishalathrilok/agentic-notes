@@ -12,7 +12,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import call_model, safe_json  # noqa: E402
+from models import safe_json  # noqa: E402
+from eval.judge_call import call_judge  # noqa: E402
 
 
 def judge_notes(source: str, notes: str, model=None) -> dict:
@@ -41,7 +42,7 @@ SOURCE:
 NOTES:
 \"\"\"{notes}\"\"\""""
 
-    data = safe_json(call_model(prompt, max_tokens=600, model=model, temperature=0.0, json_mode=True))
+    data = safe_json(call_judge(prompt, model, max_tokens=600))
 
     def clamp(v):
         """A score, or None when the judge did not return one.
@@ -91,7 +92,7 @@ NOTES:
 QUIZ:
 \"\"\"{quiz}\"\"\""""
 
-    data = safe_json(call_model(prompt, max_tokens=500, model=model, temperature=0.0, json_mode=True))
+    data = safe_json(call_judge(prompt, model, max_tokens=500))
 
     def num(v, default=0):
         try:

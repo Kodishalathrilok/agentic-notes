@@ -1,0 +1,70 @@
+{
+  "fixture": "thermodynamics",
+  "title": "Introductory Thermodynamics course reader",
+  "source": {"type": "text", "path": "source.txt"},
+  "facts": [
+    {"id": "F01", "fact": "An isolated system exchanges neither matter nor energy with its surroundings.", "quote": "an isolated system exchanges neither"},
+    {"id": "F02", "fact": "Heat and work are not state functions; they depend on the path between two states.", "quote": "Heat and work are not: they describe energy in transit during a process"},
+    {"id": "F03", "fact": "A quasi-static process passes through a continuous sequence of equilibrium states.", "quote": "A process that passes through a continuous sequence of equilibrium states is called quasi-static"},
+    {"id": "F04", "fact": "The zeroth law says two systems each in thermal equilibrium with a third are in thermal equilibrium with each other.", "quote": "if two systems are each in thermal equilibrium with a third system, they are in thermal equilibrium with each other"},
+    {"id": "F05", "fact": "A temperature in kelvins is the Celsius temperature plus 273.15.", "quote": "adding 273.15 to the temperature in degrees Celsius"},
+    {"id": "F06", "fact": "One bar is exactly 100 kilopascals.", "quote": "one bar is exactly 100 kilopascals"},
+    {"id": "F07", "fact": "The molar gas constant R is approximately 8.314 J/(mol·K).", "quote": "approximately 8.314 J/(mol·K)"},
+    {"id": "F08", "fact": "In the van der Waals equation, constant a accounts for intermolecular attraction and constant b for the finite volume of the molecules.", "quote": "The constant a accounts for the attraction between molecules"},
+    {"id": "F09", "fact": "The work done by an ideal gas in an isothermal expansion from V1 to V2 is nRT ln(V2/V1).", "quote": "the work done by the gas is nRT ln(V2/V1)"},
+    {"id": "F10", "fact": "Radiation is the only heat-transfer mechanism that works through a vacuum.", "quote": "Radiation is transfer by electromagnetic waves and is the only mechanism that works through a vacuum"},
+    {"id": "F11", "fact": "Water has a specific heat capacity of about 4186 J/(kg·K).", "quote": "about 4186 J/(kg·K)"},
+    {"id": "F12", "fact": "For an ideal gas, Cp minus Cv equals R.", "quote": "For an ideal gas the difference Cp minus Cv is exactly equal to R"},
+    {"id": "F13", "fact": "Gamma is 5/3 for a monatomic ideal gas and about 1.4 for a diatomic gas near room temperature.", "quote": "For a monatomic ideal gas such as helium or argon, gamma is 5/3"},
+    {"id": "F14", "fact": "The Stefan-Boltzmann law says black-body emission per unit area is proportional to the fourth power of absolute temperature.", "quote": "proportional to the fourth power of its absolute temperature"},
+    {"id": "F15", "fact": "The first law, in this reader's convention, is delta U = Q minus W.", "quote": "delta U = Q minus W"},
+    {"id": "F16", "fact": "Joule measured the mechanical equivalent of heat with falling weights turning a paddle wheel in water.", "quote": "using falling weights to turn a paddle wheel in an insulated container of water"},
+    {"id": "F17", "fact": "Enthalpy is defined as U plus pV.", "quote": "Enthalpy, H, is defined as U plus pV"},
+    {"id": "F18", "fact": "Hydrogen and helium warm when throttled at room temperature.", "quote": "Hydrogen and helium warm when throttled at room temperature"},
+    {"id": "F19", "fact": "The Kelvin-Planck statement forbids a cyclic device that turns heat from a single reservoir entirely into work.", "quote": "it is impossible for any device operating in a cycle to receive heat from a single reservoir and produce an equal amount of work"},
+    {"id": "F20", "fact": "Sadi Carnot proposed the Carnot cycle in 1824.", "quote": "proposed by the French engineer Sadi Carnot in 1824"},
+    {"id": "F21", "fact": "A Carnot engine between 600 K and 300 K has an efficiency of 50 percent.", "quote": "For an engine working between 600 K and 300 K, the Carnot efficiency is therefore 50 percent"},
+    {"id": "F22", "fact": "In a free expansion of an ideal gas no heat flows, yet the entropy increases by nR ln(V2/V1).", "quote": "the entropy still increases by nR ln(V2/V1)"},
+    {"id": "F23", "fact": "Boltzmann's entropy formula is S = k ln W.", "quote": "S equals k ln W"},
+    {"id": "F24", "fact": "The Gibbs free energy G is H minus TS and is minimised at equilibrium at constant temperature and pressure.", "quote": "The Gibbs free energy, G, is defined as H minus TS"},
+    {"id": "F25", "fact": "The triple point of water is 273.16 K at about 611 pascals.", "quote": "For water the triple point lies at 273.16 K and a pressure of about 611 pascals"},
+    {"id": "F26", "fact": "The Haber-Bosch process runs at roughly 400 to 450 degrees Celsius and about 200 atmospheres with an iron catalyst.", "quote": "a pressure of about 200 atmospheres, and with an iron catalyst"},
+    {"id": "F27", "fact": "Combined-cycle power plants reach thermal efficiencies above 60 percent.", "quote": "combined-cycle plants reach thermal efficiencies above 60 percent"},
+    {"id": "F28", "fact": "Chlorofluorocarbons were phased out under the Montreal Protocol of 1987.", "quote": "phased out under the Montreal Protocol of 1987"},
+    {"id": "F29", "fact": "The mean free path of air molecules at atmospheric pressure and room temperature is about 70 nanometres.", "quote": "the mean free path is about 70 nanometres"},
+    {"id": "F30", "fact": "Platinum resistance thermometers are the laboratory standard against which other sensors are checked.", "quote": "Platinum resistance thermometers, whose electrical resistance rises nearly linearly with temperature, are the most accurate and stable and serve as the laboratory standard"},
+    {"id": "F31", "fact": "The measured residual entropy of solid carbon monoxide is about 4.6 J/(mol·K).", "quote": "The measured residual entropy of solid carbon monoxide is about 4.6 J/(mol·K)"},
+    {"id": "F32", "fact": "Linus Pauling estimated the residual entropy of ice in 1935.", "quote": "Linus Pauling estimated this residual entropy in 1935"},
+    {"id": "F33", "fact": "Helium-4 becomes a superfluid below about 2.17 K.", "quote": "Helium-4 becomes a superfluid below about 2.17 K"}
+  ],
+  "traps": {
+    "late_fact": {
+      "fact_ids": ["F31", "F32", "F33"],
+      "min_position": 0.9,
+      "note": "Stated only in the last chapter (The Third Law and Low Temperatures)."
+    },
+    "contradictions": [
+      {
+        "id": "C1",
+        "about": "the heat capacity of the aluminium calorimeter used in Experiment 3",
+        "quote_a": "the aluminium calorimeter used in Experiment 3 has a heat capacity of 85 J/K",
+        "quote_b": "The aluminium calorimeter vessel used in Experiment 3 has a heat capacity of 120 J/K",
+        "value_a": "85 J/K",
+        "value_b": "120 J/K"
+      }
+    ],
+    "question_bank": {
+      "heading_quote": "Chapter 11. Review Questions",
+      "note": "Practice questions whose answers the reader does not give. Notes may report that the reader asks them, but must not answer them.",
+      "questions": [
+        {"id": "Q1", "quote": "Derive an expression for the thermal efficiency of the ideal Otto cycle", "topic": "Otto cycle efficiency"},
+        {"id": "Q2", "quote": "Explain why the Diesel cycle can achieve a higher efficiency than the Otto cycle in practice", "topic": "Diesel versus Otto cycle"},
+        {"id": "Q3", "quote": "Using the Maxwell relations, show that the internal energy of an ideal gas does not depend on its volume", "topic": "Maxwell relations"},
+        {"id": "Q5", "quote": "Describe the four processes of the Stirling cycle and explain the role of the regenerator", "topic": "Stirling cycle"},
+        {"id": "Q6", "quote": "Derive the Clausius-Clapeyron equation", "topic": "Clausius-Clapeyron equation"},
+        {"id": "Q7", "quote": "Explain how the Kalina cycle uses an ammonia-water mixture", "topic": "Kalina cycle"},
+        {"id": "Q8", "quote": "Describe the principle of adiabatic demagnetisation", "topic": "adiabatic demagnetisation"}
+      ]
+    }
+  }
+}

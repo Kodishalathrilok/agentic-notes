@@ -102,14 +102,13 @@ export default function EvalDashboard({ onBack }) {
 
         {!state.loading && !state.available && (
           <div className="card p-8 text-center">
-            <h2 className="text-lg font-bold">No eval report yet</h2>
+            {/* The report is a local artifact and is not shipped with the app, so
+                on a deployment this state is the normal one. Telling a visitor
+                to run a Python command read as "the product is unfinished". */}
+            <h2 className="text-lg font-bold">Eval results are published per release; see README</h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-slate-500 dark:text-slate-400">
-              Generate one by running the eval harness — it scores the pipeline against fixed test
-              inputs and writes <code className="font-mono">eval/report.json</code>.
+              The README lists what has been measured so far, and what has not been measured yet.
             </p>
-            <pre className="mx-auto mt-4 w-fit rounded-lg bg-espresso-900 px-4 py-3 text-left text-xs text-slate-100 ">
-              <code>cd backend{'\n'}python -m eval.run_eval</code>
-            </pre>
           </div>
         )}
 
@@ -180,7 +179,7 @@ export default function EvalDashboard({ onBack }) {
             </div>
 
             <p className="text-center text-xs text-slate-400">
-              A CI workflow re-runs this eval and fails the build if faithfulness drops below threshold.
+              A weekly workflow re-runs this eval and reports a drop in faithfulness. It does not block deploys.
             </p>
           </div>
         )}

@@ -158,7 +158,9 @@ def test_edit_endpoint_success_shape(monkeypatch):
     r = _post("/api/edit-selection", {"notes": "keep\ntarget line\nkeep",
                                       "selection": "target line", "instruction": "x"})
     assert r.status_code == 200
-    assert r.json() == {"notes": "keep\nnew line\nkeep"}
+    # The whole response, exactly: the edited notes, and the flag saying this
+    # text has not been through citation validation or grounding.
+    assert r.json() == {"notes": "keep\nnew line\nkeep", "unverified": True}
 
 
 # ---------------------------------------------------------------------------
@@ -423,3 +425,57 @@ def test_rendered_selection_without_anchors_is_422(monkeypatch):
                                       "line_start": 10 ** 5, "line_end": 10 ** 5})
     assert r.status_code == 422, "out-of-range anchors fall back to text matching"
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# 7. rewrite / edit output is never grounded, so it may not ADD a citation
+# ---------------------------------------------------------------------------
+#
+# Neither endpoint is sent the sources - only the notes - so nothing here can
+# check that a claim is supported. What CAN be checked is that the model did
+# not attach a citation the notes never carried: such a marker points at a
+# passage nobody verified for this text, and the UI would render it as a
+# clickable source. The response is also marked "unverified" so the UI can say
+# the edited text has not been through citation validation or grounding.
+
+def test_strip_new_citations_keeps_known_and_drops_new():
+    before = "Fact one [1]. Fact two [2][12]."
+    after = "Fact one, restated [1]. A new claim [7]. Fact two [12][1234]."
+    out = agent.strip_new_citations(before, after)
+    assert "[7]" not in out and "[1234]" not in out
+    assert "[1]" in out and "[12]" in out
+
+
+def test_strip_new_citations_leaves_text_alone_when_nothing_is_new():
+    # Two trailing spaces are a markdown line break. With no new citation
+    # there is nothing to remove, so nothing at all may change.
+    before = "Line one [1].  \nLine two [2]."
+    after = "Line one, shorter [1].  \nLine two [2]."
+    assert agent.strip_new_citations(before, after) == after
+
+
+def test_rewrite_endpoint_strips_a_citation_the_notes_never_had(monkeypatch):
+    _fake_dispatch(monkeypatch, lambda p, m, s: "Short fact [1]. Invented support [9].")
+    r = _post("/api/rewrite", {"notes": "A long fact [1]. Another fact [2].",
+                               "direction": "shorter"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "[9]" not in body["notes"]
+    assert "[1]" in body["notes"]
+    assert body["unverified"] is True
+
+
+def test_edit_endpoint_strips_a_citation_the_notes_never_had(monkeypatch):
+    _fake_dispatch(monkeypatch, lambda p, m, s: "new line [9]")
+    r = _post("/api/edit-selection", {"notes": "keep [1]\ntarget line\nkeep",
+                                      "selection": "target line", "instruction": "x"})
+    assert r.status_code == 200
+    assert r.json() == {"notes": "keep [1]\nnew line\nkeep", "unverified": True}
+
+
+def test_edit_endpoint_keeps_a_citation_the_notes_already_had(monkeypatch):
+    _fake_dispatch(monkeypatch, lambda p, m, s: "new line [1]")
+    r = _post("/api/edit-selection", {"notes": "keep [1]\ntarget line\nkeep",
+                                      "selection": "target line", "instruction": "x"})
+    assert r.status_code == 200
+    assert r.json() == {"notes": "keep [1]\nnew line [1]\nkeep", "unverified": True}

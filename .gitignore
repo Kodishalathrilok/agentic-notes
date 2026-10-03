@@ -6,8 +6,10 @@ venv/
 env/
 *.egg-info/
 
-# Env
-.env
+# Env. Every variant (.env.local, .env.production, ...) holds real keys; the
+# .example files are documentation and must stay tracked.
+.env*
+!.env.example
 
 # Node / Vite
 node_modules/
@@ -16,10 +18,9 @@ dist/
 
 # Build / deploy artifacts
 backend/static/
-# backend/eval/report.json is deliberately NOT ignored: /api/eval-report serves
-# it, so ignoring it meant the deployed dashboard showed "No eval report yet" to
-# every visitor while the numbers sat untracked on one laptop. Commit a fresh
-# one whenever the eval is re-run; it is the published measurement.
+# Local eval artifacts: one run's output on one machine, not a published result.
+# Measurements meant to be read live in evals/baselines/ and the README.
+backend/eval/report.json
 backend/eval/report.md
 
 # OS / editor
@@ -33,3 +34,6 @@ STATUS.md
 
 # Local eval run logs
 backend/eval-run.log
+
+# Claim-eval run reports (the summaries live in evals/baselines/)
+evals/reports/

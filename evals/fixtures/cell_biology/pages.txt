@@ -1,0 +1,424 @@
+=== PAGE ===
+BIOL 1020 Cell Biology — Lecture Notes, Term 2
+
+Module overview
+
+These notes accompany the twelve lectures of the second-term cell biology module. They cover the structure of cells and their membranes, the organelles of eukaryotic cells, the cytoskeleton, the flow of genetic information, the cell cycle and its control, cell signalling, and the death of cells. Each lecture is followed by the laboratory protocols used in the practical sessions that run alongside the module.
+
+The cell is the smallest unit that shows all the properties of life. Every living organism is made of one or more cells, and every cell arises from a pre-existing cell by division. These two statements, together with the idea that the cell is the basic unit of structure and function, make up the cell theory. The cell theory was assembled in the nineteenth century from the work of Matthias Schleiden, who studied plants, Theodor Schwann, who studied animals, and Rudolf Virchow, who argued that cells only come from other cells.
+
+Assessment in this module consists of a practical report worth 30 percent, a problem set worth 10 percent, and a final written examination worth 60 percent.
+
+=== PAGE ===
+Lecture 1 · Prokaryotic and eukaryotic cells
+
+All cells share certain features. Every cell is bounded by a plasma membrane that separates its interior from the environment, every cell contains cytoplasm in which most of its chemical reactions take place, every cell stores its genetic information in DNA, and every cell makes proteins on ribosomes.
+
+Cells fall into two broad groups. Prokaryotic cells, which include bacteria and archaea, have no nucleus: their DNA lies in a region of the cytoplasm called the nucleoid. They also lack membrane-bound organelles. Eukaryotic cells, which make up animals, plants, fungi and protists, keep their DNA inside a nucleus surrounded by a double membrane, and they contain many membrane-bound organelles, each with a specialised job.
+
+Prokaryotic cells are usually much smaller than eukaryotic cells. A typical bacterium is about 1 to 5 micrometres long, while a typical animal cell is about 10 to 30 micrometres across. Small size gives a prokaryote a large surface area relative to its volume, which allows nutrients and wastes to move in and out quickly by diffusion. Eukaryotic cells overcome the limits of diffusion with internal membranes and transport systems that move materials to where they are needed.
+
+=== PAGE ===
+Lecture 1 · Prokaryotic and eukaryotic cells (continued)
+
+Most bacteria are surrounded by a cell wall outside the plasma membrane. The bacterial cell wall is made of peptidoglycan, a mesh of sugar chains cross-linked by short peptides, which gives the cell its shape and prevents it from bursting when water enters by osmosis. The Gram stain, developed by Hans Christian Gram in 1884, divides bacteria into two groups according to the structure of their walls. Gram-positive bacteria have a thick peptidoglycan layer that retains the crystal violet stain and appear purple, while Gram-negative bacteria have a thin peptidoglycan layer surrounded by an outer membrane and appear pink after counterstaining.
+
+Many antibiotics work by attacking structures that bacteria have and human cells lack. Penicillin, for example, blocks the enzymes that cross-link peptidoglycan, so that growing bacteria build weak walls and burst. Because human cells have no peptidoglycan, penicillin does not harm them directly.
+
+Some prokaryotes carry additional structures. Flagella are long whip-like appendages that rotate to propel the cell. Pili are shorter hair-like projections that help bacteria attach to surfaces and to each other. Plasmids are small circular DNA molecules, separate from the main chromosome, that often carry genes for antibiotic resistance and can be passed between bacteria.
+
+=== PAGE ===
+Lecture 1 · Microscopy
+
+Most cells are too small to see with the naked eye, and the history of cell biology is closely tied to the history of the microscope. Robert Hooke coined the word cell in 1665 after looking at thin slices of cork, whose empty compartments reminded him of the small rooms of a monastery. Antonie van Leeuwenhoek, using single-lens microscopes of his own making, was the first to describe living bacteria and protists in the 1670s.
+
+The resolution of a microscope is the smallest distance between two points at which they can still be seen as separate. The resolution of a light microscope is limited by the wavelength of visible light to about 200 nanometres, which is enough to see cells and their larger organelles but not the details of membranes or ribosomes. Electron microscopes use beams of electrons, whose wavelength is far shorter, and can resolve structures less than a nanometre apart.
+
+There are two main types of electron microscope. The transmission electron microscope passes electrons through a very thin section of a specimen and reveals internal structure. The scanning electron microscope scans a beam over the surface of a specimen coated with a thin layer of metal and produces detailed three-dimensional images of surfaces. Both require the specimen to be placed in a vacuum, so living cells cannot be observed.
+
+Fluorescence microscopy uses molecules that absorb light of one colour and emit light of another. Specific proteins can be labelled with fluorescent antibodies or fused to green fluorescent protein, which was first isolated from a jellyfish, allowing their location to be followed in living cells.
+
+=== PAGE ===
+Lecture 2 · The plasma membrane
+
+The plasma membrane is a thin, flexible barrier about 7 to 10 nanometres thick. It is built from a double layer of phospholipids, called a lipid bilayer. Each phospholipid molecule has a hydrophilic head, containing a phosphate group, and two hydrophobic fatty acid tails. In water, phospholipids arrange themselves spontaneously so that the heads face the watery surroundings on both sides of the membrane and the tails point inwards, away from the water.
+
+The fluid mosaic model, proposed by S. J. Singer and Garth Nicolson in 1972, describes the membrane as a fluid lipid bilayer in which proteins float like icebergs in a sea. Lipids and many proteins can move sideways within their own layer, which gives the membrane its fluidity. Moving from one layer to the other, a process called flip-flop, is rare for phospholipids because the hydrophilic head would have to pass through the hydrophobic interior.
+
+The fluidity of the membrane depends on its composition and on the temperature. Unsaturated fatty acid tails have kinks that prevent the lipids from packing tightly, so membranes rich in unsaturated lipids stay fluid at lower temperatures. Cholesterol, which is found in animal cell membranes, acts as a fluidity buffer: it restrains the movement of lipids at warm temperatures and prevents them from packing into a rigid solid at cool temperatures.
+
+=== PAGE ===
+Lecture 2 · Membrane proteins and carbohydrates
+
+Membrane proteins carry out most of the specific functions of the membrane. Integral proteins are embedded in the bilayer, and those that span it completely are called transmembrane proteins. Peripheral proteins are loosely attached to the surface of the membrane, often by binding to integral proteins. The functions of membrane proteins include transport of substances across the membrane, enzymatic activity, binding of signal molecules as receptors, joining adjacent cells together, recognition of other cells, and anchoring the cytoskeleton.
+
+The outer surface of the plasma membrane carries short chains of carbohydrate attached either to lipids, forming glycolipids, or to proteins, forming glycoproteins. These carbohydrate chains act as identification tags that allow cells to recognise one another. The ABO blood groups, for example, are determined by differences in the carbohydrate chains on the surface of red blood cells.
+
+The two layers of the membrane are not identical. The carbohydrate chains are found only on the outer face, and some phospholipids are concentrated in one layer or the other. One such lipid, phosphatidylserine, is normally kept on the inner face of the plasma membrane; its appearance on the outer face is a signal that the cell is dying, a point that returns in the final lecture.
+
+=== PAGE ===
+Lecture 2 · Passive transport
+
+Substances cross membranes either passively, moving down their concentration gradient without any input of energy, or actively, using energy to move against a gradient. Small nonpolar molecules such as oxygen and carbon dioxide dissolve in the lipid bilayer and cross it readily by simple diffusion. Small polar molecules such as water cross more slowly, and ions and large polar molecules such as glucose hardly cross the bare bilayer at all.
+
+Facilitated diffusion is passive transport that is helped by membrane proteins. Channel proteins form water-filled pores through which particular ions or molecules pass. Aquaporins are channel proteins that allow water to cross membranes very rapidly; they are abundant in the kidney, where large volumes of water must be reabsorbed. Carrier proteins bind the molecule they transport and change shape to release it on the other side of the membrane. Glucose enters most body cells by facilitated diffusion through a carrier protein of the GLUT family.
+
+Osmosis is the diffusion of water across a selectively permeable membrane. Water moves from a solution of lower solute concentration to one of higher solute concentration. A solution that causes a cell to gain water is called hypotonic, one that causes it to lose water is hypertonic, and one that causes no net movement is isotonic. Animal cells placed in pure water swell and may burst, while plant cells become firm, or turgid, because their cell walls resist expansion.
+
+=== PAGE ===
+Lecture 2 · Active transport and bulk transport
+
+Active transport moves substances against their concentration gradient and requires energy, usually supplied by the hydrolysis of ATP. The sodium-potassium pump is the best-known example. It pumps sodium ions out of the cell and potassium ions into the cell, keeping the sodium concentration low and the potassium concentration high inside. These gradients store energy that the cell uses for other purposes, such as the transmission of nerve impulses.
+
+In secondary active transport, a gradient set up by a pump is used to drive the movement of another substance. In the cells lining the small intestine, for example, a cotransporter allows sodium ions to flow back into the cell down their gradient and uses the energy of that flow to bring glucose into the cell against its gradient.
+
+Large molecules and particles cross the plasma membrane in membrane-bound vesicles. In exocytosis, vesicles fuse with the plasma membrane and release their contents outside the cell, which is how cells secrete hormones, digestive enzymes and neurotransmitters. In endocytosis, the plasma membrane folds inwards and pinches off to form a vesicle that brings material into the cell. Phagocytosis, or cell eating, is a form of endocytosis in which a cell engulfs a large particle such as a bacterium; it is carried out by white blood cells called macrophages and neutrophils.
+
+=== PAGE ===
+Lecture 2 · Cell junctions
+
+In multicellular organisms, neighbouring cells are joined by specialised junctions. Tight junctions press the plasma membranes of adjacent cells together so closely that fluid cannot leak between them. They are found in the sheets of cells that line the gut and the bladder, where they force substances to pass through the cells rather than around them, so that the cells can control what is absorbed.
+
+Desmosomes act like rivets that fasten cells together into strong sheets. They are anchored inside each cell to intermediate filaments made of keratin, and they are abundant in tissues that undergo mechanical stress, such as skin and heart muscle.
+
+Gap junctions are channels that connect the cytoplasm of adjacent animal cells. Each gap junction is formed by protein pores in the two membranes that line up with each other, allowing ions, sugars, amino acids and other small molecules to pass directly from cell to cell. Gap junctions are important in heart muscle, where they allow the electrical signal for contraction to spread rapidly from cell to cell, so that the heart beats in a coordinated way.
+
+Plant cells have their own channels, called plasmodesmata, which pass through the cell walls and connect the cytoplasm of neighbouring cells. Water, small solutes and even some proteins and RNA molecules move between plant cells through plasmodesmata.
+
+=== PAGE ===
+Lecture 2 · The extracellular matrix
+
+Animal cells secrete an elaborate extracellular matrix that surrounds them and fills the spaces between them. The most abundant component of the matrix is collagen, a strong fibrous protein that accounts for about 40 percent of the total protein in the human body. Collagen fibres are embedded in a network of proteoglycans, molecules consisting of a small core protein with many carbohydrate chains attached, which trap water and give the matrix a gel-like quality.
+
+Cells attach to the matrix through glycoproteins such as fibronectin, which bind to receptor proteins in the plasma membrane called integrins. Integrins span the membrane and connect on the inside of the cell to microfilaments of the cytoskeleton. Through this chain of connections, forces and signals can pass between the matrix and the interior of the cell. Changes in the matrix can therefore influence the shape of a cell, its movement and even which of its genes are expressed.
+
+The plant cell wall is the plant counterpart of the extracellular matrix. It is made mainly of cellulose fibres embedded in other polysaccharides and proteins. A young plant cell first secretes a thin, flexible primary wall. Between the primary walls of adjacent cells lies a thin layer rich in sticky polysaccharides called pectins, which glues the cells together. When the cell stops growing, many plant cells add a thicker and stronger secondary wall inside the primary wall; wood consists mainly of secondary walls.
+
+=== PAGE ===
+Lecture 2 · The membrane potential
+
+All cells have a voltage across their plasma membrane, called the membrane potential, with the inside of the cell negative relative to the outside. In a typical resting nerve cell the membrane potential is about minus 70 millivolts.
+
+The membrane potential arises from the unequal distribution of ions across the membrane and from the different permeability of the membrane to different ions. The sodium-potassium pump keeps the concentration of potassium ions high inside the cell and the concentration of sodium ions high outside. The resting membrane is much more permeable to potassium than to sodium, because it contains many potassium channels that are open at rest. Potassium ions therefore tend to leak out of the cell down their concentration gradient, carrying positive charge with them and leaving the inside of the cell negative.
+
+The combination of the concentration gradient of an ion and the voltage across the membrane is called the electrochemical gradient of that ion. Both forces push sodium ions into a resting cell: the concentration of sodium is higher outside, and the negative interior attracts positive ions. Nerve and muscle cells use this stored energy to produce rapid electrical signals by briefly opening channels that let sodium ions rush in.
+
+=== PAGE ===
+Practical 1 · Handling cultured cells
+
+The first practical introduces the basic techniques for growing mammalian cells in culture. All work is carried out in a class II biological safety cabinet, and all surfaces are wiped with 70 percent ethanol before and after use.
+
+Cells are grown as a single layer attached to the bottom of plastic flasks in a medium containing salts, glucose, amino acids, vitamins and 10 percent fetal bovine serum, which supplies growth factors. The flasks are kept in an incubator at 37 degrees Celsius in an atmosphere containing 5 percent carbon dioxide, which keeps the pH of the medium steady.
+
+To passage the cells, the medium is removed, the cell layer is rinsed with phosphate-buffered saline, and a small volume of trypsin solution is added to detach the cells from the plastic. The detached cells are suspended in fresh medium and collected by centrifugation. In this course, cells are pelleted by centrifugation at 300 g for 5 minutes at room temperature, a setting gentle enough to avoid damaging the cells. The pellet is resuspended in fresh medium, the cells are counted, and a portion is transferred to a new flask.
+
+Cells are counted with a haemocytometer, a glass slide with a grid of known volume. Mixing a sample with trypan blue dye allows living and dead cells to be told apart, because living cells with intact membranes exclude the dye while dead cells take it up and appear blue.
+
+=== PAGE ===
+Lecture 3 · The nucleus
+
+The nucleus is usually the largest organelle in a eukaryotic cell and contains most of the cell's DNA. It is surrounded by the nuclear envelope, a double membrane whose outer layer is continuous with the endoplasmic reticulum. The envelope is perforated by nuclear pores, large protein complexes that control the traffic of molecules between the nucleus and the cytoplasm. Messenger RNA and ribosomal subunits leave the nucleus through the pores, while proteins needed in the nucleus, such as the enzymes that copy DNA, enter through them.
+
+Inside the nucleus, DNA is combined with proteins to form chromatin. The basic unit of chromatin is the nucleosome, in which about 147 base pairs of DNA are wrapped around a core of eight histone proteins. Chains of nucleosomes are folded into more compact structures. Chromatin that is loosely packed and accessible to the enzymes that read genes is called euchromatin; densely packed, largely inactive chromatin is called heterochromatin.
+
+The nucleolus is a dense region within the nucleus where ribosomal RNA is made and combined with proteins to assemble the subunits of ribosomes. A nucleus may contain one or several nucleoli, and cells that make large amounts of protein tend to have large nucleoli.
+
+The inner face of the nuclear envelope is lined by the nuclear lamina, a meshwork of proteins called lamins that supports the envelope and helps to organise the chromatin.
+
+=== PAGE ===
+Lecture 3 · Ribosomes and the endoplasmic reticulum
+
+Ribosomes are the sites of protein synthesis. Each ribosome is made of two subunits, a large one and a small one, built from ribosomal RNA and proteins. Ribosomes are not surrounded by a membrane, and they are found in prokaryotes as well as eukaryotes, although prokaryotic ribosomes are smaller. Some antibiotics, such as tetracycline and streptomycin, kill bacteria by binding to bacterial ribosomes and blocking protein synthesis.
+
+Free ribosomes float in the cytosol and make proteins that will function there. Bound ribosomes are attached to the endoplasmic reticulum and make proteins that will be inserted into membranes, packaged into organelles, or secreted from the cell.
+
+The endoplasmic reticulum, or ER, is a network of membrane-enclosed tubes and flattened sacs that extends through much of the cytoplasm. Rough ER is studded with ribosomes and is the site where secretory and membrane proteins are made. As a protein is synthesised, it is threaded into the interior of the ER, called the lumen, where it folds and where short carbohydrate chains may be attached to it. Smooth ER has no ribosomes. Its functions include the synthesis of lipids, including phospholipids and steroid hormones, the detoxification of drugs and poisons, especially in liver cells, and the storage of calcium ions, which in muscle cells are released to trigger contraction.
+
+=== PAGE ===
+Lecture 3 · The Golgi apparatus and lysosomes
+
+The Golgi apparatus consists of a stack of flattened membrane sacs called cisternae. It receives proteins and lipids from the ER in transport vesicles, modifies them, sorts them and sends them to their destinations. The stack has a distinct polarity. Vesicles from the ER arrive at the cis face of the Golgi, and finished products leave from the trans face. As molecules pass through the stack, enzymes in the cisternae modify their carbohydrate chains and add molecular tags that direct them to the plasma membrane, to lysosomes, or to the outside of the cell.
+
+Lysosomes are membrane-bound sacs of digestive enzymes that can break down proteins, fats, nucleic acids and carbohydrates. The enzymes work best in the acidic interior of the lysosome, which is maintained at about pH 5 by proton pumps in the lysosomal membrane. Lysosomes digest material taken into the cell by endocytosis, including bacteria engulfed by phagocytosis, and they also break down worn-out organelles in a process called autophagy.
+
+Because lysosomal enzymes are much less active at the neutral pH of the cytosol, a leak of a few enzymes from a damaged lysosome does little harm to the cell. Inherited defects in lysosomal enzymes cause lysosomal storage diseases, in which undigested material accumulates; in Tay-Sachs disease, for example, a lipid builds up in nerve cells of the brain.
+
+=== PAGE ===
+Lecture 3 · Peroxisomes and vacuoles
+
+Peroxisomes are small organelles bounded by a single membrane that carry out a variety of oxidation reactions. Many of these reactions produce hydrogen peroxide, which is toxic, but peroxisomes also contain the enzyme catalase, which converts hydrogen peroxide into water and oxygen. Peroxisomes in liver cells help to detoxify alcohol, and peroxisomes in all cells break down very long fatty acids into smaller molecules that can be used by the mitochondria for energy.
+
+Vacuoles are large vesicles derived from the ER and Golgi. Plant cells usually contain a large central vacuole that may occupy most of the cell's volume. The central vacuole stores water, ions and other substances, and the pressure of its contents against the cell wall keeps the plant cell turgid and helps a non-woody plant to stand upright. Some freshwater protists have contractile vacuoles that pump out the excess water that enters the cell by osmosis.
+
+The organelles described in this lecture, together with the plasma membrane, form the endomembrane system. Its parts are linked either by direct physical continuity, as between the nuclear envelope and the ER, or by the traffic of vesicles, as between the ER, the Golgi apparatus, lysosomes and the plasma membrane. Mitochondria and chloroplasts are not part of the endomembrane system.
+
+=== PAGE ===
+Lecture 4 · Mitochondria
+
+Mitochondria are the sites of cellular respiration, the process that uses oxygen to release energy from sugars, fats and other fuels and to make ATP. A mitochondrion is enclosed by two membranes. The outer membrane is smooth, while the inner membrane is folded into many projections called cristae, which greatly increase the area available for the enzymes and protein complexes of respiration. The inner membrane divides the mitochondrion into two compartments: the narrow intermembrane space between the two membranes, and the mitochondrial matrix enclosed by the inner membrane.
+
+The number of mitochondria in a cell reflects its demand for energy. Cells of heart muscle, which contract continuously throughout life, contain particularly large numbers of mitochondria, which may make up about a third of their volume.
+
+During the final stage of respiration, proteins of the inner membrane pump protons from the matrix into the intermembrane space, creating a concentration gradient of protons across the membrane. The protons flow back into the matrix through an enzyme called ATP synthase, which uses the energy of this flow to make ATP. This mechanism, called chemiosmosis, was proposed by Peter Mitchell in 1961 and earned him the Nobel Prize in Chemistry in 1978.
+
+=== PAGE ===
+Lecture 4 · Chloroplasts and the endosymbiont theory
+
+Chloroplasts, found in plants and algae, are the sites of photosynthesis. Like mitochondria they are surrounded by two membranes. Inside them is a third membrane system arranged as flattened sacs called thylakoids, which are often stacked into piles called grana. The fluid surrounding the thylakoids is called the stroma. The green pigment chlorophyll, which captures light energy, is located in the thylakoid membranes.
+
+Mitochondria and chloroplasts share several features that distinguish them from the other organelles. Both have two membranes, both contain their own small circular DNA molecules, both have their own ribosomes that resemble bacterial ribosomes, and both grow and divide within the cell somewhat independently of the cell's own division.
+
+These features are explained by the endosymbiont theory, championed by Lynn Margulis in the 1960s. According to the theory, mitochondria are descended from aerobic bacteria that were engulfed by an ancestral host cell but not digested, and chloroplasts are descended from photosynthetic bacteria engulfed later by a cell that already had mitochondria. Over time the engulfed cells became dependent on their hosts, and many of their genes moved to the host nucleus. The theory is supported by comparisons of DNA sequences, which show that mitochondrial genes are most closely related to those of a group of bacteria called alphaproteobacteria, and that chloroplast genes are most closely related to those of cyanobacteria.
+
+=== PAGE ===
+Lecture 5 · The cytoskeleton: microtubules
+
+The cytoskeleton is a network of protein fibres that extends throughout the cytoplasm. It gives the cell its shape, anchors organelles, moves materials within the cell and enables many cells to move. The cytoskeleton is made of three kinds of fibre: microtubules, microfilaments and intermediate filaments. Unlike a skeleton of bone, the cytoskeleton is dynamic, and its fibres can be rapidly assembled and disassembled.
+
+Microtubules are the thickest fibres, hollow tubes about 25 nanometres in diameter built from a protein called tubulin. Each tubulin molecule is a dimer of two slightly different subunits, alpha-tubulin and beta-tubulin. Microtubules grow and shrink by adding or removing tubulin dimers at their ends. In animal cells they grow out from a region near the nucleus called the centrosome, which contains a pair of centrioles.
+
+Microtubules act as tracks along which motor proteins carry vesicles and organelles. Kinesin generally moves cargo towards the outer, plus end of a microtubule, and dynein moves cargo towards the minus end near the centrosome. In nerve cells, these motors transport materials along axons that may be up to a metre long.
+
+During cell division, microtubules form the mitotic spindle, which separates the chromosomes. The anticancer drug paclitaxel works by stabilising microtubules so that the spindle cannot function, which stops dividing cells.
+
+=== PAGE ===
+Lecture 5 · Cilia, flagella, microfilaments and intermediate filaments
+
+Cilia and flagella are extensions of the cell that contain bundles of microtubules. In both, nine pairs of microtubules surround a central pair, an arrangement known as the 9 plus 2 pattern. The bending of cilia and flagella is driven by dynein arms that link neighbouring microtubule pairs. Cilia are short and numerous and beat in coordinated waves; the cilia lining the human airways sweep mucus and trapped particles up towards the throat. Flagella are longer and usually fewer, and a sperm cell is propelled by a single flagellum.
+
+Microfilaments, also called actin filaments, are the thinnest fibres, about 7 nanometres in diameter. They are built from the protein actin twisted into a double chain. A dense network of microfilaments just inside the plasma membrane, called the cell cortex, supports the cell's shape. Microfilaments interact with the motor protein myosin to cause muscle contraction, and they are responsible for the crawling movement of cells such as amoebae and white blood cells, which extend projections called pseudopodia. In dividing animal cells, a ring of actin and myosin pinches the cell in two.
+
+Intermediate filaments have diameters between those of microfilaments and microtubules, about 8 to 12 nanometres. They are built from several different proteins depending on the cell type, such as keratins in skin cells. Intermediate filaments are the most permanent part of the cytoskeleton, and they mainly bear tension and resist mechanical stress.
+
+=== PAGE ===
+Lecture 6 · DNA structure and replication
+
+DNA is a polymer made of units called nucleotides. Each nucleotide consists of a sugar called deoxyribose, a phosphate group and one of four nitrogenous bases: adenine, thymine, guanine and cytosine. The nucleotides are joined into a chain by bonds between the sugar of one nucleotide and the phosphate of the next, forming a sugar-phosphate backbone from which the bases project.
+
+In 1953 James Watson and Francis Crick proposed that DNA is a double helix of two strands wound around each other, using X-ray diffraction images obtained by Rosalind Franklin and Maurice Wilkins. The bases of the two strands pair with each other in the interior of the helix: adenine always pairs with thymine, and guanine always pairs with cytosine. Adenine and thymine are held together by two hydrogen bonds and guanine and cytosine by three. The two strands run in opposite directions, so the helix is said to be antiparallel.
+
+Because the bases pair specifically, each strand of a DNA molecule carries the information needed to rebuild the other. During replication the two strands separate and each serves as a template for a new partner strand. Each new DNA molecule therefore contains one old strand and one new strand, a mode of replication called semiconservative. Matthew Meselson and Franklin Stahl demonstrated semiconservative replication in 1958 by growing bacteria on heavy and light isotopes of nitrogen and separating the DNA by density.
+
+=== PAGE ===
+Lecture 6 · The machinery of replication
+
+Replication begins at particular sites called origins of replication, where proteins open the double helix to form a replication bubble. A bacterial chromosome has a single origin, while a human chromosome has thousands, so that replication of the huge eukaryotic genome can be completed in a few hours. At each end of a replication bubble is a replication fork, where the parental strands are being unwound by the enzyme helicase.
+
+The enzyme that builds new DNA, DNA polymerase, can only add nucleotides to the end of an existing chain and can only build a new strand in one direction. It therefore needs a short starting piece of RNA, called a primer, which is made by the enzyme primase. Because the two template strands run in opposite directions, one new strand, the leading strand, can be made continuously towards the replication fork, while the other, the lagging strand, must be made in short pieces away from the fork. These short pieces are called Okazaki fragments, and they are later joined together by the enzyme DNA ligase.
+
+DNA polymerase checks each nucleotide as it is added and removes incorrectly paired ones, a process called proofreading. Proofreading and later repair systems reduce the error rate of replication to roughly one mistake in every ten billion nucleotides copied. Errors that escape correction become permanent changes in the DNA sequence, called mutations.
+
+=== PAGE ===
+Lecture 6 · Telomeres
+
+The ends of linear eukaryotic chromosomes pose a special problem for replication. Because DNA polymerase needs a primer and can only extend existing chains, the very end of the lagging strand cannot be completely copied, and the chromosome becomes slightly shorter in each round of replication. The ends of chromosomes are protected by telomeres, which consist of many repeats of a short DNA sequence; in humans the repeat is TTAGGG. Telomeres do not contain genes, so their gradual shortening does not at first remove any important information.
+
+In most human body cells, telomeres shorten with every division, and when they become too short the cell stops dividing. This limit on the number of divisions is thought to help protect against cancer. In cells that must divide many times, such as the cells that give rise to eggs and sperm, an enzyme called telomerase lengthens the telomeres again, using an RNA template that it carries. Telomerase is also active in most cancer cells, which allows them to keep dividing indefinitely. Elizabeth Blackburn, Carol Greider and Jack Szostak shared the Nobel Prize in Physiology or Medicine in 2009 for the discovery of how telomeres and telomerase protect chromosomes.
+
+=== PAGE ===
+Lecture 7 · Transcription
+
+The flow of genetic information in cells follows the pattern summarised by Francis Crick as the central dogma: DNA is transcribed into RNA, and RNA is translated into protein. RNA differs from DNA in three ways. Its sugar is ribose rather than deoxyribose, it contains the base uracil in place of thymine, and it is usually single-stranded.
+
+Transcription is the synthesis of RNA using a DNA template. It is carried out by the enzyme RNA polymerase, which, unlike DNA polymerase, does not need a primer. RNA polymerase binds to a region of DNA called the promoter, which marks the start of a gene and determines which strand is used as the template. In eukaryotes, proteins called transcription factors must bind to the promoter before RNA polymerase can attach. One common element of eukaryotic promoters is a short sequence rich in thymine and adenine called the TATA box.
+
+RNA polymerase moves along the gene, unwinding the DNA and adding RNA nucleotides that pair with the template strand, until it reaches a sequence that signals the end of transcription. Several RNA polymerase molecules can transcribe the same gene at the same time, one following another, which allows a cell to make large amounts of a particular RNA quickly.
+
+=== PAGE ===
+Lecture 7 · RNA processing
+
+In eukaryotes, the RNA made by transcription, called pre-messenger RNA, is modified in the nucleus before it is sent to the cytoplasm. A modified guanine nucleotide, called the 5' cap, is added to the front end of the molecule, and a chain of 50 to 250 adenine nucleotides, called the poly-A tail, is added to the back end. The cap and tail help the RNA to leave the nucleus, protect it from enzymes that would break it down, and help ribosomes to attach to it in the cytoplasm.
+
+Most eukaryotic genes contain long stretches of non-coding sequence, called introns, that interrupt the coding sequences, called exons. In a process called RNA splicing, the introns are cut out of the pre-messenger RNA and the exons are joined together. Splicing is carried out by a large complex of proteins and small RNAs called the spliceosome.
+
+Splicing allows a single gene to give rise to more than one protein. By including or leaving out particular exons, a process called alternative splicing, the cell can produce different versions of a protein from the same gene in different tissues or at different times. Alternative splicing is one reason that the human genome, which contains only about 20,000 protein-coding genes, can produce a much larger number of different proteins.
+
+=== PAGE ===
+Lecture 8 · Translation
+
+Translation is the synthesis of a protein using the information in messenger RNA. The messenger RNA is read in groups of three nucleotides, called codons, each of which specifies a particular amino acid or a signal to stop. There are 64 possible codons. Sixty-one of them code for amino acids and three are stop codons. Because there are only 20 amino acids, most amino acids are specified by more than one codon, a property described by saying that the genetic code is redundant. The codon AUG has two roles: it codes for the amino acid methionine and it serves as the start signal for translation.
+
+The genetic code is nearly universal: the same codons specify the same amino acids in bacteria, plants and animals. This universality is strong evidence that all living things share a common ancestor, and it is what allows a human gene to be expressed in a bacterium in genetic engineering.
+
+Amino acids are brought to the ribosome by transfer RNA molecules. Each transfer RNA carries a particular amino acid at one end and has, at the other end, a set of three bases called the anticodon, which pairs with the matching codon on the messenger RNA. Enzymes called aminoacyl-tRNA synthetases attach the correct amino acid to each transfer RNA, and the accuracy of these enzymes is essential to the accuracy of translation.
+
+=== PAGE ===
+Lecture 8 · The ribosome at work
+
+Translation has three stages: initiation, elongation and termination. In initiation, the small ribosomal subunit binds to the messenger RNA and moves along it until it finds the start codon. The initiator transfer RNA, carrying methionine, pairs with the start codon, and the large subunit then joins to complete the ribosome.
+
+During elongation, the ribosome moves along the messenger RNA one codon at a time. Transfer RNAs carrying the matching amino acids enter the ribosome, and the ribosome joins each new amino acid to the growing chain by a peptide bond. The reaction that forms the peptide bond is catalysed by the ribosomal RNA of the large subunit rather than by a protein, which makes the ribosome a ribozyme, an RNA enzyme.
+
+Termination occurs when the ribosome reaches a stop codon. No transfer RNA matches a stop codon; instead, a protein called a release factor binds to it and causes the finished chain to be released. The ribosome then separates into its two subunits. A single messenger RNA is usually translated by many ribosomes at once, forming a structure called a polyribosome.
+
+After translation, many proteins are modified before they become active. They may be folded with the help of chaperone proteins, cut into smaller pieces, or tagged with chemical groups such as phosphates or sugars.
+
+=== PAGE ===
+Practical 2 · Protein extraction and gel electrophoresis
+
+In the second practical, students extract total protein from cultured cells and separate the proteins by size using gel electrophoresis.
+
+Cells are detached and collected as in Practical 1, washed twice with cold phosphate-buffered saline, and lysed in a buffer containing a detergent that dissolves membranes and inhibitors that prevent proteins from being broken down. The lysate is kept on ice throughout. The protein concentration of the lysate is measured with a colour-change assay against a set of standards of known concentration, so that equal amounts of protein can be loaded into each lane of the gel.
+
+The proteins are heated in a loading buffer containing SDS, a detergent that unfolds them and coats them with negative charge in proportion to their length. When an electric field is applied across the polyacrylamide gel, all the proteins move towards the positive electrode, and the gel acts as a sieve, so that small proteins travel further than large ones. A ladder of proteins of known sizes is run in one lane of each gel so that the sizes of the unknown proteins can be estimated.
+
+After electrophoresis the gel is stained with a blue dye that binds to proteins, and the bands are photographed. Students must label the ladder lane and estimate the sizes of the three most prominent bands in each sample.
+
+=== PAGE ===
+Lecture 9 · Gene regulation
+
+Every cell in a multicellular organism contains essentially the same DNA, yet a liver cell and a nerve cell look and behave very differently. The difference arises because different cells express different sets of genes. Gene expression can be regulated at every stage from the packing of DNA to the activity of the finished protein, but the most important control point is usually the start of transcription.
+
+In bacteria, genes that work together are often grouped under a single promoter in a unit called an operon. The lac operon of the bacterium Escherichia coli, studied by François Jacob and Jacques Monod in the 1950s and 1960s, contains genes for enzymes that break down the sugar lactose. When lactose is absent, a repressor protein binds to a region of DNA called the operator and blocks transcription. When lactose is present, a form of it binds to the repressor and changes its shape, so that the repressor releases the operator and the genes are transcribed. The bacterium therefore makes the lactose-digesting enzymes only when they are needed.
+
+In eukaryotes, the regulation of transcription depends on combinations of transcription factors that bind to control elements near the promoter or at distant sites called enhancers. Because each gene responds to a particular combination of factors, a relatively small number of transcription factors can control a very large number of genes in a cell-type-specific way.
+
+=== PAGE ===
+Lecture 9 · Chromatin and epigenetics
+
+The packing of DNA in chromatin also regulates gene expression. Genes in tightly packed heterochromatin are usually not expressed, because the transcription machinery cannot reach them. Chemical modification of histones can loosen or tighten the packing. The addition of acetyl groups to histones, called histone acetylation, generally loosens chromatin and promotes transcription, while removing them tends to silence genes.
+
+DNA itself can be modified by the addition of methyl groups to cytosine bases, a process called DNA methylation. Heavily methylated regions of DNA are usually not transcribed. Patterns of methylation can be passed on when cells divide, so that a liver cell gives rise to more liver cells rather than to some other kind of cell.
+
+Changes in gene expression that are inherited through cell division without any change in the DNA sequence are called epigenetic changes. A striking example is X-chromosome inactivation in female mammals. Early in development, one of the two X chromosomes in each cell is condensed into a compact structure called a Barr body and almost all of its genes are silenced. The choice of which X chromosome to inactivate is random in each cell, but once made it is inherited by all of that cell's descendants. The patchy coat colour of calico cats is a visible result of this process.
+
+Gene expression can also be controlled after transcription. Small RNA molecules called microRNAs bind to complementary sequences in messenger RNA molecules and either block their translation or cause them to be destroyed.
+
+=== PAGE ===
+Lecture 9 · Differentiation and stem cells
+
+Differentiation is the process by which cells become specialised in structure and function. As an embryo develops, its cells become progressively more restricted in the kinds of cell they can give rise to. The fertilised egg, or zygote, can give rise to every cell type in the body as well as the tissues that support the embryo, and it is described as totipotent.
+
+Stem cells are relatively unspecialised cells that can divide indefinitely and, under suitable conditions, give rise to specialised cell types. When a stem cell divides, its daughters may remain stem cells or begin to differentiate. Embryonic stem cells, taken from the inner cell mass of an early embryo, are pluripotent: they can give rise to all the cell types of the body. Adult stem cells, found in tissues such as bone marrow and the lining of the gut, are usually multipotent, meaning that they can give rise to only a limited range of cell types. The haematopoietic stem cells of the bone marrow, for example, give rise to all the kinds of blood cell but not to nerve or muscle cells.
+
+In 2006 Shinya Yamanaka showed that mature mouse skin cells could be reprogrammed into a pluripotent state by introducing just four genes that encode transcription factors. The reprogrammed cells are called induced pluripotent stem cells. Yamanaka shared the Nobel Prize in Physiology or Medicine in 2012 with John Gurdon, who had shown in the 1960s that the nucleus of a specialised frog cell could direct the development of a whole new frog when transplanted into an egg whose own nucleus had been removed.
+
+=== PAGE ===
+Lecture 9 · Determination and signalling in development
+
+Before a cell visibly differentiates, it is usually already committed to a particular fate, a state called determination. A determined cell will follow its developmental path even if it is moved to a different part of the embryo. Determination is brought about by the control of gene expression, often through master regulatory genes that encode transcription factors. In muscle development, for example, a master regulatory gene called myoD switches on a whole set of muscle-specific genes, and once it is expressed the cell is committed to becoming a muscle cell.
+
+Two mechanisms establish differences between the cells of an embryo. First, the cytoplasm of the egg is not uniform: it contains molecules, called cytoplasmic determinants, that are unevenly distributed, so that the cells formed by early divisions inherit different determinants. Second, cells influence each other by signalling, a process called induction. Signal molecules released by one group of cells change the gene expression of nearby cells and direct them along a particular pathway.
+
+Gradients of signal molecules called morphogens provide cells with information about their position in the embryo. Cells exposed to a high concentration of a morphogen switch on different genes from cells exposed to a low concentration, so that a single gradient can lay out a pattern of several different cell types. In the fruit fly, the protein Bicoid forms a gradient from the front to the back of the early embryo and determines which end will develop into the head.
+
+=== PAGE ===
+Lecture 10 · The cell cycle
+
+The cell cycle is the ordered series of events by which a cell grows and divides into two daughter cells. It consists of interphase, during which the cell grows and copies its DNA, and the mitotic phase, during which the nucleus and then the cytoplasm divide. Interphase usually takes up about 90 percent of the cycle and is divided into three subphases. In the G1 phase the cell grows and carries out its normal functions, in the S phase it replicates its DNA, and in the G2 phase it grows further and prepares for division.
+
+Cells that are not dividing, such as most mature nerve cells and muscle cells, leave the cycle and enter a non-dividing state called G0. Some cells in G0, such as liver cells, can be called back into the cycle by signals such as injury, while others never divide again.
+
+The length of the cell cycle varies widely between cell types. Cells in the early embryo of a frog may divide every 30 minutes, while a typical human cell in culture divides about once every 24 hours.
+
+After the S phase, each chromosome consists of two identical copies called sister chromatids, joined at a region called the centromere. Proteins called cohesins hold the sister chromatids together along their length until they are separated during mitosis.
+
+=== PAGE ===
+Lecture 10 · Mitosis and cytokinesis
+
+Mitosis is conventionally divided into five stages. In prophase, the chromatin condenses into visible chromosomes and the mitotic spindle begins to form. In prometaphase, the nuclear envelope breaks down and spindle microtubules attach to the chromosomes at protein structures called kinetochores, which form at the centromeres. In metaphase, the chromosomes line up on an imaginary plane midway between the two poles of the spindle, called the metaphase plate. In anaphase, the cohesins are cut, the sister chromatids separate, and each is pulled towards an opposite pole as the kinetochore microtubules shorten. In telophase, nuclear envelopes form around the two sets of chromosomes and the chromosomes begin to uncoil.
+
+Cytokinesis, the division of the cytoplasm, usually begins during telophase. In animal cells, a contractile ring of actin and myosin forms beneath the plasma membrane and pinches the cell in two, creating a groove called the cleavage furrow. In plant cells, which have rigid walls, vesicles from the Golgi apparatus gather in the middle of the cell and fuse to form a cell plate, which grows outwards until it joins the existing wall and divides the cell.
+
+Mitosis produces two daughter cells that are genetically identical to each other and to the parent cell. It is used for growth, for the repair of damaged tissue, and for asexual reproduction in single-celled eukaryotes.
+
+=== PAGE ===
+Lecture 10 · Control of the cell cycle
+
+The cell cycle is driven by a control system that triggers and coordinates the major events of the cycle. The central components of this system are proteins called cyclins and enzymes called cyclin-dependent kinases, or Cdks. A Cdk is active only when it is bound to a cyclin, and the concentration of cyclins rises and falls during the cycle. When a particular cyclin accumulates, it activates its partner Cdk, which then adds phosphate groups to target proteins that carry out the next step of the cycle. The complex that triggers entry into mitosis is called maturation-promoting factor, or MPF.
+
+The control system pauses at checkpoints, where it checks whether conditions are right before allowing the cycle to continue. The G1 checkpoint, known in mammalian cells as the restriction point, determines whether the cell will divide; if the cell does not receive a go-ahead signal there, it usually enters G0. The G2 checkpoint checks that DNA replication is complete and that the DNA is undamaged. The spindle checkpoint, which operates during mitosis, ensures that anaphase does not begin until every chromosome is attached to the spindle.
+
+Leland Hartwell, Tim Hunt and Paul Nurse shared the Nobel Prize in Physiology or Medicine in 2001 for their discoveries of the key regulators of the cell cycle.
+
+=== PAGE ===
+Lecture 10 · Cancer: a failure of cycle control
+
+Cancer cells do not respond normally to the signals that control the cell cycle. They divide excessively, invade other tissues and may eventually kill the organism. Normal cells in culture stop dividing when they cover the surface of the dish in a single layer, a behaviour called density-dependent inhibition, and most normal cells divide only when they are attached to a surface, a behaviour called anchorage dependence. Cancer cells show neither behaviour and continue to pile up on one another.
+
+Cancer usually results from the accumulation of mutations in two kinds of genes. Proto-oncogenes are normal genes that stimulate cell division; mutations can turn them into oncogenes that stimulate division excessively, like an accelerator stuck down. Tumour-suppressor genes normally restrain division or repair damaged DNA; mutations that inactivate them remove the brakes. The tumour-suppressor gene p53 is mutated in more than half of human cancers. Its protein, sometimes called the guardian of the genome, halts the cell cycle when DNA is damaged and can trigger the cell's death if the damage cannot be repaired.
+
+Because several mutations are usually needed before a cell becomes fully cancerous, the incidence of most cancers rises sharply with age.
+
+=== PAGE ===
+Lecture 11 · Cell signalling: reception
+
+Cells communicate with each other by chemical signals. In local signalling, a cell releases molecules that act on nearby cells; growth factors, which stimulate nearby target cells to grow and divide, are an example. In synaptic signalling, a nerve cell releases neurotransmitter molecules into the narrow gap between it and its target cell. In long-distance signalling, specialised cells release hormones into the bloodstream, which carries them to target cells throughout the body.
+
+The process of cell signalling can be divided into three stages: reception, transduction and response. In reception, a signal molecule, called a ligand, binds to a receptor protein on or in the target cell. The binding is specific: each receptor recognises only one ligand or a few closely related ones. Binding usually changes the shape of the receptor, which is the first step in passing the signal on.
+
+Most receptors are proteins in the plasma membrane, because most signal molecules are too large or too polar to cross the membrane. Steroid hormones such as testosterone and oestrogen are an exception. Because they are small and hydrophobic, they cross the plasma membrane and bind to receptors inside the cell. The hormone-receptor complex then enters the nucleus and acts as a transcription factor that turns particular genes on.
+
+=== PAGE ===
+Lecture 11 · Membrane receptors and transduction
+
+There are three main kinds of membrane receptor. G protein-coupled receptors are the largest family of cell-surface receptors; each is a single protein that crosses the membrane seven times and works with a G protein that binds the energy-rich molecule GTP. When a ligand binds, the receptor activates the G protein, which in turn activates another membrane protein, often an enzyme. Many drugs act on G protein-coupled receptors. Receptor tyrosine kinases are receptors that add phosphate groups to tyrosine amino acids; when ligands bind, two receptors join together and phosphorylate each other, and the phosphorylated receptors then activate many different relay proteins at once. Ligand-gated ion channels are receptors that open or close a channel for ions when a ligand binds, and they are especially important in the nervous system.
+
+Transduction is the stage in which the signal is relayed from the receptor to the molecules that produce the response. It often involves a chain of protein kinases, enzymes that transfer phosphate groups from ATP to other proteins, each kinase activating the next in a phosphorylation cascade. Enzymes called protein phosphatases remove the phosphate groups and switch the pathway off when the signal is no longer present.
+
+Many pathways also use small non-protein molecules called second messengers. Cyclic AMP, made from ATP by the enzyme adenylyl cyclase, is a widely used second messenger. Calcium ions are another.
+
+=== PAGE ===
+Lecture 11 · Response and amplification
+
+The final stage of signalling is the cell's response. The signal may cause a change in the activity of enzymes already present in the cytoplasm, or it may change gene expression in the nucleus, leading to the production of new proteins.
+
+The multistep pathways of signal transduction amplify the signal. Because each enzyme in a cascade can activate many molecules of the next, a small number of signal molecules can produce a very large response. In the response of liver cells to the hormone adrenaline, for example, the binding of a single hormone molecule can lead to the release of millions of glucose molecules from stored glycogen.
+
+The response of a cell to a signal depends on the particular collection of receptors, relay proteins and response proteins it contains. This is why the same signal can have different effects on different cells. Adrenaline speeds the heartbeat by acting on heart muscle cells but causes the release of glucose by acting on liver cells.
+
+Signalling pathways must also be turned off. When the concentration of signal molecules falls, ligands leave their receptors, G proteins hydrolyse their GTP and become inactive, phosphodiesterases convert cyclic AMP back into AMP, and phosphatases remove phosphates from the kinases of the cascade. The ability to switch signals off quickly allows cells to respond to new signals.
+
+=== PAGE ===
+Practical 3 · Fluorescence staining of the cytoskeleton
+
+In the third practical, students fix cultured cells and stain their actin microfilaments, microtubules and nuclei with fluorescent probes.
+
+Cells are grown on glass coverslips placed in the wells of a culture plate. They are rinsed with warm phosphate-buffered saline and fixed with 4 percent formaldehyde for 10 minutes, which cross-links proteins and preserves the cell structure. The membranes are then made permeable with a mild detergent so that the stains can enter the cells.
+
+Actin filaments are stained with fluorescent phalloidin, a toxin from the death cap mushroom that binds tightly and specifically to filamentous actin. Microtubules are stained in two steps: an antibody that binds tubulin is applied first, followed by a second antibody that carries a fluorescent dye and binds to the first. Nuclei are stained with a blue fluorescent dye that binds DNA. Between steps the coverslips are washed three times with buffer to remove unbound stain.
+
+Coverslips are mounted on glass slides and examined with the fluorescence microscope using a separate filter set for each colour. Students must record images of at least five cells and describe the distribution of each kind of filament.
+
+Cells for this practical are collected exactly as in Practical 1. In this course, cells are always pelleted by centrifugation at 1000 g for 5 minutes, so that the pellet is firm enough to remove the supernatant without loss of cells, and they are then reseeded onto the coverslips.
+
+=== PAGE ===
+Problem Set 2 (assessed, 10 percent)
+
+The following problems make up the assessed problem set for the module. Answers must be handed in on paper at the start of the problem class in week 11. No model answers will be issued before the deadline. Some problems require reading beyond these lecture notes.
+
+1. Explain how the CRISPR-Cas9 system is used to cut a specific DNA sequence, and describe the role of the guide RNA.
+2. Describe each of the eight steps of the citric acid cycle, naming the enzyme that catalyses each step.
+3. Explain how a Western blot is used to detect a single protein in a cell lysate after gel electrophoresis.
+4. Compare the mechanisms by which prions and viruses cause disease.
+5. Describe the structure of a nuclear pore complex and explain how importin proteins carry cargo into the nucleus.
+6. Explain the role of the Na+/glucose cotransporter in oral rehydration therapy for cholera.
+7. Outline the stages of meiosis and explain how crossing over increases genetic variation.
+8. Explain how the polymerase chain reaction amplifies a DNA sequence, giving the temperature of each step.
+
+=== PAGE ===
+Lecture 12 · Cell death: apoptosis and necrosis
+
+Cells can die in two fundamentally different ways. Necrosis is an uncontrolled form of death caused by severe injury, such as lack of oxygen, extreme heat or toxic chemicals. In necrosis the cell swells, its membranes rupture, and its contents spill out into the surrounding tissue, provoking inflammation.
+
+Apoptosis, by contrast, is a controlled, programmed form of cell death in which the cell dismantles itself in an orderly way. The cell shrinks, its chromatin condenses, its DNA is cut into fragments, and the cell breaks up into membrane-bound pieces called apoptotic bodies. The phospholipid phosphatidylserine, normally kept on the inner face of the plasma membrane, appears on the outer surface, where it serves as an eat-me signal that causes neighbouring cells or macrophages to engulf the apoptotic bodies. Because the cell's contents never spill out, apoptosis does not cause inflammation.
+
+Apoptosis is essential for normal development and for the health of the adult body. During the development of the human hand, for example, the cells between the developing fingers die by apoptosis, separating the fingers. In the developing nervous system, about half of the nerve cells formed are later eliminated by apoptosis. In the adult, apoptosis removes cells that are damaged, infected or potentially cancerous.
+
+=== PAGE ===
+Lecture 12 · The machinery of apoptosis
+
+Apoptosis is carried out by a family of protein-cutting enzymes called caspases. Caspases are present in the cell all the time in an inactive form and are activated by cutting. Initiator caspases are activated first in response to a death signal, and they in turn cut and activate the executioner caspases, which cut hundreds of proteins in the cell and bring about its orderly dismantling. Caspase-3 is the principal executioner caspase in human cells.
+
+There are two main pathways that trigger apoptosis. In the extrinsic pathway, a signal molecule from outside the cell binds to a death receptor on the plasma membrane, which activates the initiator caspase-8. In the intrinsic pathway, internal damage such as irreparable DNA damage causes the outer membrane of the mitochondria to become leaky and release the protein cytochrome c into the cytosol. Cytochrome c binds to a protein called Apaf-1, and the resulting complex, called the apoptosome, activates the initiator caspase-9.
+
+The release of cytochrome c is controlled by proteins of the Bcl-2 family. Some members of the family, such as Bax, promote the release of cytochrome c, while others, such as Bcl-2 itself, prevent it. The balance between these opposing proteins determines whether the cell survives. Many cancer cells make excessive amounts of Bcl-2, which allows them to avoid apoptosis even when their DNA is badly damaged.
+
+=== PAGE ===
+Lecture 12 · Apoptosis in health and disease
+
+Too little apoptosis and too much apoptosis can both cause disease. Too little apoptosis allows damaged cells to survive and multiply, and it contributes to cancer and to autoimmune diseases, in which immune cells that attack the body's own tissues fail to be eliminated. Too much apoptosis contributes to the loss of nerve cells in neurodegenerative diseases and to the death of heart muscle cells after a heart attack.
+
+The study of programmed cell death began with the nematode worm Caenorhabditis elegans. Exactly 131 of the 1,090 cells formed during the development of an adult hermaphrodite worm die by apoptosis, always the same cells at the same times. By studying mutant worms in which these deaths did not happen, Sydney Brenner, Robert Horvitz and John Sulston identified the genes that control programmed cell death, work for which they shared the Nobel Prize in Physiology or Medicine in 2002. The worm genes turned out to have close counterparts in humans, including the genes for caspases and for the Bcl-2 family.
+
+Revision guidance: the final examination may include questions on any lecture in this module, and on the three practicals. Students should be able to describe the structure and function of each organelle, explain the flow of genetic information from DNA to protein, describe the stages and control of the cell cycle, outline the three stages of cell signalling, and distinguish apoptosis from necrosis.

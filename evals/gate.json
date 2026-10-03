@@ -1,0 +1,19 @@
+{
+  "_about": "Claim-eval regression gate (backend/eval/gate.py). The current run's overall mean may be worse than the baseline's by at most `margin` (absolute, in the metric's units; or a fraction of the baseline when `relative`). Point `baseline` at the newest accepted baseline after recording it.",
+  "baseline": "evals/baselines/329a031.json",
+  "metrics": {
+    "claim_precision":            {"better": "higher", "margin": 0.05},
+    "fact_recall":                {"better": "higher", "margin": 0.05},
+    "late_fact_recall":           {"better": "higher", "margin": 0.15},
+    "miscitation_rate":           {"better": "lower",  "margin": 0.03},
+    "unsupported_rate":           {"better": "lower",  "margin": 0.03},
+    "unverifiable_rate":          {"better": "lower",  "margin": 0.05},
+    "contradictions_caught_rate": {"better": "higher", "margin": 0.20},
+    "qb_violation_rate":          {"better": "lower",  "margin": 0.10},
+    "est_pipeline_tokens":        {"better": "lower",  "margin": 0.25, "relative": true},
+    "pipeline_cost_usd":          {"better": "lower",  "margin": 0.25, "relative": true},
+    "seconds":                    {"better": "lower",  "margin": 0.50, "relative": true}
+  },
+  "informational": ["grounding_removed", "grounding_rewritten", "grounding_unjudged",
+                    "claims_total", "est_judge_tokens", "judge_cost_usd"]
+}

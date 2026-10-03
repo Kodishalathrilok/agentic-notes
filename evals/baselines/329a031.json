@@ -1,0 +1,85 @@
+{
+  "commit": "329a031e935c339435f62e24a534f1596f7e4d52",
+  "date": "2026-10-01",
+  "models": {
+    "writer": "gemini-3.5-flash-lite",
+    "judge": "gemini-3.5-flash-lite",
+    "note": "The models the weekly gate (.github/workflows/eval.yml) runs at this commit. At this commit the judge defaults to the writer model."
+  },
+  "legacy_eval": {
+    "status": "ok",
+    "comparability": "self-judged by the writer, not comparable",
+    "comparability_reason": "Writer and judge are the same model, so the judge is grading its own family's output. Later baselines require a judge from a different model family; do not compare these scores with theirs, and do not quote them as a measured improvement.",
+    "models": {
+      "writer": "gemini-3.5-flash-lite",
+      "judge": "gemini-3.5-flash-lite"
+    },
+    "samples_succeeded": 4,
+    "report_timestamp": "2026-10-03T11:34:48.657404",
+    "runs": 1,
+    "summary": {
+      "full": {
+        "faithfulness": {
+          "mean": 9.5,
+          "std": 0.87
+        },
+        "coverage": {
+          "mean": 10,
+          "std": 0.0
+        },
+        "clarity": {
+          "mean": 10,
+          "std": 0.0
+        },
+        "avg_hallucinations": 0.5,
+        "quiz_accuracy": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "avg_revisions": 0
+      }
+    }
+  },
+  "claim_eval": {
+    "status": "not_run",
+    "reason": "The claim-level eval did not exist at this commit. Its numbers for this commit come from running the new harness against this commit's pipeline code (evals/run_before_after.sh), which needs provider keys.",
+    "summary": null
+  },
+  "keyless_measurements": {
+    "tests": {
+      "command": "cd backend && pytest -o addopts='' -rN",
+      "passed": 590,
+      "failed": 0
+    },
+    "retrieval_benchmark": {
+      "command": "cd backend && python -m eval.benchmark_retrieval",
+      "embeddings": "unavailable (no GEMINI_API_KEY); the semantic and hybrid columns fell back to BM25",
+      "dataset": "backend/eval/retrieval_dataset.py: one 1,415-character document, 3 chunks, 9 queries",
+      "top_k": 10,
+      "results": {
+        "semantic": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "bm25": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "hybrid": {
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "caveat": "Degenerate: the document splits into 3 chunks and a k=10 budget (7,000 characters) covers all of them, so every query returns every chunk and recall@5/@10 are 1.0 by construction."
+    },
+    "grounding_fix_tests": {
+      "file": "backend/tests/test_grounding_fixes.py (added later, run against this commit's agent.py)",
+      "total": 23,
+      "passed": 6,
+      "failed": 17
+    }
+  }
+}
