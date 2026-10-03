@@ -22,7 +22,7 @@ claim_judge). Per run it records:
 and reports mean, standard deviation, min and max per fixture and overall.
 
     python -m eval.claim_eval --writer-model gemini-3.5-flash-lite \\
-        --judge-model nvidia/llama-3.1-nemotron-70b-instruct --runs 3 \\
+        --judge-model nvidia/nemotron-3-super-120b-a12b --runs 3 \\
         --gate ../evals/gate.json
 
 --pipeline-dir runs the same harness against another checkout's backend

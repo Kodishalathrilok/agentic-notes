@@ -3,7 +3,7 @@
 # record both baselines. Needs provider keys for the writer and the judge
 # (e.g. GEMINI_API_KEY for a Gemini writer, NVIDIA_API_KEY for an NVIDIA judge).
 #
-#   JUDGE_MODEL=nvidia/llama-3.1-nemotron-70b-instruct evals/run_before_after.sh 329a031
+#   JUDGE_MODEL=nvidia/nemotron-3-super-120b-a12b evals/run_before_after.sh 329a031
 #
 # For each commit it records, in evals/baselines/<short-sha>.json:
 #   legacy_eval - that commit's own eval.run_eval (the short-fixture eval)

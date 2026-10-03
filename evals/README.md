@@ -75,7 +75,7 @@ the current checkout with the same eval:
 
 ```bash
 export GEMINI_API_KEY=... NVIDIA_API_KEY=...
-JUDGE_MODEL=nvidia/llama-3.1-nemotron-70b-instruct evals/run_before_after.sh 329a031
+JUDGE_MODEL=nvidia/nemotron-3-super-120b-a12b evals/run_before_after.sh 329a031
 ```
 
 then point `gate.json` at the newer baseline.

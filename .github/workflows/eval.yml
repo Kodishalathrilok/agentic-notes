@@ -1,10 +1,16 @@
-name: Eval (faithfulness gate)
+name: Eval (weekly check)
 
-# Runs the LLM-judge eval and FAILS if the full pipeline's faithfulness drops
-# below the threshold. Manual + weekly (not on every push) to control API cost.
-# Requires repository secrets: NVIDIA_API_KEY and/or GEMINI_API_KEY.
+# Runs the LLM-judge evals and fails THIS job if the full pipeline's
+# faithfulness drops below the threshold, or a claim-level metric falls behind
+# the stored baseline. Manual + weekly (not on every push) to control API cost.
+# Requires repository secrets: NVIDIA_API_KEY and GEMINI_API_KEY (both).
 #
-# This gate failed 12 times in a row, from its first run, without anyone
+# It is a check, not a gate: nothing waits on it. ci.yml deploys on tests +
+# build alone, so a red run here reports a regression but blocks no merge and
+# no deploy. It used to be called "faithfulness gate", which claimed more than
+# that.
+#
+# This check failed 12 times in a row, from its first run, without anyone
 # noticing: it referenced secrets that were never created, so every run died
 # before a single model call and reported "faithfulness 0.00" — which reads
 # exactly like a catastrophic quality regression. Two things below exist
@@ -18,15 +24,21 @@ on:
 
 permissions:
   contents: read
-  issues: write # so a failed gate can raise an issue
+  issues: write # so a failed check can raise an issue
 
 jobs:
   eval:
-    name: Faithfulness gate
+    name: Weekly eval
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
+    env:
+      # One definition for every step, so the two evals can never end up judged
+      # by different models. A repository variable overrides it; the default
+      # must be a model family different from the writer's (gemini-3.5-flash-lite
+      # is "google", this is "nvidia-nemotron" - see eval/claim_eval.model_family).
+      JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'nvidia/nemotron-3-super-120b-a12b' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,7 +52,7 @@ jobs:
       # The writer (Gemini) and the judge (NVIDIA) must be different model
       # families, so the gate needs BOTH keys. Without them every run fails
       # before a model call; fail here with the real reason instead.
-      - name: Check both provider keys are available
+      - name: Check both provider keys and the judge model are set
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -49,6 +61,11 @@ jobs:
             echo "::error title=Eval cannot run::The writer (Gemini) and the judge (NVIDIA) are different model families, so both NVIDIA_API_KEY and GEMINI_API_KEY are needed. Add them under Settings -> Secrets and variables -> Actions. This is a configuration problem, NOT a quality regression."
             exit 1
           fi
+          if [ -z "$JUDGE_MODEL" ]; then
+            echo "::error title=Eval cannot run::JUDGE_MODEL is empty. Set the JUDGE_MODEL repository variable to a served model id, or remove it to use the default. This is a configuration problem, NOT a quality regression."
+            exit 1
+          fi
+          echo "Judge model: $JUDGE_MODEL"
 
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -64,7 +81,6 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct' }}
         run: >
           python -m eval.run_eval --variant full --model gemini-3.5-flash-lite
           --judge-model "$JUDGE_MODEL" --delay 2 --check-faithfulness 7.0
@@ -77,7 +93,6 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct' }}
         run: >
           python -m eval.claim_eval --writer-model gemini-3.5-flash-lite
           --judge-model "$JUDGE_MODEL" --runs 3 --delay 2 --gate ../evals/gate.json
@@ -93,13 +108,13 @@ jobs:
 
       # Scheduled runs only e-mail whoever last touched the cron, which is how
       # 12 failures went unseen. An issue is visible in the repo itself.
-      - name: Report a failing gate as an issue
+      - name: Report a failing check as an issue
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = `The weekly eval gate (faithfulness or claim-level baseline) failed.\n\n- Run: ${run}\n- Commit: ${context.sha}\n\nCheck whether this is a real regression or a configuration problem (missing key, retired model id) before changing pipeline code.`;
+            const body = `The weekly eval check (faithfulness or claim-level baseline) failed.\n\n- Run: ${run}\n- Commit: ${context.sha}\n\nCheck whether this is a real regression or a configuration problem (missing key, retired model id) before changing pipeline code.`;
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: "open", labels: "eval-gate",
@@ -112,6 +127,6 @@ jobs:
             } else {
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
-                title: "Eval gate is failing", labels: ["eval-gate"], body,
+                title: "Weekly eval is failing", labels: ["eval-gate"], body,
               });
             }

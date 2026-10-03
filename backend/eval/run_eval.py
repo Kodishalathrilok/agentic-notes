@@ -9,7 +9,7 @@ two variants so the Tier-1 improvements are measurable:
   full      — the complete run_agent pipeline (grounded critique + revise loop)
 
 Usage (from the backend/ directory):
-  python -m eval.run_eval --judge-model nvidia/llama-3.1-nemotron-70b-instruct
+  python -m eval.run_eval --judge-model nvidia/nemotron-3-super-120b-a12b
   python -m eval.run_eval --runs 2 --judge-model ...        # 2 runs per fixture
   python -m eval.run_eval --variant full --judge-model ...  # full pipeline only
 
