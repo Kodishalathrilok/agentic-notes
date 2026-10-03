@@ -7,12 +7,38 @@
     "note": "The models the weekly gate (.github/workflows/eval.yml) runs at this commit. At this commit the judge defaults to the writer model."
   },
   "legacy_eval": {
-    "status": "not_run",
-    "command": "python -m eval.run_eval --variant full --model gemini-3.5-flash-lite --delay 2 --check-faithfulness 7.0",
-    "reason": "The recording session had no NVIDIA_API_KEY or GEMINI_API_KEY, so no model call could be made. Every sample failed before reaching a provider ('The AI providers are unavailable right now'). The harness at this commit still printed faithfulness 0.00 for 0 samples; that is not a score and is not recorded here.",
-    "samples_succeeded": 0,
-    "samples_attempted": 4,
-    "summary": null
+    "status": "ok",
+    "comparability": "self-judged by the writer, not comparable",
+    "comparability_reason": "Writer and judge are the same model, so the judge is grading its own family's output. Later baselines require a judge from a different model family; do not compare these scores with theirs, and do not quote them as a measured improvement.",
+    "models": {
+      "writer": "gemini-3.5-flash-lite",
+      "judge": "gemini-3.5-flash-lite"
+    },
+    "samples_succeeded": 4,
+    "report_timestamp": "2026-10-03T11:34:48.657404",
+    "runs": 1,
+    "summary": {
+      "full": {
+        "faithfulness": {
+          "mean": 9.5,
+          "std": 0.87
+        },
+        "coverage": {
+          "mean": 10,
+          "std": 0.0
+        },
+        "clarity": {
+          "mean": 10,
+          "std": 0.0
+        },
+        "avg_hallucinations": 0.5,
+        "quiz_accuracy": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "avg_revisions": 0
+      }
+    }
   },
   "claim_eval": {
     "status": "not_run",
