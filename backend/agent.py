@@ -1215,9 +1215,27 @@ def write_notes_stream(context, mode, tone, length, fmt, plan, model=None, instr
 # Agent: Section writer (map-reduce path for long documents)
 # ---------------------------------------------------------------------------
 
+# How much of the part-writer prompt the list of earlier headings may take.
+# The prompt around the passages is held under 4,000 chars
+# (test_writer_context_budget), so the list is the most recent headings that
+# fit, not all of them; notes_tidy.merge_sections is the guarantee.
+_COVERED_CHARS = 180
+
+
+def _covered_line(covered) -> str:
+    picked, used = [], 0
+    for heading in reversed(list(dict.fromkeys(covered or []))):
+        heading = heading[:40]
+        if used + len(heading) + 2 > _COVERED_CHARS:
+            break
+        picked.append(heading)
+        used += len(heading) + 2
+    return "; ".join(reversed(picked))
+
+
 def write_section_stream(section, context, mode, tone, length, fmt, checklist=None, model=None,
                          instructions="", doc_type="explanatory", on_serve=None,
-                         is_part=False, cancel=None):
+                         is_part=False, cancel=None, background_ids=None, covered=None):
     """Write ONE unit of a larger set of notes from its own context (streamed).
 
     `is_part` distinguishes the two callers. An outline section has a topical
@@ -1226,6 +1244,11 @@ def write_section_stream(section, context, mode, tone, length, fmt, checklist=No
     'the section titled "Pages 8-10"' made one window narrate its own confusion
     into the notes ("Now, I need to write the section..."), so a part gets a
     prompt that describes the actual job.
+
+    For a part, `background_ids` are the passages in `context` that belong to
+    other parts of the document, and `covered` the headings earlier parts have
+    already written. Both exist to stop a part restarting a topic that is
+    someone else's.
     """
     related = "\n".join(f"- {c}" for c in (checklist or [])[:6])
     words = SECTION_WORDS.get((length or "medium").lower(), "120-180 words")
@@ -1244,31 +1267,51 @@ study notes. This part covers {section} of the source document. Write notes on
 the material in the CONTEXT below and nothing else.
 
 Give this part your own short topical headings taken from the material. Do NOT
-mention page numbers, part numbers, or these instructions in the notes, and do
-NOT narrate your own process — no "the passages show", no "I need to", no
-commentary about what you can or cannot find. Write the notes themselves, with
-no preamble."""
+mention page numbers, part numbers, the passages or these instructions, and do
+NOT narrate your own process ("the passages show", "I need to"). Leave out
+silently whatever the passages do not cover, and never leave a heading empty.
+End every bullet with a full stop. No preamble."""
+        # The length used to be called "a minimum" with "prefer more detail
+        # over brevity", next to a hard token cap: the writer overran the cap
+        # and its last bullet was cut off mid-word.
+        length_rule = f"""Section length: {words}. Cover this part's points with concrete facts from the
+context, then stop: no padding, and never stop in the middle of a bullet."""
+        # Every part is handed the same plan points, so "cover any that belong
+        # here" invited each one to write about all of them.
+        points_rule = "Plan points - cover one only where THIS part's passages discuss it:"
+        notes_so_far = ""
+        if background_ids:
+            refs = ", ".join(f"[{i}]" for i in list(background_ids)[:4])
+            notes_so_far += (f"Passages {refs} are background from other parts: cite "
+                             f"them, but give them no heading of their own.\n")
+        earlier = _covered_line(covered)
+        if earlier:
+            notes_so_far += (f"Earlier parts already wrote these headings - "
+                             f"do not restart them: {earlier}\n")
     else:
         intro = f"""You are the WRITING agent producing ONE SECTION of a larger set of
 study notes. Write ONLY the body of the section titled "{section}" — do NOT
 repeat the section title, do NOT write other sections, no preamble."""
+        length_rule = f"""Section length: {words}. Treat this as a minimum — cover this section's points
+thoroughly with concrete facts and explanations from the context. Prefer more
+detail over brevity."""
+        points_rule = "Cover any of these plan points that belong to this section:"
+        notes_so_far = ""
 
     prompt = f"""{intro}
 
 Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
-Section length: {words}. Treat this as a minimum — cover this section's points
-thoroughly with concrete facts and explanations from the context. Prefer more
-detail over brevity.
+{length_rule}
 
-Cover any of these plan points that belong to this section:
+{points_rule}
 {related or '- (use your judgment)'}
 
 {_format_instructions(fmt)}
 {_doc_type_rule(doc_type)}
 {_CITE_RULE}
 {_instr_block(instructions)}
-CONTEXT (numbered passages retrieved for THIS section — cite these):
+{notes_so_far}CONTEXT (numbered passages retrieved for THIS section — cite these):
 {context}"""
 
     yield from call_model_stream(
@@ -2719,7 +2762,12 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 parts.append(s)
                 return _emit("notes_delta", "write", s)
 
-            def _write_unit(sec, sec_chunks, out_q=None):
+            # Headings finished windows have written, so a later window can be
+            # told not to restart them. Best effort: windows run concurrently,
+            # so a window only sees those that finished before it started.
+            covered = []
+
+            def _write_unit(sec, sec_chunks, own_ids, out_q=None):
                 """Up to two attempts at one window, or at one half of a window.
 
                 Returns (text, err, cut). `cut` names a stream that stopped
@@ -2737,6 +2785,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 # Only a unit that emitted NOTHING is retried, so a retry can
                 # never duplicate text the client has already been streamed.
                 ctx = _format_context(sec_chunks)
+                background = [c["id"] for c in sec_chunks if c["id"] not in own_ids]
                 err = None
                 for _attempt in (1, 2):
                     raise_if_cancelled(cancel)
@@ -2746,6 +2795,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                             sec, ctx, mode, tone, length, active_fmt,
                             checklist=checklist, model=model, instructions=instructions,
                             doc_type=doc_type, on_serve=_record_serve, is_part=True,
+                            background_ids=background, covered=list(covered),
                             **_cancel_kw(cancel),
                         ):
                             raise_if_cancelled(cancel)
@@ -2794,7 +2844,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 # consumer can never hang on it.
                 lost = []
                 try:
-                    text, err, cut = _write_unit(sec, sec_chunks, out_q)
+                    text, err, cut = _write_unit(sec, sec_chunks, own_ids, out_q)
                     halves = _halves(sec, sec_chunks, own_ids) if cut else []
                     if halves:
                         # A cut-off attempt is never stitched into the notes.
@@ -2803,13 +2853,14 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                         # whole lines and is recorded with its own pages.
                         out_q.put(("reset", None))
                         for h_sec, h_chunks, h_pages in halves:
-                            h_text, h_err, h_cut = _write_unit(h_sec, h_chunks)
+                            h_text, h_err, h_cut = _write_unit(h_sec, h_chunks, own_ids)
                             if h_err is not None or h_cut:
                                 h_text = notes_tidy.drop_fragment(h_text, cut=True)
                                 lost.append({"window": h_sec, "pages": h_pages,
                                              "reason": h_cut or _failure_slug(h_err)})
                             if h_text.strip():
                                 out_q.put(("delta", h_text.rstrip() + "\n\n"))
+                            covered.extend(notes_tidy.headings(h_text))
                     elif err is not None or cut:
                         # The connection dropped after text had been streamed (a
                         # window that already streamed text is not written
@@ -2821,6 +2872,8 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                             out_q.put(("delta", kept))
                         lost.append({"window": sec, "pages": sec_pages,
                                      "reason": cut or _failure_slug(err)})
+                    if not halves:
+                        covered.extend(notes_tidy.headings(text))
                 except PipelineCancelled:
                     lost = []
                 finally:

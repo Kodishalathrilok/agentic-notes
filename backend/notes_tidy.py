@@ -87,6 +87,12 @@ def _levels(lines):
     return out
 
 
+def headings(text: str):
+    """The heading titles in `text`, markup stripped, top to bottom."""
+    lines = (text or "").split("\n")
+    return [line.strip().strip("#*_: ") for line, lvl in zip(lines, _levels(lines)) if lvl]
+
+
 def _blank(line: str) -> bool:
     return not line.strip() or bool(_RULE.match(line))
 

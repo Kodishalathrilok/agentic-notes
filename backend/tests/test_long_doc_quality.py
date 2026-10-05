@@ -268,3 +268,107 @@ def test_unpunctuated_single_line_output_is_not_mistaken_for_a_cut_off(monkeypat
     events = _run(monkeypatch, stream)
     assert calls["n"] == _windows(events)
     assert not [e for e in events if e["type"] == "notes_reset"]
+
+
+# ---------------------------------------------------------------------------
+# e) the writer is told what not to write, before the passes above tidy up
+# ---------------------------------------------------------------------------
+
+def _part_prompt(monkeypatch, context="[1] passage text", **kw):
+    """The prompt the real writer builds for one part of a long document."""
+    captured = {}
+
+    def fake(prompt, **_kw):
+        captured["p"] = prompt
+        yield "x"
+
+    monkeypatch.setattr(agent, "call_model_stream", fake)
+    args = {"checklist": ["c" * 80] * 6, "instructions": "x" * 400, "doc_type": "mixed"}
+    list(agent.write_section_stream("Pages 100–120", context, "deep study", "academic",
+                                    "long", "bullet", is_part=True, **{**args, **kw}))
+    return captured["p"]
+
+
+def _head(prompt):
+    """The instructions: everything before the passages."""
+    return prompt.split("CONTEXT (numbered passages")[0]
+
+
+def test_the_writer_is_not_told_to_overrun_its_own_budget(monkeypatch):
+    """'Treat this as a minimum ... prefer more detail over brevity' sat next to
+    a hard token cap, which is how bullets came to end mid-word."""
+    head = _head(_part_prompt(monkeypatch))
+    assert "Treat this as a minimum" not in head
+    assert "Prefer more" not in head and "more\ndetail over brevity" not in head
+    assert "never stop in the middle of a bullet" in head
+
+
+def test_the_writer_is_told_to_leave_gaps_out_silently(monkeypatch):
+    head = " ".join(_head(_part_prompt(monkeypatch)).split())
+    assert "the passages or these instructions" in head  # in the "do NOT mention" list
+    assert "Leave out silently whatever the passages do not cover" in head
+    assert "never leave a heading empty" in head
+    assert "End every bullet with a full stop" in head
+
+
+def test_the_writer_is_told_which_passages_are_background(monkeypatch):
+    head = _head(_part_prompt(monkeypatch, background_ids=[40, 41]))
+    assert "[40], [41] are background from other parts" in head
+    assert "no heading of their own" in head
+    assert "background" not in _head(_part_prompt(monkeypatch))
+
+
+def test_the_writer_is_told_which_headings_already_exist(monkeypatch):
+    head = _head(_part_prompt(monkeypatch, covered=["RDF Triples", "OWL Classes"]))
+    assert "do not restart them: RDF Triples; OWL Classes" in head
+    assert "do not restart" not in _head(_part_prompt(monkeypatch))
+
+
+def test_the_passages_still_arrive_whole_after_the_new_instructions(monkeypatch):
+    context = "[7] first passage\n\n[8] second passage"
+    prompt = _part_prompt(monkeypatch, context=context, background_ids=[8],
+                          covered=["Earlier Topic"])
+    assert prompt.endswith(context)
+
+
+def test_the_instructions_stay_inside_the_prompt_size_ceiling(monkeypatch):
+    """test_writer_context_budget allows 4,000 chars around the passages. The
+    longest list of earlier headings and background passages must fit in it."""
+    context = "[1] passage text"
+    prompt = _part_prompt(
+        monkeypatch, context=context,
+        background_ids=list(range(5990, 6000)),
+        covered=[f"A fairly long heading about topic number {i}" for i in range(80)])
+    assert len(prompt) - len(context) <= 4000
+
+
+def _records_prompts(prompts):
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+        _serve(on_serve)
+        prompts.append(prompt)
+        cid = _ids(prompt)[0]
+        yield (f"## Heading from call {len(prompts)}\n"
+               f"- Passage {cid} makes a concrete point here [{cid}].\n")
+    return stream
+
+
+def test_a_later_window_is_told_the_headings_earlier_windows_wrote(monkeypatch):
+    monkeypatch.setattr(agent, "SECTION_CONCURRENCY", 1)  # one at a time: deterministic
+    prompts = []
+    _run(monkeypatch, _records_prompts(prompts))
+    assert len(prompts) > 2
+    assert "do not restart" not in _head(prompts[0]), "nothing was written before part 1"
+    assert "Heading from call 1" in _head(prompts[-1])
+
+
+def test_passages_named_as_background_are_ones_the_window_was_shown(monkeypatch):
+    prompts = []
+    _run(monkeypatch, _records_prompts(prompts))
+    named = 0
+    for prompt in prompts:
+        line = next((ln for ln in _head(prompt).split("\n")
+                     if "are background from other parts" in ln), "")
+        ids = [int(n) for n in agent._CITATION_RE.findall(line)]
+        named += len(ids)
+        assert set(ids) <= set(_ids(prompt)), "a passage the window never saw was named"
+    assert named, "no window was told which of its passages come from elsewhere"
