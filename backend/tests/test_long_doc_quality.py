@@ -5,6 +5,7 @@ reader. The defects were observed together on one 55-page document: a heading
 with nothing under it, a line about the passages, repeated topics, sections out
 of page order, and bullets cut off mid-word.
 """
+import itertools
 import re
 
 import agent
@@ -89,3 +90,53 @@ def test_short_document_draft_is_cleaned_too(monkeypatch):
     for notes in (_draft(events), _notes(events)):
         assert "## Topic" in notes
         assert "OWL Purpose" not in notes and "Passages do not" not in notes
+
+
+# ---------------------------------------------------------------------------
+# c) windows are merged: one heading per topic, no repeated bullet, page order
+# ---------------------------------------------------------------------------
+
+_CALLS = itertools.count(1)  # a number no two windows share
+
+
+def _repeats_itself(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+    """Every window writes its LATER passage first, restarts a shared topic,
+    and repeats one sentence word for word."""
+    _serve(on_serve)
+    ids = _ids(prompt)
+    lo, hi, n = ids[0], ids[-1], next(_CALLS)
+    yield (f"## Late part {hi}\n- Passage {hi} closes this part of the source [{hi}].\n\n"
+           f"## Early part {lo}\n- Passage {lo} opens this part of the source [{lo}].\n\n"
+           f"## Recurring Theme\n- Detail number {n} belongs to the recurring theme [{lo}].\n"
+           f"- The same sentence is written again by every single part [{lo}].\n")
+
+
+def _section_starts(notes):
+    """The first passage each '##' section cites, top to bottom."""
+    return [int(m.group(1)) for m in
+            (agent._CITATION_RE.search(s) for s in notes.split("\n## ")) if m]
+
+
+def test_windows_are_merged_into_one_heading_per_topic(monkeypatch):
+    events = _run(monkeypatch, _repeats_itself)
+    windows = sum(1 for e in events if e["type"] == "status"
+                  and e["content"].startswith("Writing section"))
+    assert windows > 2
+    for notes in (_draft(events), _notes(events)):
+        assert notes.count("## Recurring Theme") == 1
+        assert notes.count("belongs to the recurring theme") == windows, (
+            "merging must keep every window's own bullet")
+
+
+def test_a_bullet_repeated_by_every_window_appears_once(monkeypatch):
+    events = _run(monkeypatch, _repeats_itself)
+    for notes in (_draft(events), _notes(events)):
+        assert notes.count("The same sentence is written again") == 1
+
+
+def test_sections_come_out_in_page_order(monkeypatch):
+    events = _run(monkeypatch, _repeats_itself)
+    for notes in (_draft(events), _notes(events)):
+        starts = _section_starts(notes)
+        assert len(starts) > 4
+        assert starts == sorted(starts), f"sections out of page order: {starts}"

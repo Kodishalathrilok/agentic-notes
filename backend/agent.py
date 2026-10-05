@@ -2852,7 +2852,10 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     f"the rest of the notes are complete.",
                 )
 
-            notes = notes_tidy.clean_notes("".join(parts)).strip()
+            # The windows were written independently, so the same topic can
+            # sit under several headings and out of page order: merge them
+            # before the critic (and the reader) sees the draft.
+            notes = notes_tidy.tidy("".join(parts), merge=True).strip()
             if not notes:
                 raise UserFacingError(
                     "The model returned an empty draft. That is usually a transient "
@@ -3084,9 +3087,10 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 yield _emit("notes_revised", "revise", notes)
 
         # Deterministic tidy, after every step that edits the notes: a revise
-        # round can bring back a line about the passages, and grounding deletes
-        # claim lines but never the heading they leave empty.
-        tidied = notes_tidy.clean_notes(notes)
+        # round can bring back a line about the passages (or, on a long
+        # document, a repeated section), and grounding deletes claim lines but
+        # never the heading they leave empty.
+        tidied = notes_tidy.tidy(notes, merge=sectioned)
         if tidied != notes:
             notes = tidied
             yield _emit("notes_revised", "revise", notes)

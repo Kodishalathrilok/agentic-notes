@@ -7,6 +7,7 @@ it is safe to run on any draft, any number of times.
 """
 
 import re
+from difflib import SequenceMatcher
 
 # Any number of digits: chunk ids reach retriever.MAX_CHUNKS (6000), and the
 # UI renders every bracketed number as a citation (NotesOutput.jsx), so a
@@ -127,3 +128,163 @@ def clean_notes(notes: str) -> str:
         kept.append(line)
     kept = _drop_empty_headings(kept)
     return "\n".join(kept) if kept != lines else notes
+
+
+# ---------------------------------------------------------------------------
+# Merge pass: a long document is written a window at a time and joined, so the
+# same topic can appear under several headings and in the wrong page order.
+# ---------------------------------------------------------------------------
+
+_BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(\S.*)$")
+_NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "neither", "nor"})
+_HEADING_FILLER = frozenset({"the", "a", "an", "of", "to", "and", "in", "for", "on"})
+_HEADING_NUMBER = re.compile(r"^[\s#*_]*\d+[.)]\s+")
+
+
+def _words(text: str):
+    return re.findall(r"[a-z0-9]+", CITATION_RE.sub(" ", text).lower())
+
+
+def _same_bullet(later, earlier) -> bool:
+    """`later` repeats `earlier`: it adds no word, negates nothing differently,
+    and is worded almost identically.
+
+    Deliberately strict. Similarity alone would merge "Process A uses 2 ATP"
+    with "Process B uses 2 ATP"; dropping a distinct fact is worse than keeping
+    a repeat. A paraphrase in different words is therefore NOT caught here.
+    """
+    if not set(later) <= set(earlier):
+        return False
+    if [w for w in later if w in _NEGATIONS] != [w for w in earlier if w in _NEGATIONS]:
+        return False
+    return SequenceMatcher(None, later, earlier, autojunk=False).ratio() >= 0.9
+
+
+def _add_citations(line: str, ids) -> str:
+    marks = "".join(f"[{i}]" for i in ids)
+    last = None
+    for last in CITATION_RE.finditer(line):
+        pass
+    if last:
+        return line[:last.end()] + marks + line[last.end():]
+    end = re.search(r"[.!?;:]?\s*$", line).start()
+    return f"{line[:end]} {marks}{line[end:]}"
+
+
+def _drop_repeated_bullets(lines):
+    """Drop a bullet that repeats an earlier one, moving its citations onto the
+    one kept so no page loses the citation that covered it."""
+    # ponytail: every bullet is compared with every earlier one - fine for a
+    # few hundred bullets; index by word set if notes ever get much longer.
+    out, seen, fenced = [], [], False
+    for i, line in enumerate(lines):
+        if _FENCE.match(line):
+            fenced = not fenced
+        m = None if fenced else _BULLET.match(line)
+        words = _words(m.group(2)) if m else []
+        if len(words) >= 4:
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            # A bullet with nested lines under it is a parent, never dropped.
+            has_children = bool(nxt.strip()) and (
+                len(nxt) - len(nxt.lstrip()) > len(m.group(1)))
+            dup = None if has_children else next(
+                (k for k, earlier in seen if _same_bullet(words, earlier)), None)
+            if dup is not None:
+                extra = [c for c in dict.fromkeys(CITATION_RE.findall(line))
+                         if f"[{c}]" not in out[dup]]
+                if extra:
+                    out[dup] = _add_citations(out[dup], extra)
+                continue
+            seen.append((len(out), words))
+        out.append(line)
+    return out
+
+
+def _heading_key(line: str):
+    """Same key = same topic: case, markup, numbering and word order ignored."""
+    return frozenset(_words(_HEADING_NUMBER.sub("", line))) - _HEADING_FILLER
+
+
+def _rstrip(items):
+    end = len(items)
+    while end and not items[end - 1][0].strip():
+        end -= 1
+    return items[:end]
+
+
+def _join_bodies(section, body):
+    """Append a later section's body to the earlier section with its heading."""
+    section, body = _rstrip(section), _rstrip(body)
+    while body and not body[0][0].strip():
+        body = body[1:]
+    if not body:
+        return section
+    both_bullets = _BULLET.match(section[-1][0]) and _BULLET.match(body[0][0])
+    return section + ([] if both_bullets else [("", 0)]) + body
+
+
+def _merge_block(items):
+    """Merge and order the sections of one block, at its shallowest heading
+    level, recursing into each section for the levels below.
+
+    `items` is [(line, heading_level)]. Subsections travel with their parent.
+    ponytail: windows that used different heading levels nest instead of
+    merging (a '###' window lands under the previous '##'); order is kept,
+    nothing is lost. Normalise levels per window if that is ever observed.
+    """
+    tops = [lvl for _line, lvl in items if lvl]
+    if not tops:
+        return items
+    top = min(tops)
+    starts = [i for i, (_line, lvl) in enumerate(items) if lvl == top]
+    pre = items[:starts[0]]
+
+    merged, where = [], {}
+    for a, b in zip(starts, starts[1:] + [len(items)]):
+        key = _heading_key(items[a][0])
+        if key and key in where:
+            merged[where[key]] = _join_bodies(merged[where[key]], items[a + 1:b])
+        else:
+            if key:
+                where[key] = len(merged)
+            merged.append(items[a:b])
+    merged = [[sec[0]] + _merge_block(sec[1:]) for sec in merged]
+
+    # Page order: chunk ids are document-ordered, so the first passage a
+    # section cites places it. A section citing nothing stays behind the one
+    # before it.
+    keys, last = [], -1
+    for sec in merged:
+        m = CITATION_RE.search("\n".join(line for line, _lvl in sec))
+        last = int(m.group(1)) if m else last
+        keys.append(last)
+    blocks = [pre] if any(line.strip() for line, _lvl in pre) else []
+    blocks += [sec for _key, sec in sorted(zip(keys, merged), key=lambda p: p[0])]
+
+    out = []
+    for block in blocks:
+        if out:
+            out.append(("", 0))
+        out.extend(_rstrip(block))
+    return out
+
+
+def merge_sections(notes: str) -> str:
+    """One heading per topic, no repeated bullet, sections in page order."""
+    lines = (notes or "").split("\n")
+    kept = _drop_repeated_bullets(lines)
+    out = [line for line, _lvl in _merge_block(list(zip(kept, _levels(kept))))]
+    unchanged = [ln for ln in out if ln.strip()] == [ln for ln in lines if ln.strip()]
+    return notes if unchanged else "\n".join(out)
+
+
+def tidy(notes: str, merge: bool = False) -> str:
+    """clean_notes, plus merge_sections for notes joined from several windows.
+
+    The second clean removes a heading the merge left empty (every bullet under
+    it was a repeat).
+    """
+    out = clean_notes(notes)
+    if merge:
+        out = clean_notes(merge_sections(out))
+    return notes if out == notes else out.rstrip()
