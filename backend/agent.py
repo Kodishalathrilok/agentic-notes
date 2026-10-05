@@ -3122,9 +3122,28 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         # flashcards above are generated from the clean notes, and the banner
         # then travels with the text into history, export and share - none of
         # which carry the event stream.
+        #
+        # Missing pages are the pages nothing in the FINAL notes cites, not the
+        # pages of a window that failed. A window that drops near its end has
+        # usually written and cited most of its pages already; charging it with
+        # all of them produced a banner naming pages the notes did cover.
+        cited = {chunk_map[int(n)].get("page") for n in _CITATION_RE.findall(notes)
+                 if int(n) in chunk_map}
+        if coverage["failed_pages"]:
+            missing = [p for p in coverage["failed_pages"] if p not in cited]
+            coverage["processed_pages"] += len(coverage["failed_pages"]) - len(missing)
+            coverage["failed_pages"] = missing
+            # failed_windows still names the part that did not finish.
+            coverage["complete"] = not missing
+        if sectioned:
+            # Recorded, not bannered: a healthy window may leave a title or
+            # reference page uncited, and that is not a failure.
+            coverage["uncited_pages"] = sorted(
+                {c["page"] for c in chunk_map.values() if c.get("page")} - cited)
         if not coverage["complete"]:
-            where = (f"pages {_page_ranges(coverage['failed_pages'])}"
-                     if coverage["failed_pages"]
+            pages = coverage["failed_pages"]
+            where = (f"page{'s' if len(pages) > 1 else ''} {_page_ranges(pages)}"
+                     if pages
                      else f"{len(coverage['failed_windows'])} part(s)")
             notes = (
                 f"> **Incomplete coverage** \u2014 {where} could not be generated "

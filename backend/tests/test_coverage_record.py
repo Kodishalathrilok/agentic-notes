@@ -7,6 +7,7 @@ share. The record now travels two ways: structured, on the `done` event, and in
 the notes text itself, which is what history and export actually persist.
 """
 import json
+import re
 
 import agent
 import retrieval.semantic as sem
@@ -183,3 +184,65 @@ def test_coverage_record_never_leaks_provider_detail(monkeypatch):
     blob = json.dumps(_coverage(events)) + _notes(events)
     for secret in ("SECRET_VALUE", "api_key", "https://", "integrate.api.nvidia.com"):
         assert secret not in blob, f"{secret!r} leaked into the coverage record"
+
+
+# ---------------------------------------------------------------------------
+# missing pages are the pages nothing cites, not the pages of a failed window
+# ---------------------------------------------------------------------------
+# Observed on a 55-page document: the banner read "pages 15-19, 50-55 could not
+# be generated" when 15-19 were written and cited and only page 55 was missing.
+# A window that dropped near its end was charged with every page it owned.
+
+_PASSAGE = re.compile(r"\[(\d+)\] (.*?)(?=\n\n\[\d+\] |\Z)", re.S)
+
+
+def _cite_then_drop(skip=None):
+    """Window 1 writes one cited bullet per passage - except passages containing
+    `skip` - and then the connection drops. Other windows write uncited text."""
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+        if on_serve:
+            on_serve("nvidia", "test-model", False, "")
+        if DOOMED not in prompt:
+            yield "content. "
+            return
+        context = prompt.split("CONTEXT (numbered passages")[-1]
+        for cid, text in _PASSAGE.findall(context):
+            if skip and skip in text:
+                continue
+            yield f"- Passage {cid} makes point number {cid} about its subject [{cid}].\n"
+        raise RuntimeError("connection dropped mid-stream")
+    return stream
+
+
+def test_pages_a_failed_window_cited_are_not_reported_missing(monkeypatch):
+    events = _run(monkeypatch, _cite_then_drop(skip="topic2 "))
+    cov = _coverage(events)
+    assert len(cov["failed_windows"]) == 1
+    assert len(cov["failed_windows"][0]["pages"]) > 1, "the window owned several pages"
+    assert cov["failed_pages"] == [2], "only the page nothing cites is missing"
+    assert cov["complete"] is False
+    assert cov["processed_pages"] + len(cov["failed_pages"]) == cov["total_pages"]
+
+
+def test_the_banner_names_only_the_uncited_page(monkeypatch):
+    notes = _notes(_run(monkeypatch, _cite_then_drop(skip="topic2 ")))
+    assert notes.startswith(
+        "> **Incomplete coverage** — page 2 could not be generated")
+
+
+def test_a_failed_window_whose_pages_are_all_cited_raises_no_banner(monkeypatch):
+    events = _run(monkeypatch, _cite_then_drop())
+    cov = _coverage(events)
+    assert len(cov["failed_windows"]) == 1, "the record still names the failed part"
+    assert cov["failed_pages"] == []
+    assert cov["complete"] is True
+    assert cov["processed_pages"] == cov["total_pages"]
+    assert "Incomplete coverage" not in _notes(events)
+
+
+def test_pages_nothing_cites_are_recorded(monkeypatch):
+    """Recorded, not bannered: a run with no failed window stays complete."""
+    cov = _coverage(_run(monkeypatch, _ok))
+    assert cov["uncited_pages"] == list(range(1, 15))
+    cov = _coverage(_run(monkeypatch, _cite_then_drop(skip="topic2 ")))
+    assert 2 in cov["uncited_pages"] and 1 not in cov["uncited_pages"]
