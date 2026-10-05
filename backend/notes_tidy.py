@@ -288,3 +288,55 @@ def tidy(notes: str, merge: bool = False) -> str:
     if merge:
         out = clean_notes(merge_sections(out))
     return notes if out == notes else out.rstrip()
+
+
+# ---------------------------------------------------------------------------
+# Cut-off text: a writer that stopped in the middle of its last line.
+# ---------------------------------------------------------------------------
+
+_SENTENCE_END = (".", "!", "?", ":", ";", "|")
+
+
+def _ends_sentence(line: str) -> bool:
+    core = CITATION_RE.sub("", line).rstrip().rstrip("*_)\"'”’` ")
+    return core.endswith(_SENTENCE_END)
+
+
+def trailing_fragment(text: str, cut: bool = False) -> bool:
+    """Does `text` stop in the middle of its last line?
+
+    `cut` means the stream is KNOWN to have stopped short (the provider
+    reported the token cap): then any last line that neither ends a sentence
+    nor is followed by a line break is a fragment.
+
+    Without it only the text can tell, and the test is strict so that a writer
+    who simply does not use full stops is never re-run for nothing: unbalanced
+    bold or code markers, or a last line that does not end a sentence when
+    nearly all of the others (three at least) do.
+    """
+    lines = [ln for ln in (text or "").split("\n") if ln.strip()]
+    if not lines:
+        return False
+    if sum(1 for ln in lines if _FENCE.match(ln)) % 2:
+        return True  # stopped inside a code block
+    last = lines[-1]
+    if _FENCE.match(last) or _level(last):
+        return False  # a bare heading is clean_notes' job
+    if last.count("**") % 2 or last.count("`") % 2:
+        return True
+    if _ends_sentence(last):
+        return False
+    if cut:
+        return not text.endswith("\n")
+    others = [ln for ln in lines[:-1] if not _level(ln) and not _FENCE.match(ln)]
+    return len(others) >= 3 and sum(map(_ends_sentence, others)) >= 0.8 * len(others)
+
+
+def drop_fragment(text: str, cut: bool = False) -> str:
+    """`text` without its unfinished last line (or its unclosed code block)."""
+    if not trailing_fragment(text, cut):
+        return text
+    lines = text.rstrip().split("\n")
+    fences = [i for i, ln in enumerate(lines) if _FENCE.match(ln)]
+    keep = fences[-1] if len(fences) % 2 else len(lines) - 1
+    return "\n".join(lines[:keep]) + ("\n" if keep else "")

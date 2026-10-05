@@ -2558,9 +2558,13 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
     The pipeline body behind run_agent (which adds cancellation and timing).
 
     Event types:
-      status, plan_done, sources, notes_delta, notes_done, critique_done,
-      revise_start, notes_revised, title_done, quiz_done, flashcards_done,
-      done, error
+      status, plan_done, sources, notes_delta, notes_reset, notes_done,
+      critique_done, revise_start, notes_revised, title_done, quiz_done,
+      flashcards_done, done, error
+
+    `notes_reset` carries the draft so far and replaces what the client has
+    accumulated from notes_delta: a window that was cut off is discarded and
+    written again, and its first attempt must not stay on screen.
 
     `sources` may be emitted AGAIN during the revise loop when corrective
     re-retrieval adds chunks for missing topics — the payload is always the
@@ -2692,7 +2696,8 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 # other windows - are what this window is responsible for, and
                 # therefore what is lost if it fails.
                 own_pages = sorted({c["page"] for c in win_chunks if c.get("page")})
-                section_ctx.append((title, ctx_chunks, own_pages))
+                section_ctx.append((title, ctx_chunks, own_pages,
+                                    {c["chunk_id"] for c in win_chunks}))
                 for c in ctx_chunks:
                     chunk_map[c["id"]] = c
             all_chunks = [chunk_map[i] for i in sorted(chunk_map)]
@@ -2714,51 +2719,113 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 parts.append(s)
                 return _emit("notes_delta", "write", s)
 
-            def _write_worker(sec, ctx, out_q):
-                # A window that produces nothing is retried once. call_model_stream
+            def _write_unit(sec, sec_chunks, out_q=None):
+                """Up to two attempts at one window, or at one half of a window.
+
+                Returns (text, err, cut). `cut` names a stream that stopped
+                short without failing: "max_tokens" (the provider said so) or
+                "truncated" (it ended on a visibly unfinished line). With
+                `out_q` the text is streamed to the client as it arrives.
+                """
+                # A unit that produces nothing is retried once. call_model_stream
                 # already fails over across providers, so reaching here means the
                 # whole chain came back empty or errored - usually transient (a 503,
                 # a truncated response). Observed live: two of six windows lost that
                 # way in one run, and a lost window is lost coverage, the one thing
                 # this milestone exists to prevent.
                 #
-                # Only a window that emitted NOTHING is retried, so a retry can
+                # Only a unit that emitted NOTHING is retried, so a retry can
                 # never duplicate text the client has already been streamed.
-                #
+                ctx = _format_context(sec_chunks)
+                err = None
+                for _attempt in (1, 2):
+                    raise_if_cancelled(cancel)
+                    buf, sent = [], False
+                    try:
+                        for delta in write_section_stream(
+                            sec, ctx, mode, tone, length, active_fmt,
+                            checklist=checklist, model=model, instructions=instructions,
+                            doc_type=doc_type, on_serve=_record_serve, is_part=True,
+                            **_cancel_kw(cancel),
+                        ):
+                            raise_if_cancelled(cancel)
+                            sent = True
+                            buf.append(delta)
+                            if out_q is not None:
+                                out_q.put(("delta", delta))
+                    except Exception as exc:  # noqa: BLE001
+                        err = exc
+                        if not sent:
+                            continue
+                        capped = (isinstance(exc, IncompleteStreamError)
+                                  and exc.reason == "max_tokens")
+                        return ("".join(buf), None if capped else exc,
+                                "max_tokens" if capped else "")
+                    if sent:
+                        text = "".join(buf)
+                        return (text, None,
+                                "truncated" if notes_tidy.trailing_fragment(text) else "")
+                    err = err or _WindowProducedNothing(
+                        f"no provider produced output for {sec}")
+                return "", err, ""
+
+            def _halves(sec, sec_chunks, own_ids):
+                """A window's own passages split in two, each half keeping the
+                window's passages from elsewhere (no new retrieval). Returns
+                [(title, chunks, pages)], or [] when there is nothing to split."""
+                own = [c for c in sec_chunks if c["id"] in own_ids]
+                if len(own) < 2:
+                    return []
+                extra = [c for c in sec_chunks if c["id"] not in own_ids]
+                mid = len(own) // 2
+                out = []
+                for k, half in enumerate((own[:mid], own[mid:]), 1):
+                    pages = sorted({c["page"] for c in half if c.get("page")})
+                    title = _window_title(half, k, 2)
+                    if not pages or title == sec:
+                        title = f"{sec} (half {k})"
+                    out.append((title, sorted(half + extra, key=lambda c: c["id"]), pages))
+                return out
+
+            def _write_worker(sec, sec_chunks, sec_pages, own_ids, out_q):
                 # Cancellation (PipelineCancelled, a BaseException) is not caught
                 # by `except Exception`, so it is never retried or reported as a
                 # failed window; the `finally` still terminates the queue so the
                 # consumer can never hang on it.
-                err = None
+                lost = []
                 try:
-                    for attempt in (1, 2):
-                        raise_if_cancelled(cancel)
-                        sent = False
-                        try:
-                            for delta in write_section_stream(
-                                sec, ctx, mode, tone, length, active_fmt,
-                                checklist=checklist, model=model, instructions=instructions,
-                                doc_type=doc_type, on_serve=_record_serve, is_part=True,
-                                **_cancel_kw(cancel),
-                            ):
-                                raise_if_cancelled(cancel)
-                                sent = True
-                                out_q.put(("delta", delta))
-                        except Exception as exc:  # noqa: BLE001
-                            err = exc
-                            if sent:
-                                break  # partial output already streamed - do not redo it
-                            continue
-                        if sent:
-                            err = None
-                            break
-                        err = err or _WindowProducedNothing(
-                            f"no provider produced output for {sec}")
+                    text, err, cut = _write_unit(sec, sec_chunks, out_q)
+                    halves = _halves(sec, sec_chunks, own_ids) if cut else []
+                    if halves:
+                        # A cut-off attempt is never stitched into the notes.
+                        # Discard it and write the window again as two smaller
+                        # ones; a half that is cut off again keeps only its
+                        # whole lines and is recorded with its own pages.
+                        out_q.put(("reset", None))
+                        for h_sec, h_chunks, h_pages in halves:
+                            h_text, h_err, h_cut = _write_unit(h_sec, h_chunks)
+                            if h_err is not None or h_cut:
+                                h_text = notes_tidy.drop_fragment(h_text, cut=True)
+                                lost.append({"window": h_sec, "pages": h_pages,
+                                             "reason": h_cut or _failure_slug(h_err)})
+                            if h_text.strip():
+                                out_q.put(("delta", h_text.rstrip() + "\n\n"))
+                    elif err is not None or cut:
+                        # The connection dropped after text had been streamed (a
+                        # window that already streamed text is not written
+                        # again), or a cut-off window too small to split. Whole
+                        # lines stay; a recognisably unfinished last line goes.
+                        kept = notes_tidy.drop_fragment(text, cut=bool(cut))
+                        if kept != text:
+                            out_q.put(("reset", None))
+                            out_q.put(("delta", kept))
+                        lost.append({"window": sec, "pages": sec_pages,
+                                     "reason": cut or _failure_slug(err)})
                 except PipelineCancelled:
-                    err = None
+                    lost = []
                 finally:
-                    if err is not None:
-                        out_q.put(("error", err))
+                    for entry in lost:
+                        out_q.put(("failed", entry))
                     out_q.put(("end", None))
 
             queues = [_queue.Queue() for _ in section_ctx]
@@ -2771,14 +2838,18 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             # gap instead: losing one part beats losing all of them, and
             # staying quiet about it would be worse than either.
             failed = []
+            # bad: windows with any gap. dead: windows that failed as a whole
+            # (as opposed to one half of a rewritten window).
+            bad = dead = 0
+            done_pages = set()
             try:
                 # _carry_scopes: the writers' model calls count toward this
                 # run's timing record (the cancel flag is also passed explicitly).
-                for (sec, sec_chunks, _pp), out_q in zip(section_ctx, queues):
-                    pool.submit(_carry_scopes(_write_worker), sec,
-                                _format_context(sec_chunks), out_q)
+                for (sec, sec_chunks, sec_pages, own_ids), out_q in zip(section_ctx, queues):
+                    pool.submit(_carry_scopes(_write_worker), sec, sec_chunks,
+                                sec_pages, own_ids, out_q)
 
-                for i, ((sec, _sec_chunks, sec_pages), out_q) in enumerate(
+                for i, ((sec, _sec_chunks, sec_pages, _own), out_q) in enumerate(
                         zip(section_ctx, queues), 1):
                     yield _emit(
                         "status", "write",
@@ -2788,23 +2859,32 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     # own topical headings, the status line above already names
                     # the pages, and the citations carry page provenance.
                     mark = len(parts)
-                    err = None
+                    lost = []
                     while True:
                         kind, payload = out_q.get()
                         if kind == "delta":
                             yield _push(payload)
-                        elif kind == "error":
-                            err = payload
+                        elif kind == "reset":
+                            # What this window streamed so far was cut off and
+                            # is being written again: drop it here, and tell
+                            # the client to drop it too.
+                            del parts[mark:]
+                            yield _emit("notes_reset", "write", "".join(parts))
+                        elif kind == "failed":
+                            lost.append(payload)
                         else:  # "end"
                             break
                     # A cancelled writer ends its queue early; that is not a
                     # failed window and must never be recorded as lost coverage.
                     raise_if_cancelled(cancel)
-                    if err is not None:
-                        failed.append({"window": sec, "pages": sec_pages,
-                                       "reason": _failure_slug(err)})
-                        print(f"[coverage] section {sec!r} failed to write: "
-                              f"{type(err).__name__}")
+                    done_pages.update(set(sec_pages) - {p for f in lost for p in f["pages"]})
+                    if lost:
+                        failed.extend(lost)
+                        bad += 1
+                        dead += any(f["window"] == sec for f in lost)
+                        for f in lost:
+                            print(f"[coverage] section {f['window']!r} failed to "
+                                  f"write: {f['reason']}")
                         if len(parts) == mark:
                             # Nothing was written for this part at all.
                             continue
@@ -2823,13 +2903,9 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             # as a transient status message, so once the stream ended a run
             # missing four pages was byte-for-byte indistinguishable from a
             # complete one in history, export and share.
-            failed_titles = {f["window"] for f in failed}
-            done_pages, lost_pages = set(), set()
-            for _t, _c, pp in section_ctx:
-                (lost_pages if _t in failed_titles else done_pages).update(pp)
             # A page straddling a window boundary can belong to two windows; if
             # either wrote it, it is not lost.
-            lost_pages -= done_pages
+            lost_pages = {p for f in failed for p in f["pages"]} - done_pages
             coverage = {
                 "complete": not failed,
                 "total_pages": coverage["total_pages"],
@@ -2838,7 +2914,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 "failed_windows": failed,
             }
 
-            if failed and len(failed) == len(section_ctx):
+            if dead and dead == len(section_ctx):
                 raise UserFacingError(
                     "Every part of the document failed to generate. That is "
                     "usually a transient provider problem rather than an issue "
@@ -2847,7 +2923,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             if failed:
                 yield _emit(
                     "status", "write",
-                    f"{len(failed)} of {len(section_ctx)} part(s) could not be "
+                    f"{bad} of {len(section_ctx)} part(s) could not be "
                     f"completed ({', '.join(f['window'] for f in failed)}); "
                     f"the rest of the notes are complete.",
                 )
@@ -2862,7 +2938,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     "provider hiccup rather than a problem with your source — "
                     "please try again."
                 )
-            timings.end(windows=len(section_ctx), failed_windows=len(failed))
+            timings.end(windows=len(section_ctx), failed_windows=bad)
             yield _emit("notes_done", "write", notes)
         else:
             timings.begin("write", mode="single_pass")

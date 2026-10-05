@@ -270,3 +270,58 @@ def test_tidy_removes_a_heading_emptied_by_the_merge():
 def test_tidy_without_merge_only_cleans():
     notes = "## B\n- late [9].\n\n## A\n- early [1].\n\n## Empty\n"
     assert nt.tidy(notes) == "## B\n- late [9].\n\n## A\n- early [1]."
+
+
+# ===========================================================================
+# cut-off text: a window that stopped in the middle of a bullet
+# ===========================================================================
+# Observed on the same document: two bullets ending mid-word. The stream ended
+# without an error and nothing looked at the last line.
+
+_FULL = ("## Triples\n"
+         "- A triple has a subject, a predicate and an object [1].\n"
+         "- The subject names the thing described [1].\n"
+         "- The predicate names the relation [2].\n"
+         "- The object is the value or the other thing [2].\n")
+
+
+def test_text_that_ends_on_a_whole_bullet_is_not_a_fragment():
+    assert nt.trailing_fragment(_FULL) is False
+    assert nt.drop_fragment(_FULL) == _FULL
+
+
+def test_a_last_bullet_that_stops_mid_word_is_a_fragment():
+    text = _FULL + "- Literals carry a datatype such as xsd:inte"
+    assert nt.trailing_fragment(text) is True
+    assert nt.drop_fragment(text).rstrip() == _FULL.rstrip()
+
+
+def test_unclosed_bold_on_the_last_line_is_a_fragment():
+    assert nt.trailing_fragment("- **Triple**: three parts [1].\n- **Predic") is True
+
+
+def test_a_citation_after_the_full_stop_still_ends_the_bullet():
+    assert nt.trailing_fragment(_FULL + "- Literals carry a datatype. [3]\n") is False
+    assert nt.trailing_fragment(_FULL + "- **Literals carry a datatype [3].**\n") is False
+
+
+@pytest.mark.parametrize("text", [
+    "surviving window content",                      # one line: nothing to compare with
+    "UNIQUEMARKER partial text ",
+    "- a point\n- another point\n- a third point\n- a fourth point",  # no full stops anywhere
+    _FULL + "\n## Literals\n",                       # a bare heading is the cleaner's job
+    "",
+])
+def test_text_that_only_might_be_cut_off_is_left_alone(text):
+    assert nt.trailing_fragment(text) is False
+    assert nt.drop_fragment(text) == text
+
+
+def test_when_the_stream_is_known_to_be_cut_the_last_line_is_dropped():
+    """No full stops anywhere, so style proves nothing - but the provider said
+    it stopped at the token cap, and the text does not end on a line break."""
+    text = "- a point\n- another point\n- a third poi"
+    assert nt.trailing_fragment(text, cut=True) is True
+    assert nt.drop_fragment(text, cut=True) == "- a point\n- another point\n"
+    # cut exactly at a line break: the last line is whole
+    assert nt.trailing_fragment("- a point\n- another point\n", cut=True) is False

@@ -35,6 +35,7 @@ export default function useStream() {
       onPlanDone,
       onSources,
       onNotesDelta,
+      onNotesReset,
       onNotesDone,
       onReviseStart,
       onNotesRevised,
@@ -68,6 +69,9 @@ export default function useStream() {
           break
         case 'notes_delta':
           onNotesDelta && onNotesDelta(event.step, event.content)
+          break
+        case 'notes_reset':
+          onNotesReset && onNotesReset(event.content)
           break
         case 'notes_done':
           onNotesDone && onNotesDone(event.content)

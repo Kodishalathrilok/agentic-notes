@@ -538,6 +538,12 @@ export default function App() {
           if (step === 'write') setStep('write', 'active')
           if (step === 'revise') setStep('revise', 'active')
         },
+        onNotesReset: (text) => {
+          // A part that was cut off is being written again: drop its first
+          // attempt from the screen.
+          bufferRef.current = text
+          setNotes(text)
+        },
         onNotesDone: (text) => {
           // The event carries the cleaned draft, which can differ from what
           // was streamed (empty headings and lines about the passages go).

@@ -140,3 +140,131 @@ def test_sections_come_out_in_page_order(monkeypatch):
         starts = _section_starts(notes)
         assert len(starts) > 4
         assert starts == sorted(starts), f"sections out of page order: {starts}"
+
+
+# ---------------------------------------------------------------------------
+# b) a cut-off window is never stitched in: it is written again as two halves
+# ---------------------------------------------------------------------------
+
+DOOMED = "Section 1."  # page 1's text: in window 1, and in its first half
+FRAGMENT = "is cut off mid-wor"
+
+
+def _bullets(ids):
+    return "".join(f"- Passage {c} makes point number {c} about its subject [{c}].\n"
+                   for c in ids)
+
+
+def _coverage(events):
+    done = next((e.get("data") or {} for e in events if e["type"] == "done"), {})
+    return done.get("coverage")
+
+
+def _windows(events):
+    return sum(1 for e in events if e["type"] == "status"
+               and e["content"].startswith("Writing section"))
+
+
+def _cut_off(how, times=1):
+    """A writer whose first `times` calls for window 1 stop mid-bullet.
+
+    how="cap": the provider reports the token cap. how="quiet": the stream just
+    ends. how="drop": the connection drops. Every other call writes one whole
+    bullet per passage it was shown.
+    """
+    seen = {"doomed": 0, "calls": [], "ids": []}
+
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+        _serve(on_serve)
+        ids = _ids(prompt)
+        seen["calls"].append(1)  # windows run two at a time; append is atomic
+        if DOOMED in prompt and seen["doomed"] < times:
+            seen["doomed"] += 1
+            seen["ids"] = seen["ids"] or ids
+            yield _bullets(ids[:-1])
+            yield f"- Passage {ids[-1]} {FRAGMENT}"
+            if how == "cap":
+                raise agent.IncompleteStreamError("nvidia", "max_tokens", 300)
+            if how == "drop":
+                raise RuntimeError("connection dropped mid-stream")
+            return
+        yield _bullets(ids)
+
+    return stream, seen
+
+
+def _cited(notes):
+    return {int(n) for n in agent._CITATION_RE.findall(notes)}
+
+
+def test_a_window_cut_at_the_token_cap_is_written_again_as_two_halves(monkeypatch):
+    stream, seen = _cut_off("cap")
+    events = _run(monkeypatch, stream)
+    assert len(seen["calls"]) == _windows(events) + 2, "one cut-off window -> two more calls"
+    for notes in (_draft(events), _notes(events)):
+        assert FRAGMENT not in notes, "the cut-off bullet was stitched into the notes"
+        assert set(seen["ids"]) <= _cited(notes), "the rewrite lost part of the window"
+    cov = _coverage(events)
+    assert cov["complete"] is True and cov["failed_windows"] == []
+
+
+def test_the_reader_is_told_to_discard_the_cut_off_attempt(monkeypatch):
+    stream, _seen = _cut_off("cap")
+    events = _run(monkeypatch, stream)
+    resets = [e for e in events if e["type"] == "notes_reset"]
+    assert len(resets) == 1
+    assert FRAGMENT not in resets[0]["content"]
+    # everything streamed after the reset, plus what the reset kept, is the draft
+    at = events.index(resets[0])
+    live = resets[0]["content"] + "".join(
+        e["content"] for e in events[at:] if e["type"] == "notes_delta")
+    assert FRAGMENT not in live
+
+
+def test_an_unfinished_last_bullet_is_caught_without_any_error(monkeypatch):
+    """The provider sent no finish reason, so the stream just ended."""
+    stream, seen = _cut_off("quiet")
+    events = _run(monkeypatch, stream)
+    assert len(seen["calls"]) == _windows(events) + 2
+    assert FRAGMENT not in _notes(events)
+    assert set(seen["ids"]) <= _cited(_notes(events))
+    assert _coverage(events)["complete"] is True
+
+
+def test_a_half_cut_off_again_loses_only_its_unfinished_bullet(monkeypatch):
+    stream, seen = _cut_off("cap", times=2)  # the window, then its first half
+    events = _run(monkeypatch, stream)
+    notes, cov = _notes(events), _coverage(events)
+    assert FRAGMENT not in notes
+    assert set(seen["ids"][:2]) <= _cited(notes), "the half's whole bullets were dropped"
+    assert len(cov["failed_windows"]) == 1
+    half = cov["failed_windows"][0]
+    assert set(half) == {"window", "pages", "reason"} and half["reason"] == "max_tokens"
+    first = next(e["content"] for e in events if e["type"] == "status"
+                 and e["content"].startswith("Writing section 1/"))
+    assert half["window"] not in first, "the whole window was charged, not the half"
+    assert set(cov["failed_pages"]) <= set(half["pages"])
+    assert cov["processed_pages"] + len(cov["failed_pages"]) == cov["total_pages"]
+
+
+def test_a_dropped_connection_keeps_whole_bullets_and_is_not_retried(monkeypatch):
+    stream, seen = _cut_off("drop")
+    events = _run(monkeypatch, stream)
+    notes, cov = _notes(events), _coverage(events)
+    assert len(seen["calls"]) == _windows(events), "a window that streamed text is not re-run"
+    assert FRAGMENT not in notes
+    assert set(seen["ids"][:-1]) <= _cited(notes), "whole bullets were dropped too"
+    assert [w["reason"] for w in cov["failed_windows"]] == ["runtimeerror"]
+
+
+def test_unpunctuated_single_line_output_is_not_mistaken_for_a_cut_off(monkeypatch):
+    calls = {"n": 0}
+
+    def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
+        _serve(on_serve)
+        calls["n"] += 1
+        yield "surviving window content"
+
+    events = _run(monkeypatch, stream)
+    assert calls["n"] == _windows(events)
+    assert not [e for e in events if e["type"] == "notes_reset"]
