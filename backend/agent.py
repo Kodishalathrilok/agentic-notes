@@ -24,6 +24,7 @@ from models import (call_model, call_model_stream, safe_json, helper_model, Inco
                     PipelineCancelled, cancel_scope, raise_if_cancelled,
                     call_stats_scope, current_call_stats, _effective_cancel)
 from retriever import Retriever, page_for_offset
+import notes_tidy
 
 # Quality thresholds for the self-improvement loop
 REVISE_THRESHOLD = 8  # revise until score reaches this (1-10)
@@ -343,10 +344,9 @@ def _format_context(chunks) -> str:
 # Deterministic citation verification: [n] markers are only kept if n is a
 # chunk ID that was actually retrieved and shown to the model. This turns
 # "don't invent citations" from a prompt instruction into a code guarantee.
-# Any number of digits: chunk ids reach retriever.MAX_CHUNKS (6000), and the
-# UI renders every bracketed number as a citation (NotesOutput.jsx), so a
-# marker this pattern missed would be shown to the reader yet never checked.
-_CITATION_RE = re.compile(r"\[(\d+)\]")
+# The pattern lives in notes_tidy so the text passes there and the checks here
+# can never disagree about what a citation is.
+_CITATION_RE = notes_tidy.CITATION_RE
 
 
 def enforce_citations(notes: str, valid_ids) -> str:
@@ -2852,7 +2852,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     f"the rest of the notes are complete.",
                 )
 
-            notes = "".join(parts).strip()
+            notes = notes_tidy.clean_notes("".join(parts)).strip()
             if not notes:
                 raise UserFacingError(
                     "The model returned an empty draft. That is usually a transient "
@@ -2899,7 +2899,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 yield _emit("status", "write",
                             "The draft was cut off before it finished; "
                             "keeping what was written.")
-            notes = "".join(parts).strip()
+            notes = notes_tidy.clean_notes("".join(parts)).strip()
             if not notes:
                 raise UserFacingError(
                     "The model returned an empty draft. That is usually a transient "
@@ -3082,6 +3082,14 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     f"{gstats['removed']} unsupported claim(s) removed.",
                 )
                 yield _emit("notes_revised", "revise", notes)
+
+        # Deterministic tidy, after every step that edits the notes: a revise
+        # round can bring back a line about the passages, and grounding deletes
+        # claim lines but never the heading they leave empty.
+        tidied = notes_tidy.clean_notes(notes)
+        if tidied != notes:
+            notes = tidied
+            yield _emit("notes_revised", "revise", notes)
 
         # Auto-title (best effort). NOT overlapped with grounding: the title is
         # generated from the notes AFTER grounding has edited them, so running

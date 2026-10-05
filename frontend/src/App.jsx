@@ -538,7 +538,10 @@ export default function App() {
           if (step === 'write') setStep('write', 'active')
           if (step === 'revise') setStep('revise', 'active')
         },
-        onNotesDone: () => {
+        onNotesDone: (text) => {
+          // The event carries the cleaned draft, which can differ from what
+          // was streamed (empty headings and lines about the passages go).
+          if (text) bufferRef.current = text
           setNotes(bufferRef.current)
           setStep('write', 'done')
         },
