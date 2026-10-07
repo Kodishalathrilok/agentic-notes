@@ -385,6 +385,53 @@ def test_no_window_of_a_long_document_is_shown_the_plan_points(monkeypatch):
     assert not [p for p in prompts if "ZEBRAPOINT" in p]
 
 
+# ---------------------------------------------------------------------------
+# g) the passages next door are the neighbours', not "related evidence"
+# ---------------------------------------------------------------------------
+# Consecutive passages overlap by 120 characters, so the passage just before a
+# window always looks related to it. Measured on a real 55-page run: for 9 of
+# 12 windows the one extra passage retrieved was exactly that one - the last
+# passage of the previous window - and the window then wrote it up again under
+# a heading of its own ("Problems Resolved by ..." / "Problems Addressed by ...").
+# Excluding only that one passage just promoted the one before it, so a whole
+# window's length either side is out.
+
+class _Fixed:
+    """A retriever that always answers with the given passage ids."""
+
+    def __init__(self, ids):
+        self.ids = ids
+
+    def retrieve(self, query, k=None):
+        return [{"id": i, "text": f"passage {i}", "page": 1, "pages": [1]} for i in self.ids]
+
+
+def _window(first, last):
+    return [{"chunk_id": i, "text": f"own passage {i}", "page": 1} for i in range(first, last + 1)]
+
+
+def test_the_passages_either_side_of_a_window_are_not_added_to_it():
+    ctx = agent._window_context(_window(20, 29), _Fixed([19, 30, 18, 12, 38, 25, 7]), "exam")
+    ids = [c["id"] for c in ctx]
+    assert not {19, 30, 18, 12, 38} & set(ids), "a neighbouring window's passage was added"
+    assert 7 in ids, "a passage from elsewhere in the document is still welcome"
+    assert ids == sorted(ids) and set(range(20, 30)) <= set(ids)
+
+
+def test_no_window_of_a_real_index_is_given_its_neighbours_edge(monkeypatch):
+    from retriever import Retriever
+    monkeypatch.setattr(sem, "semantic_available", lambda: False)
+    pages = _pages(20, 2000)
+    r = Retriever("\n\n".join(pages), spans=page_spans(pages), mode="bm25")
+    windows = agent._document_windows(r.chunks_meta, window_chars=6000)
+    assert len(windows) > 3
+    for _title, win in windows:
+        own = {c["chunk_id"] for c in win}
+        extra = {c["id"] for c in agent._window_context(win, r, "exam")} - own
+        near = set(range(min(own) - len(own), max(own) + len(own) + 1))
+        assert not extra & near, f"{sorted(extra & near)} belong to a neighbouring window"
+
+
 def _records_prompts(prompts):
     def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
         _serve(on_serve)

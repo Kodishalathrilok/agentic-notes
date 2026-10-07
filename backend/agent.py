@@ -314,13 +314,21 @@ def _window_context(window_chunks, retriever, mode, supplement_k=None,
                              "page": c.get("page"), "pages": c.get("pages") or []}
              for c in window_chunks}
     own_ids = set(by_id)
+    # "Elsewhere" means beyond the neighbouring windows: a window's length of
+    # passages either side belongs to the windows next door, which write them.
+    # Consecutive passages overlap, so the ones just before a window always
+    # look "related". Measured on a 55-page run: for 9 of 12 windows the extra
+    # passage was the last one of the previous window, and the window wrote it
+    # up a second time under its own heading.
+    span = len(own_ids)
+    not_extra = set(range(min(own_ids) - span, max(own_ids) + span + 1))
     used = sum(len(c["text"]) + _CHUNK_RENDER_CHARS for c in window_chunks)
 
     if supplement_k > 0 and retriever is not None:
         query = " ".join(c["text"][:200] for c in window_chunks[:3])
         try:
             for c in retriever.retrieve(f"{query} — {mode}", k=supplement_k) or []:
-                if c["id"] in own_ids:
+                if c["id"] in not_extra:
                     continue
                 size = len(c["text"]) + _CHUNK_RENDER_CHARS
                 # Supplements are a bonus; the window's own pages are the
