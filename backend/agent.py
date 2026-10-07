@@ -3066,15 +3066,30 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 return f"Quality {sc}/10{extra} — revising ✍"
             return f"Quality {sc}/10 — faithful, no revision needed ✓"
 
+        def _judge(round_no):
+            """Critique the notes as they stand. A check that cannot run leaves
+            them "not judged"; it must never end a run whose notes are already
+            written. Measured: a provider outage during the re-check threw away
+            17 minutes of finished work."""
+            timings.begin("critique", round=round_no)
+            try:
+                verdict = critique_notes(
+                    notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
+                    chunk_map=chunk_map,
+                )
+            except Exception as exc:  # noqa: BLE001 - cancellation is a BaseException
+                # Provider text can carry a URL; it goes to the log, not the user.
+                log_unexpected_error("critique", exc)
+                timings.end(outcome="failed_open")
+                return _unjudged_critique(
+                    "The quality check could not run, so this draft was not scored.")
+            timings.end()
+            return verdict
+
         # 5-6. Critique (grounded against the writer's CONTEXT for faithfulness,
         # plus a breadth sample for coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
-        timings.begin("critique", round=0)
-        critique = critique_notes(
-            notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
-            chunk_map=chunk_map,
-        )
-        timings.end()
+        critique = _judge(0)
         yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         best_notes = notes
@@ -3166,12 +3181,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
             # Re-critique the revised notes (against the possibly augmented context).
             yield _emit("status", "critique", f"Re-checking (round {rounds})...")
-            timings.begin("critique", round=rounds)
-            critique = critique_notes(
-                notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
-                chunk_map=chunk_map,
-            )
-            timings.end()
+            critique = _judge(rounds)
             yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
             # Strictly better only: a revision that merely ties has not earned

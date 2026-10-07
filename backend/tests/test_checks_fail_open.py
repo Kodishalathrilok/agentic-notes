@@ -109,3 +109,46 @@ def test_a_readable_low_score_still_triggers_a_rewrite(monkeypatch):
     assert _notes(events) == "Revised notes."
 
 
+# ---------------------------------------------------------------------------
+# 2) a check that fails never discards the notes
+# ---------------------------------------------------------------------------
+
+def test_a_failed_critique_keeps_the_notes_and_finishes_the_run(monkeypatch):
+    events = _run(monkeypatch, [ProvidersUnavailableError("nvidia: 503; gemini: 429")])
+    types = _types(events)
+    assert "error" not in types, "a failed CHECK ended a run that had written its notes"
+    assert types[-1] == "done"
+    assert _notes(events) == "Draft notes."
+    verdict = next(e for e in events if e["type"] == "critique_done")
+    assert verdict["data"]["score"] is None and verdict["data"]["needs_revision"] is False
+    assert "could not" in verdict["content"], "the reader is not told the check did not run"
+
+
+def test_a_failed_recheck_after_a_rewrite_keeps_the_scored_draft(monkeypatch):
+    """Exactly what ended the measured run. A rewrite nobody could score has not
+    earned the right to replace the draft that was scored."""
+    events = _run(monkeypatch, [LOW, RuntimeError("connection reset")])
+    types = _types(events)
+    assert "revise_start" in types
+    assert "error" not in types and types[-1] == "done"
+    assert _notes(events) == "Draft notes."
+
+
+def test_a_failed_critique_on_a_long_document_still_delivers_everything(monkeypatch):
+    events = _run(monkeypatch, [ProvidersUnavailableError("all down")], pages=_long_pages())
+    types = _types(events)
+    assert "error" not in types and types[-1] == "done"
+    done = next(e["data"] for e in events if e["type"] == "done")
+    assert done["coverage"]["complete"] is True, "the coverage record never arrived"
+    assert "title_done" in types, "the steps after the failed check did not run"
+
+
+def test_a_failed_check_never_leaks_provider_detail(monkeypatch):
+    secret = "https://integrate.api.nvidia.com/v1/chat?api_key=SECRET_VALUE"
+    events = _run(monkeypatch, [RuntimeError(f"500 from {secret}")])
+    assert "error" not in _types(events)
+    blob = " ".join(str(e.get("content")) + str(e.get("data")) for e in events)
+    for leak in ("SECRET_VALUE", "api_key", "integrate.api.nvidia.com"):
+        assert leak not in blob
+
+
