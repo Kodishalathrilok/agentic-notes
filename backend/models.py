@@ -339,15 +339,24 @@ def _env_num(name, default, cast=float, minimum=0):
 NVIDIA_503_RETRIES = _env_num("NVIDIA_503_RETRIES", 1, int)
 NVIDIA_503_RETRY_DELAY = _env_num("NVIDIA_503_RETRY_DELAY", 1.0)
 NVIDIA_503_COOLDOWN_S = _env_num("NVIDIA_503_COOLDOWN_S", 60.0)
-_nvidia_cooldown = {}  # model id -> time.monotonic() when it may be tried again
+# Gemini gets its full retries the first time (above). Once they are spent and
+# it is STILL answering 429 / 503, the calls right behind that one would each
+# wait the same 2 + 4 + 8 seconds for the same answer. Measured: ten failed
+# window calls in one run each paid that wait on a Gemini that was limited the
+# whole time.
+GEMINI_COOLDOWN_S = _env_num("GEMINI_COOLDOWN_S", 60.0)
+# key -> time.monotonic() when it may be tried again. Keys are an NVIDIA model
+# id, or "gemini:<model id>" (each Gemini model has its own quota).
+_nvidia_cooldown = {}
 _cooldown_lock = threading.Lock()
 
 
-def _start_cooldown(model_id: str) -> None:
-    if NVIDIA_503_COOLDOWN_S <= 0:
+def _start_cooldown(model_id: str, seconds=None) -> None:
+    seconds = NVIDIA_503_COOLDOWN_S if seconds is None else seconds
+    if seconds <= 0:
         return
     with _cooldown_lock:
-        _nvidia_cooldown[model_id] = time.monotonic() + NVIDIA_503_COOLDOWN_S
+        _nvidia_cooldown[model_id] = time.monotonic() + seconds
 
 
 def _clear_cooldown(model_id: str) -> None:
@@ -441,8 +450,11 @@ def _ollama_available() -> bool:
     now = time.time()
     if _ollama_reachable is None or (now - _ollama_checked_at) > _OLLAMA_PROBE_TTL:
         try:
-            requests.get(f"{OLLAMA_URL}/api/tags", timeout=1.5)
-            _ollama_reachable = True
+            tags = requests.get(f"{OLLAMA_URL}/api/tags", timeout=1.5).json()
+            names = {m.get("name") for m in tags.get("models") or []}
+            # A daemon that answers is not enough: without the configured
+            # model every call to it is a 404, paid for on each failover.
+            _ollama_reachable = bool({OLLAMA_MODEL, f"{OLLAMA_MODEL}:latest"} & names)
         except Exception:  # noqa: BLE001
             _ollama_reachable = False
         _ollama_checked_at = now
@@ -620,6 +632,9 @@ def _gemini_post(gm, body, label, timeout, stream=False):
               f"Set GEMINI_MODEL to a current id to skip this hop.")
         resp.close()
         resp = go(alias)
+    if resp.status_code in _RETRYABLE_STATUS:
+        # Every retry is spent and it is still limited: see GEMINI_COOLDOWN_S.
+        _start_cooldown(f"gemini:{gm}", GEMINI_COOLDOWN_S)
     return resp
 
 
@@ -1008,17 +1023,31 @@ def _providers_failed(errors) -> ProvidersUnavailableError:
     return ProvidersUnavailableError(f"All model providers failed — {detail}")
 
 
+def _cooldown_key(prov: str, target: str):
+    if prov == "nvidia":
+        return _nvidia_model(target)
+    if prov == "gemini":
+        return f"gemini:{_gemini_model(target)}"
+    return None  # Ollama has no cooldown
+
+
+def _is_cooling(prov: str, target: str) -> bool:
+    key = _cooldown_key(prov, target)
+    return key is not None and _cooling_down(key)
+
+
 def _skip_cooling(prov: str, target: str, chain) -> bool:
-    """Skip NVIDIA while this model is cooling down after a 503 - but only when
-    a later provider in the chain can take the call, so an NVIDIA-only
-    deployment still tries NVIDIA rather than failing instantly."""
-    if prov != "nvidia" or not _cooling_down(_nvidia_model(target)):
+    """Skip a provider that is cooling down - but never refuse a call without a
+    single attempt. If another provider can take the call, the cooling one is
+    skipped. If none can (an NVIDIA-only deployment, or every provider cooling
+    at once), the first configured provider is tried anyway."""
+    if not _is_cooling(prov, target):
         return False
-    later = chain[chain.index(prov) + 1:]
-    if not any(_provider_ready(p) for p in later):
-        return False
-    print(f"[models] nvidia {_nvidia_model(target)} is cooling down after a 503; "
-          f"using the next provider.")
+    others = (p for p in chain if p != prov)
+    if not any(_provider_ready(p) and not _is_cooling(p, target) for p in others):
+        if prov == next((p for p in chain if _provider_ready(p)), None):
+            return False
+    print(f"[models] {prov} {_served_model(prov, target)} is cooling down; skipping it.")
     return True
 
 
@@ -1060,8 +1089,7 @@ def call_model(prompt, max_tokens=1024, model=None, temperature=0.4, json_mode=F
             continue
         _record_call(prov, _served_model(prov, target), bool(out and out.strip()))
         if out and out.strip():
-            if prov == "nvidia":
-                _clear_cooldown(_nvidia_model(target))
+            _clear_cooldown(_cooldown_key(prov, target))
             if on_serve:
                 on_serve(prov, _served_model(prov, target), bool(errors), _fallback_reason(errors))
             return out
@@ -1141,8 +1169,7 @@ def call_model_stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_s
                 close()
         _record_call(prov, _served_model(prov, target), yielded)
         if yielded:
-            if prov == "nvidia":
-                _clear_cooldown(_nvidia_model(target))
+            _clear_cooldown(_cooldown_key(prov, target))
             return
         # A clean stream that produced NOTHING is a failure, not a success.
         # NVIDIA intermittently answers 200 with an empty SSE body under load,
