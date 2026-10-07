@@ -476,6 +476,118 @@ def test_timing_logs_sectioned_write_counts_every_writer(fake, timing_log, monke
     assert write["model_calls"] == fake.calls.count("write") == write["windows"]
 
 
+# ---------------------------------------------------------------------------
+# 6. Long documents: nothing waits for the plan
+# ---------------------------------------------------------------------------
+# Measured on a 55-page document: planning took 28-78 s on the main model and
+# the first word of notes could not appear until it was done - yet a long
+# document's windows are cut by position and never read the plan. Only the
+# critique does.
+
+def _pump(gen):
+    """Drain a pipeline on a thread; `text` is set at the first notes_delta."""
+    events, text = [], threading.Event()
+
+    def run():
+        for ev in gen:
+            events.append(ev)
+            if ev["type"] == "notes_delta":
+                text.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return events, text, thread
+
+
+def _long_gen(**kw):
+    doc, spans = _long_doc()
+    return agent.run_agent(doc, "exam", "academic", "medium", "bullet", model=MODEL,
+                           include_quiz=False, include_flashcards=False, page_spans=spans, **kw)
+
+
+def test_long_document_windows_are_written_while_the_plan_is_made(fake):
+    gate = fake.gate("plan")
+    events, text, thread = _pump(_long_gen())
+    assert gate.entered.wait(5), "the planner was never called"
+    wrote = text.wait(3)
+    gate.release.set()
+    thread.join(10)
+    assert wrote, "no window wrote a word until the plan was finished"
+    types = [e["type"] for e in events]
+    assert types[-1] == "done"
+    assert types.index("plan_done") < types.index("critique_done"), (
+        "the critic is the plan's reader: it must have it")
+
+
+def test_short_document_is_still_planned_before_it_is_written(fake):
+    """Single-pass notes follow the outline, so there the plan comes first."""
+    gate = fake.gate("plan")
+    events, text, thread = _pump(agent.run_agent(
+        SMALL, "exam", "academic", "medium", "bullet", model=MODEL,
+        include_quiz=False, include_flashcards=False))
+    assert gate.entered.wait(5)
+    assert not text.wait(0.5), "a short document was written before its plan existed"
+    gate.release.set()
+    thread.join(10)
+    types = [e["type"] for e in events]
+    assert types[-1] == "done" and types.index("plan_done") < types.index("notes_delta")
+
+
+def _planner_models(fake, monkeypatch):
+    """Which model each planning call was sent to."""
+    used, real = [], fake.dispatch
+
+    def dispatch(prov, prompt, max_tokens, model, temperature, json_mode, **kw):
+        if "PLANNING agent" in prompt:
+            used.append(model)
+        return real(prov, prompt, max_tokens, model, temperature, json_mode, **kw)
+
+    monkeypatch.setattr(models, "_dispatch", dispatch)
+    monkeypatch.setattr(models, "HELPER_NVIDIA_MODEL", "nvidia/helper-model")
+    return used
+
+
+def test_long_document_plan_runs_on_the_helper_model(fake, monkeypatch):
+    used = _planner_models(fake, monkeypatch)
+    assert list(_long_gen())[-1]["type"] == "done"
+    assert used == ["nvidia/helper-model"]
+
+
+def test_short_document_plan_stays_on_the_chosen_model(fake, monkeypatch):
+    used = _planner_models(fake, monkeypatch)
+    assert _run()[-1]["type"] == "done"
+    assert used == [MODEL]
+
+
+def test_a_failed_plan_does_not_cost_a_long_document_its_notes(fake, monkeypatch):
+    real = fake.dispatch
+
+    def dispatch(prov, prompt, max_tokens, model, temperature, json_mode, **kw):
+        if "PLANNING agent" in prompt:
+            raise RuntimeError("503 from https://provider.example/v1?api_key=SECRET_VALUE")
+        return real(prov, prompt, max_tokens, model, temperature, json_mode, **kw)
+
+    monkeypatch.setattr(models, "_dispatch", dispatch)
+    events = list(_long_gen())
+    types = [e["type"] for e in events]
+    assert "error" not in types and types[-1] == "done"
+    plan = next(e["data"] for e in events if e["type"] == "plan_done")
+    assert plan["outline"] and plan["checklist"], "the critic still needs a checklist"
+    assert "SECRET_VALUE" not in json.dumps(events)
+
+
+def test_long_document_timing_log_still_adds_up(fake, timing_log, monkeypatch):
+    monkeypatch.setattr(agent, "SECTION_CONCURRENCY", 2)
+    assert list(_long_gen(generation_id="gen-long-1"))[-1]["type"] == "done"
+    rows = _timings(timing_log)
+    by = {r["stage"]: r for r in rows}
+    assert by["plan"]["model_calls"] == 1 and by["plan"]["providers"] == [f"nvidia:{MODEL}"]
+    assert by["write"]["model_calls"] == by["write"]["windows"], (
+        "the planner's call was counted as a window's")
+    assert by["total"]["model_calls"] == len(fake.calls)
+    assert sum(r["model_calls"] for r in rows if r["stage"] != "total") == len(fake.calls)
+
+
 def test_cancelled_run_logs_a_cancelled_total(fake, timing_log):
     gate = fake.gate("plan")
     cancel = threading.Event()

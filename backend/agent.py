@@ -1082,6 +1082,17 @@ PART {i}:
 # Agent: Plan
 # ---------------------------------------------------------------------------
 
+def _default_plan() -> dict:
+    """The plan used when the planner gave none: its reply could not be read,
+    or (on a long document, where nothing waits for it) the call failed."""
+    return {
+        "outline": ["Overview", "Key Concepts", "Important Details", "Summary"],
+        "checklist": ["Define core terms", "Cover main ideas", "Highlight key takeaways"],
+        "difficulty": "intermediate",
+        "suggested_format": "bullet",
+    }
+
+
 def plan_outline(text, mode, tone, length, model=None, instructions="", doc_chars=None, topic_inventory="") -> dict:
     doc_chars = doc_chars or len(text or "")
     if doc_chars > 120000:
@@ -1130,12 +1141,7 @@ SOURCE:
     data = safe_json(call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True))
 
     if not data or "outline" not in data:
-        return {
-            "outline": ["Overview", "Key Concepts", "Important Details", "Summary"],
-            "checklist": ["Define core terms", "Cover main ideas", "Highlight key takeaways"],
-            "difficulty": "intermediate",
-            "suggested_format": "bullet",
-        }
+        return _default_plan()
 
     data.setdefault("outline", ["Overview", "Key Concepts", "Summary"])
     data.setdefault("checklist", ["Cover main ideas"])
@@ -2535,6 +2541,33 @@ class _RunTimings:
         self._log(self.started, time.time(), stage="total", model_calls=self.model_calls,
                   providers=(), outcome=outcome)
 
+    def background(self, name, **extra):
+        """A stage that runs on its own thread ALONGSIDE the sequential ones.
+
+        Returns a call-stats sink for that thread (models.call_stats_scope):
+        its calls count toward the run total and toward this stage, never
+        toward whichever sequential stage happens to be open.
+        """
+        return _BackgroundStage(self, name, extra)
+
+
+class _BackgroundStage:
+    def __init__(self, timings, name, extra):
+        self._timings = timings
+        self._stage = {"stage": name, "start": time.time(), "model_calls": 0,
+                       "providers": set(), **extra}
+
+    def record(self, provider, model_id, ok):
+        with self._timings._lock:
+            self._timings.model_calls += 1
+            self._stage["model_calls"] += 1
+            if ok:
+                self._stage["providers"].add(f"{provider}:{model_id}")
+
+    def end(self, outcome="ok"):
+        stage = dict(self._stage)
+        self._timings._log(stage.pop("start"), time.time(), outcome=outcome, **stage)
+
 
 def _build_index(text, page_spans, timings):
     """Build the retrieval index (runs on a background thread, see below)."""
@@ -2695,26 +2728,84 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         # little (a topic on only a few pages can be invisible in it), so first
         # the helper model scans the WHOLE document and builds a topic
         # inventory the planner must cover — 100% coverage at planning time.
-        topic_inventory = ""
+        # Long documents: MAP-REDUCE over coverage windows. Size alone decides.
+        # This used to also require len(outline) >= 3, which meant a terse plan
+        # could drop a 100-page document into the single-pass path and lose
+        # most of it. Windows no longer come from the outline, so the outline
+        # no longer gates coverage.
+        sectioned = len(text) > SECTION_DOC_THRESHOLD
+        n_digest = 0
         if len(text) > DIGEST_DOC_THRESHOLD:
-            n_parts = min(
+            n_digest = min(
                 (len(text) + DIGEST_SEGMENT_CHARS - 1) // DIGEST_SEGMENT_CHARS,
                 DIGEST_MAX_SEGMENTS,
             )
-            yield _emit("status", "plan", f"Scanning full document ({n_parts} parts)…")
-            timings.begin("digest", concurrency=DIGEST_CONCURRENCY, segments=n_parts)
-            topic_inventory = digest_document(text, model=helper)
-            timings.end()
+            yield _emit("status", "plan", f"Scanning full document ({n_digest} parts)…")
 
-        yield _emit("status", "plan", "Planning outline...")
-        timings.begin("plan")
-        plan = plan_outline(
-            retriever.sample(24000), mode, tone, length,
-            model=model, instructions=instructions, doc_chars=len(text),
-            topic_inventory=topic_inventory,
-        )
-        timings.end()
-        yield _emit("plan_done", "plan", "", plan)
+        def _planned(model_id, inventory):
+            return plan_outline(
+                retriever.sample(24000), mode, tone, length,
+                model=model_id, instructions=instructions, doc_chars=len(text),
+                topic_inventory=inventory,
+            )
+
+        if sectioned:
+            # Nothing waits for a long document's plan. Its windows are cut by
+            # position and write from their own passages; the plan's only
+            # reader is the critique. Measured on a 55-page document: planning
+            # took 28-78 s, all of it before the first word of notes. So the
+            # scan and the plan run here, on the helper model, while the
+            # windows are written, and are joined before the critique.
+            digest_stage = n_digest and timings.background(
+                "digest", concurrency=DIGEST_CONCURRENCY, segments=n_digest)
+            plan_stage = timings.background("plan")
+
+            def _plan_alongside():
+                inventory = ""
+                try:
+                    if digest_stage:
+                        with cancel_scope(cancel), call_stats_scope(digest_stage):
+                            inventory = digest_document(text, model=helper)
+                        digest_stage.end()
+                    with cancel_scope(cancel), call_stats_scope(plan_stage):
+                        made = _planned(helper, inventory)
+                except Exception as exc:  # noqa: BLE001 - cancellation passes through
+                    # The notes do not depend on it: the critique gets the
+                    # default checklist instead of the run ending here.
+                    log_unexpected_error("plan", exc)
+                    plan_stage.end(outcome="failed_open")
+                    return _default_plan()
+                plan_stage.end()
+                return made
+
+            yield _emit("status", "plan", "Planning outline...")
+            plan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plan")
+            plan_future = plan_pool.submit(_plan_alongside)
+            plan_pool.shutdown(wait=False)  # no more work; the thread ends with its one job
+            plan = None
+            active_fmt = fmt or "bullet"
+
+            def _plan_event():
+                """`plan_done`, the first time the plan is found ready."""
+                nonlocal plan
+                if plan is not None or not plan_future.done():
+                    return None
+                plan = plan_future.result()
+                return _emit("plan_done", "plan", "", plan)
+        else:
+            topic_inventory = ""
+            if n_digest:
+                timings.begin("digest", concurrency=DIGEST_CONCURRENCY, segments=n_digest)
+                topic_inventory = digest_document(text, model=helper)
+                timings.end()
+            yield _emit("status", "plan", "Planning outline...")
+            timings.begin("plan")
+            plan = _planned(model, topic_inventory)
+            timings.end()
+            yield _emit("plan_done", "plan", "", plan)
+            active_fmt = fmt or plan.get("suggested_format", "bullet")
+            outline = plan.get("outline", []) or ["Overview", "Key Concepts", "Summary"]
+            checklist = plan.get("checklist", []) or []
 
         # Coverage starts complete and is narrowed only by real failures, so
         # every path - single-pass included - carries a definite answer.
@@ -2722,19 +2813,6 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
         coverage = {"complete": True, "total_pages": _total_pages,
                     "processed_pages": _total_pages, "failed_pages": [],
                     "failed_windows": []}
-
-        active_fmt = fmt or plan.get("suggested_format", "bullet")
-        outline = plan.get("outline", []) or ["Overview", "Key Concepts", "Summary"]
-        checklist = plan.get("checklist", []) or []
-
-        # Long documents: MAP-REDUCE. Each outline section gets its OWN
-        # retrieval across the whole document and is written from its own
-        # context — so no part of a large source is left out.
-        # Size alone decides. This used to also require len(outline) >= 3,
-        # which meant a terse plan could drop a 100-page document into the
-        # single-pass path and lose most of it. Windows no longer come from
-        # the outline, so the outline no longer gates coverage.
-        sectioned = len(text) > SECTION_DOC_THRESHOLD
 
         if sectioned:
             timings.begin("write", mode="sectioned", concurrency=max(1, SECTION_CONCURRENCY))
@@ -2809,7 +2887,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     try:
                         for delta in write_section_stream(
                             sec, ctx, mode, tone, length, active_fmt,
-                            checklist=checklist, model=model, instructions=instructions,
+                            model=model, instructions=instructions,
                             doc_type=doc_type, on_serve=_record_serve, is_part=True,
                             background_ids=background, covered=list(covered),
                             **_cancel_kw(cancel),
@@ -2920,6 +2998,9 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
                 for i, ((sec, _sec_chunks, sec_pages, _own), out_q) in enumerate(
                         zip(section_ctx, queues), 1):
+                    planned = _plan_event()
+                    if planned:
+                        yield planned
                     yield _emit(
                         "status", "write",
                         f"Writing section {i}/{len(section_ctx)}: {sec}…",
@@ -3056,6 +3137,12 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 )
             timings.end()
             yield _emit("notes_done", "write", notes)
+
+        if plan is None:
+            # A long document's plan, made alongside the windows: its one
+            # reader, the critique, is next.
+            plan = plan_future.result()
+            yield _emit("plan_done", "plan", "", plan)
 
         # Critique: FAITHFULNESS is judged against the CONTEXT the writer was
         # actually given (previously it was judged against an unrelated even
