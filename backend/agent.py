@@ -1276,9 +1276,12 @@ End every bullet with a full stop. No preamble."""
         # and its last bullet was cut off mid-word.
         length_rule = f"""Section length: {words}. Cover this part's points with concrete facts from the
 context, then stop: no padding, and never stop in the middle of a bullet."""
-        # Every part is handed the same plan points, so "cover any that belong
-        # here" invited each one to write about all of them.
-        points_rule = "Plan points - cover one only where THIS part's passages discuss it:"
+        # A part is NOT shown the plan's points. They are the same six for
+        # every part and each one states a fact, so a part could write them up
+        # without reading its passages. Measured on a 55-page run: three parts
+        # did exactly that, citing the cover page 15 times and page 52 sixteen
+        # times, and pages 46-51 got no notes at all.
+        plan_points = ""
         notes_so_far = ""
         if background_ids:
             refs = ", ".join(f"[{i}]" for i in list(background_ids)[:4])
@@ -1295,7 +1298,8 @@ repeat the section title, do NOT write other sections, no preamble."""
         length_rule = f"""Section length: {words}. Treat this as a minimum — cover this section's points
 thoroughly with concrete facts and explanations from the context. Prefer more
 detail over brevity."""
-        points_rule = "Cover any of these plan points that belong to this section:"
+        plan_points = ("Cover any of these plan points that belong to this section:\n"
+                       f"{related or '- (use your judgment)'}\n\n")
         notes_so_far = ""
 
     prompt = f"""{intro}
@@ -1304,10 +1308,7 @@ Mode: {mode} — {MODE_GUIDANCE.get(mode.lower(), '')}
 Tone: {tone} — {TONE_GUIDANCE.get(tone.lower(), '')}
 {length_rule}
 
-{points_rule}
-{related or '- (use your judgment)'}
-
-{_format_instructions(fmt)}
+{plan_points}{_format_instructions(fmt)}
 {_doc_type_rule(doc_type)}
 {_CITE_RULE}
 {_instr_block(instructions)}

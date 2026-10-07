@@ -342,6 +342,49 @@ def test_the_instructions_stay_inside_the_prompt_size_ceiling(monkeypatch):
     assert len(prompt) - len(context) <= 4000
 
 
+# ---------------------------------------------------------------------------
+# f) a part writes from its own passages, not from the document-wide plan
+# ---------------------------------------------------------------------------
+# Measured on a real 55-page run: every window was handed the same first six
+# plan points, and the points themselves state facts ("Define Semantic Web per
+# Berners-Lee: machine-processible web of smart data ..."). Three windows wrote
+# those six points instead of their own pages, citing whatever passage they had
+# - the cover page 15 times, page 52 sixteen times. Pages 46-51 got no notes at
+# all, and the grounding check then deleted 34 of those lines as unsupported.
+
+POINT = "Define the Semantic Web per Berners-Lee as a web of smart data"
+
+
+def test_a_part_is_not_handed_the_document_wide_plan_points(monkeypatch):
+    prompt = _part_prompt(monkeypatch, checklist=[POINT, "Contrast Web 1.0 with Web 2.0"])
+    assert "Berners-Lee" not in prompt and "Web 2.0" not in prompt
+    assert "plan point" not in prompt.lower()
+
+
+def test_an_outline_section_still_gets_its_plan_points(monkeypatch):
+    captured = {}
+
+    def fake(prompt, **_kw):
+        captured["p"] = prompt
+        yield "x"
+
+    monkeypatch.setattr(agent, "call_model_stream", fake)
+    list(agent.write_section_stream("Overview", "[1] passage text", "exam", "academic",
+                                    "medium", "bullet", checklist=[POINT]))
+    assert "Cover any of these plan points that belong to this section:" in captured["p"]
+    assert POINT in captured["p"]
+
+
+def test_no_window_of_a_long_document_is_shown_the_plan_points(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(agent, "plan_outline", lambda *a, **k: {
+        "outline": ["A", "B"], "checklist": ["ZEBRAPOINT covers the whole document"],
+        "difficulty": "easy", "suggested_format": "bullet"})
+    events = _run(monkeypatch, _records_prompts(prompts))
+    assert len(prompts) > 2 and events[-1]["type"] == "done"
+    assert not [p for p in prompts if "ZEBRAPOINT" in p]
+
+
 def _records_prompts(prompts):
     def stream(prompt, max_tokens=1400, model=None, temperature=0.4, on_serve=None):
         _serve(on_serve)
