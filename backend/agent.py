@@ -60,7 +60,10 @@ SECTION_MAX_COUNT = int(os.getenv("SECTION_MAX_COUNT", "8"))
 # rate limits (failover still covers 429s). Override with SECTION_CONCURRENCY.
 # This is PER RUN: server-wide, at most MAX_CONCURRENT_GENERATIONS (main.py)
 # x SECTION_CONCURRENCY section streams are in flight at once.
-SECTION_CONCURRENCY = int(os.getenv("SECTION_CONCURRENCY", "2"))
+# 4, was 2: measured on NVIDIA with six real window calls fired together - all
+# six answered (one 429, retried; no failover), 33 s of wall time for 143 s of
+# calls. Lower it if several users generate at once and 429s pile up.
+SECTION_CONCURRENCY = int(os.getenv("SECTION_CONCURRENCY", "4"))
 
 _logger = logging.getLogger("agentic")
 
