@@ -1410,6 +1410,20 @@ def _critique_flag(flag, notes_lines):
     return text, ids
 
 
+def _unjudged_critique(reason: str, **extra) -> dict:
+    """The critique of a draft that nobody managed to judge.
+
+    Not a verdict: no score, and no order to rewrite. This used to be score 5
+    with needs_revision True ("revising to be safe"), which made a reply that
+    merely failed to parse indistinguishable from a bad draft. Measured on a
+    55-page document: one unparseable reply triggered a 267-second full rewrite
+    that shortened the notes and had no finding behind it.
+    """
+    return {"score": None, "needs_revision": False, "unsupported_claims": [],
+            "missing_topics": [], "issues": [reason], "strengths": [],
+            "deferred_to_grounding": [], **extra}
+
+
 def critique_notes(notes, plan, mode, source="", model=None, doc_sample="",
                    chunk_map=None) -> dict:
     """
@@ -1523,20 +1537,13 @@ NOTES:
         call_model(prompt, max_tokens=700, model=model, temperature=0.1, json_mode=True)
     )
 
-    # Conservative fallback: if we can't parse the critique, assume revision is
-    # needed rather than silently passing.
+    # A reply that cannot be read is not a verdict. The draft is neither passed
+    # nor failed: it is reported as not scored, and the per-claim grounding
+    # check later in the pipeline still runs on it.
     if not data or "score" not in data:
-        return {
-            "score": 5,
-            "needs_revision": True,
-            "unsupported_claims": [],
-            "missing_topics": [],
-            "issues": ["Critique could not be parsed; revising to be safe."],
-            "strengths": [],
-            "evidence_shown": evidence_shown,
-            "evidence_cited": len(cited_all),
-            "deferred_to_grounding": [],
-        }
+        return _unjudged_critique(
+            "The quality check's reply could not be read, so this draft was not scored.",
+            evidence_shown=evidence_shown, evidence_cited=len(cited_all))
 
     try:
         score = int(data.get("score", 5))
@@ -3051,6 +3058,8 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
         def _crit_msg(c):
             sc = c.get("score", 0)
+            if sc is None:
+                return "Quality check could not give a verdict — notes kept as written."
             uns = len(c.get("unsupported_claims", []))
             if c.get("needs_revision"):
                 extra = f", {uns} unsupported claim(s)" if uns else ""
@@ -3167,7 +3176,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
 
             # Strictly better only: a revision that merely ties has not earned
             # the right to replace the version already in hand.
-            if critique.get("score", 0) > best_critique.get("score", 0):
+            if (critique.get("score") or 0) > (best_critique.get("score") or 0):
                 best_notes, best_critique = notes, critique
 
         if rounds == 0:
