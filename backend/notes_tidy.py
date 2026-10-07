@@ -143,7 +143,10 @@ def clean_notes(notes: str) -> str:
 # ---------------------------------------------------------------------------
 
 _BULLET = re.compile(r"^(\s*)(?:[-*+•]|\d+[.)])\s+(\S.*)$")
-_NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "neither", "nor"})
+# Words that turn a claim round. Two bullets that differ by one of these are
+# two claims, however alike they look.
+_NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "neither", "nor", "none",
+                        "rarely", "seldom", "hardly", "barely", "only", "except", "unless"})
 _HEADING_FILLER = frozenset({"the", "a", "an", "of", "to", "and", "in", "for", "on"})
 _HEADING_NUMBER = re.compile(r"^[\s#*_]*\d+[.)]\s+")
 
@@ -178,12 +181,19 @@ def _add_citations(line: str, ids) -> str:
     return f"{line[:end]} {marks}{line[end:]}"
 
 
+def _take_citations(keep: str, drop: str) -> str:
+    """`keep` plus the citations only `drop` carried."""
+    extra = [c for c in dict.fromkeys(CITATION_RE.findall(drop)) if f"[{c}]" not in keep]
+    return _add_citations(keep, extra) if extra else keep
+
+
 def _drop_repeated_bullets(lines):
-    """Drop a bullet that repeats an earlier one, moving its citations onto the
-    one kept so no page loses the citation that covered it."""
+    """Of two bullets that say the same thing, keep the fuller one (the earlier
+    one on a tie) and move the other's citations onto it, so no page loses the
+    citation that covered it."""
     # ponytail: every bullet is compared with every earlier one - fine for a
     # few hundred bullets; index by word set if notes ever get much longer.
-    out, seen, fenced = [], [], False
+    out, seen, fenced = [], [], False  # seen: [out index, words, is a parent]
     for i, line in enumerate(lines):
         if _FENCE.match(line):
             fenced = not fenced
@@ -192,19 +202,24 @@ def _drop_repeated_bullets(lines):
         if len(words) >= 4:
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
             # A bullet with nested lines under it is a parent, never dropped.
-            has_children = bool(nxt.strip()) and (
-                len(nxt) - len(nxt.lstrip()) > len(m.group(1)))
-            dup = None if has_children else next(
-                (k for k, earlier in seen if _same_bullet(words, earlier)), None)
-            if dup is not None:
-                extra = [c for c in dict.fromkeys(CITATION_RE.findall(line))
-                         if f"[{c}]" not in out[dup]]
-                if extra:
-                    out[dup] = _add_citations(out[dup], extra)
+            parent = bool(nxt.strip()) and len(nxt) - len(nxt.lstrip()) > len(m.group(1))
+            dropped = False
+            for entry in list(seen):
+                at, earlier, earlier_parent = entry
+                if not parent and _same_bullet(words, earlier):
+                    out[at] = _take_citations(out[at], line)
+                    dropped = True
+                    break
+                if not earlier_parent and _same_bullet(earlier, words):
+                    # The later bullet says all of it and more: it stays.
+                    line = _take_citations(line, out[at])
+                    out[at] = None
+                    seen.remove(entry)
+            if dropped:
                 continue
-            seen.append((len(out), words))
+            seen.append((len(out), words, parent))
         out.append(line)
-    return out
+    return [ln for ln in out if ln is not None]
 
 
 def _heading_key(line: str):

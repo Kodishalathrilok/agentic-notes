@@ -300,6 +300,41 @@ def test_a_repeated_dot_bullet_is_dropped_and_its_citation_kept():
     assert "• RDF stores facts as subject, predicate, object triples [1][9]." in out
 
 
+def test_of_two_near_identical_bullets_the_fuller_one_is_kept():
+    """Seen on the real run: the LATER bullet said the same thing with one word
+    more, so it was not 'a repeat of an earlier one' and both stayed."""
+    notes = ("**XML Structure**\n"
+             "• Elements nest inside one another to any depth [46].\n"
+             "• XML documents form a tree structure starting at the root and branching "
+             "to leaves [47].\n\n"
+             "**XML Syntax**\n"
+             "• XML documents form a **tree structure** starting at the root element and "
+             "branching to leaves [48].\n")
+    out = nt.merge_sections(notes)
+    assert out.count("XML documents form") == 1
+    assert "starting at the root element and branching to leaves [48][47]." in out
+    assert "• Elements nest inside one another to any depth [46]." in out
+    assert nt.merge_sections(out) == out
+
+
+def test_a_bullet_that_only_adds_a_detail_replaces_the_vaguer_one():
+    notes = ("**Topic**\n• The cycle produces ATP molecules in each complete turn [5].\n"
+             "• The cycle produces 2 ATP molecules in each complete turn [6].\n")
+    assert nt.merge_sections(notes) == (
+        "**Topic**\n• The cycle produces 2 ATP molecules in each complete turn [6][5].")
+
+
+@pytest.mark.parametrize("word", ["never", "not", "rarely", "only", "seldom", "hardly"])
+@pytest.mark.parametrize("fuller_first", [True, False])
+def test_a_word_that_turns_the_claim_round_keeps_both(word, fuller_first):
+    """Whichever comes first: one of two conflicting claims is never dropped."""
+    plain = "• The enzyme is active in strongly acidic conditions of the stomach [3]."
+    turned = f"• The enzyme is {word} active in strongly acidic conditions of the stomach [4]."
+    pair = (turned, plain) if fuller_first else (plain, turned)
+    notes = "**Topic**\n" + "\n".join(pair) + "\n"
+    assert nt.merge_sections(notes) == notes
+
+
 def test_merged_sections_of_dot_bullets_read_as_one_list():
     notes = ("**RDF**\n• First fact about it [1].\n\n"
              "**RDF:**\n• Second fact about it [2].\n")
