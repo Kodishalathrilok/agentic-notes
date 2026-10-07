@@ -501,7 +501,13 @@ def _is_structural(line: str) -> bool:
     if not body:
         return True
     # "**Unit 2: Data Structures**" — a fully emphasised line is a heading.
-    if _ALL_BOLD_RE.match(raw.lstrip(_BULLET_PREFIX).strip()):
+    # Tested on the line as written, citations aside. This used to strip
+    # _BULLET_PREFIX first, and "*" is in it: the bold markers went too, the
+    # pattern never matched, and only the word minimum below was protecting
+    # headings. Seen on a real run: five headings of five words or more were
+    # judged as claims and deleted. A bullet is left to the claim check even
+    # when all of it is bold - it states something.
+    if _ALL_BOLD_RE.match(_CITATION_RE.sub("", raw).strip()):
         return True
     # "Lists:" / "Sets & frozensets" — a short label introducing what follows.
     if len(body.split()) < MIN_CLAIM_WORDS:

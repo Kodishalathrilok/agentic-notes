@@ -8,6 +8,8 @@ of page order, and bullets cut off mid-word.
 import itertools
 import re
 
+import pytest
+
 import agent
 import retrieval.semantic as sem
 from retriever import page_spans
@@ -430,6 +432,46 @@ def test_no_window_of_a_real_index_is_given_its_neighbours_edge(monkeypatch):
         extra = {c["id"] for c in agent._window_context(win, r, "exam")} - own
         near = set(range(min(own) - len(own), max(own) + len(own) + 1))
         assert not extra & near, f"{sorted(extra & near)} belong to a neighbouring window"
+
+
+# ---------------------------------------------------------------------------
+# h) a heading is structure, however long it is
+# ---------------------------------------------------------------------------
+# Seen on a real run once the claim check started returning verdicts: it
+# deleted five headings ("Web 4.0: The Intelligent Web:", ...) as unsupported
+# claims, leaving their bullets under the heading before. The rule meant to
+# exempt a fully bold line stripped the "**" off first and so never matched;
+# only the five-word minimum was keeping shorter headings safe.
+
+REAL_HEADINGS = [
+    "**Web 4.0: The Intelligent Web:**",
+    "**The Smart-Data Continuum: Levels 2 and 3:**",
+    "**Formal Semantics and Property Characteristics**",
+    "**Business Drivers and Organizational Impact**",
+    "**XML History and Success Factors:** [12]",
+]
+
+
+@pytest.mark.parametrize("heading", REAL_HEADINGS)
+def test_a_bold_heading_of_any_length_is_not_a_claim(heading):
+    notes = f"{heading}\n• A real claim with enough words to be checked [1].\n"
+    assert [i for i, _text, _ids in agent._claim_lines(notes)] == [1]
+
+
+def test_a_bold_bullet_that_states_a_fact_is_still_checked():
+    """A bullet is a claim even when all of it is emphasised: exempting it
+    would let an unsupported sentence through unchecked."""
+    assert agent._claim_lines("• **Mitochondria are the powerhouse of the cell.** [3]\n")
+
+
+def test_the_claim_check_cannot_delete_a_heading(monkeypatch):
+    monkeypatch.setattr(agent, "_verify_batch", lambda items, cm, model=None, **kw: {
+        n: ("unsupported", "") for n in range(1, len(items) + 1)})
+    notes = ("**Web 4.0: The Intelligent Web:**\n"
+             "• Web 4.0 is driven by artificial intelligence and machine learning.\n")
+    out, stats = agent.verify_claim_support(notes, {1: {"id": 1, "text": "x", "page": 1}})
+    assert "**Web 4.0: The Intelligent Web:**" in out
+    assert stats["removed"] == 1, "the claim under it is still judged"
 
 
 def _records_prompts(prompts):
