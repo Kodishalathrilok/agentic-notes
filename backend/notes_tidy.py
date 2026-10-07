@@ -45,7 +45,8 @@ _META = (
     # "Note: ..." about the passages
     re.compile(rf"^note:.*\b(?:the|these|those)\s+{_ABOUT}\b", re.I),
 )
-_LIST_MARK = re.compile(r"^(?:>\s*)*(?:[-*+]\s+|\d+[.)]\s+)?")
+# "•" is the bullet the writer is TOLD to use (agent._format_instructions).
+_LIST_MARK = re.compile(r"^(?:>\s*)*(?:[-*+•]\s+|\d+[.)]\s+)?")
 _TAIL_PAREN = re.compile(r"\s*\(([^()]*)\)\s*([.;]?)\s*$")
 
 
@@ -141,7 +142,7 @@ def clean_notes(notes: str) -> str:
 # same topic can appear under several headings and in the wrong page order.
 # ---------------------------------------------------------------------------
 
-_BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(\S.*)$")
+_BULLET = re.compile(r"^(\s*)(?:[-*+•]|\d+[.)])\s+(\S.*)$")
 _NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "neither", "nor"})
 _HEADING_FILLER = frozenset({"the", "a", "an", "of", "to", "and", "in", "for", "on"})
 _HEADING_NUMBER = re.compile(r"^[\s#*_]*\d+[.)]\s+")

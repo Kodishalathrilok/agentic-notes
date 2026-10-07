@@ -5,6 +5,8 @@ it, and a line the model wrote about its own sources ("(Passages do not detail
 ...)"). Grounding cannot remove either - it deletes claim lines, never
 headings, and a statement about absence has no evidence to be judged against.
 """
+import re
+
 import pytest
 
 import notes_tidy as nt
@@ -270,6 +272,45 @@ def test_tidy_removes_a_heading_emptied_by_the_merge():
 def test_tidy_without_merge_only_cleans():
     notes = "## B\n- late [9].\n\n## A\n- early [1].\n\n## Empty\n"
     assert nt.tidy(notes) == "## B\n- late [9].\n\n## A\n- early [1]."
+
+
+# ---------------------------------------------------------------------------
+# the app's own bullet mark
+# ---------------------------------------------------------------------------
+# The writer is told to start bullets with "• " (agent._format_instructions),
+# and these passes only knew "-", "*", "+" and numbers. On the first real
+# 55-page run the repeated-bullet check looked at 7 of 163 bullets.
+
+def test_the_bullet_the_writer_is_told_to_use_is_recognised():
+    import agent
+    told = re.search(r"Start each bullet with `(.+?)`", agent._format_instructions("bullet"))
+    assert told, "the bullet instruction changed shape; update this test with it"
+    assert nt._BULLET.match(told.group(1) + "a point about the topic [1]."), (
+        f"the writer is told to use {told.group(1)!r} and the merge pass cannot see it")
+    numbered = re.search(r"Start each point with `(.+?)`", agent._format_instructions("numbered"))
+    assert nt._BULLET.match(numbered.group(1) + " a point about the topic [1].")
+
+
+def test_a_repeated_dot_bullet_is_dropped_and_its_citation_kept():
+    notes = ("**RDF**\n• RDF stores facts as subject, predicate, object triples [1].\n\n"
+             "**Storage**\n• An index speeds up lookups by subject [5].\n"
+             "• RDF stores facts as subject, predicate, object triples [9].\n")
+    out = nt.merge_sections(notes)
+    assert out.count("RDF stores facts") == 1
+    assert "• RDF stores facts as subject, predicate, object triples [1][9]." in out
+
+
+def test_merged_sections_of_dot_bullets_read_as_one_list():
+    notes = ("**RDF**\n• First fact about it [1].\n\n"
+             "**RDF:**\n• Second fact about it [2].\n")
+    assert nt.merge_sections(notes) == (
+        "**RDF**\n• First fact about it [1].\n• Second fact about it [2].")
+
+
+def test_a_dot_bullet_about_the_passages_is_removed():
+    notes = ("**OWL**\n• OWL is an ontology language [3].\n"
+             "• The passages do not mention reasoning.\n")
+    assert nt.clean_notes(notes) == "**OWL**\n• OWL is an ontology language [3].\n"
 
 
 # ===========================================================================
