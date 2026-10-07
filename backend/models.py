@@ -92,11 +92,22 @@ NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com
 # Extra completion-token allowance for models that emit chain-of-thought into
 # `reasoning_content` before answering. See _nvidia_body for why this exists.
 NVIDIA_REASONING_HEADROOM = int(os.getenv("NVIDIA_REASONING_HEADROOM", "1024"))
-# "off" sends the Nemotron "detailed thinking off" system directive, which cuts
-# reasoning output substantially. Left on by default — reasoning is only ~11%
-# of generated text on notes-sized prompts, and it is presumably why you chose
-# a reasoning model.
-NVIDIA_THINKING = os.getenv("NVIDIA_THINKING", "on").strip().lower()
+# Whether the model reasons before it answers. OFF by default, on measurement
+# (Nemotron 3, one real window of a 55-page document, 1,100 + 1,024 tokens):
+# with thinking on, Ultra took 91 s and spoke its first word after 78 s; with
+# it off, 17-20 s and 1.7 s, citing more passages. The helper model, the
+# critique and the grounding check returned NOTHING readable with thinking on -
+# the whole budget went on reasoning - and valid answers with it off.
+# Set NVIDIA_THINKING=on to get the old behaviour back.
+#
+# The switch used to be a "detailed thinking off" system message. Nemotron 3
+# ignores it (measured: 9,054 chars of reasoning, 83 of answer), so "off" did
+# nothing at all. See _THINKING_OFF for what is sent now.
+NVIDIA_THINKING = os.getenv("NVIDIA_THINKING", "off").strip().lower()
+# Both were measured to work, on different calls; a model that accepts neither
+# rejects the request with a 400, and _nvidia_post then asks again without them.
+_THINKING_OFF = {"reasoning_effort": "none",
+                 "chat_template_kwargs": {"enable_thinking": False}}
 DEFAULT_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct").strip()
 
 
@@ -339,6 +350,11 @@ def _env_num(name, default, cast=float, minimum=0):
 NVIDIA_503_RETRIES = _env_num("NVIDIA_503_RETRIES", 1, int)
 NVIDIA_503_RETRY_DELAY = _env_num("NVIDIA_503_RETRY_DELAY", 1.0)
 NVIDIA_503_COOLDOWN_S = _env_num("NVIDIA_503_COOLDOWN_S", 60.0)
+# NVIDIA also answers 200 with an EMPTY body under load - measured on 5 of 11
+# calls to one model, each inside about a second. Asking the same model again
+# costs that second; failing over cost the wait on the next provider and, when
+# that was down too, the whole call.
+NVIDIA_EMPTY_RETRIES = _env_num("NVIDIA_EMPTY_RETRIES", 2, int)
 # Gemini gets its full retries the first time (above). Once they are spent and
 # it is STILL answering 429 / 503, the calls right behind that one would each
 # wait the same 2 + 4 + 8 seconds for the same answer. Measured: ten failed
@@ -809,15 +825,9 @@ def _nvidia_headers():
 
 
 def _nvidia_body(prompt, max_tokens, model, temperature, json_mode, stream):
-    messages = []
-    if NVIDIA_THINKING in ("off", "false", "0"):
-        # Llama-Nemotron reasoning models take this as a system directive.
-        messages.append({"role": "system", "content": "detailed thinking off"})
-    messages.append({"role": "user", "content": prompt})
-
     body = {
         "model": _nvidia_model(model),
-        "messages": messages,
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         # Reasoning models spend completion tokens on `reasoning_content`
         # BEFORE emitting any `content`, and max_tokens caps the two together.
@@ -829,19 +839,23 @@ def _nvidia_body(prompt, max_tokens, model, temperature, json_mode, stream):
         "max_tokens": max_tokens + NVIDIA_REASONING_HEADROOM,
         "stream": stream,
     }
+    if NVIDIA_THINKING in ("off", "false", "0"):
+        body.update(_THINKING_OFF)
     if json_mode:
         body["response_format"] = {"type": "json_object"}
     return body
 
 
 def _nvidia_post(body, stream=False):
-    """POST to NIM, retrying once without `response_format` if it's rejected.
+    """POST to NIM, asking again without an optional field the model rejects.
 
-    Support for structured output varies model by model across the catalog, and
-    an unsupported field comes back as a 400. Retrying without it beats either
-    hard-failing (which drops the request to the next provider and silently
-    stops using the model you chose) or omitting it always (which costs JSON
-    adherence on the models that do support it).
+    Support for the thinking switch and for structured output varies model by
+    model across the catalog, and an unsupported field comes back as a 400.
+    Dropping it and asking again beats either hard-failing (which sends the
+    request to the next provider and silently stops using the model you chose)
+    or never sending it (which costs the speed, or the JSON adherence, on the
+    models that do support it). The thinking fields go first: they are the
+    newer ones, and JSON mode is worth keeping if it was not the problem.
     """
     label = f"nvidia {body.get('model')}"
     kwargs = dict(
@@ -852,52 +866,78 @@ def _nvidia_post(body, stream=False):
     )
     fast = {"max_503_retries": NVIDIA_503_RETRIES}
     resp = _post_retrying(label, json=body, **fast, **kwargs)
-    if resp.status_code == 400 and "response_format" in body:
-        resp.close()
-        retry = {k: v for k, v in body.items() if k != "response_format"}
-        resp = _post_retrying(label, json=retry, **fast, **kwargs)
+    for optional in (tuple(_THINKING_OFF), ("response_format",)):
+        if resp.status_code == 400 and any(k in body for k in optional):
+            resp.close()
+            body = {k: v for k, v in body.items() if k not in optional}
+            resp = _post_retrying(label, json=body, **fast, **kwargs)
     if resp.status_code == 503:
         _start_cooldown(body.get("model"))
     resp.raise_for_status()
     return resp
 
 
+def _empty_again(body, attempt: int) -> bool:
+    """An empty 200 from NVIDIA: is there a retry left? Counts the attempt."""
+    if attempt >= NVIDIA_EMPTY_RETRIES:
+        return False
+    raise_if_cancelled()
+    _record_call("nvidia", body.get("model"), False)
+    print(f"[models] nvidia {body.get('model')} answered with an empty body; asking again "
+          f"(attempt {attempt + 1}/{NVIDIA_EMPTY_RETRIES}).")
+    return True
+
+
 def _call_nvidia(prompt, max_tokens, model, temperature, json_mode, strict=False):
-    resp = _nvidia_post(_nvidia_body(prompt, max_tokens, model, temperature, json_mode, False))
-    data = resp.json()
-    choice = (data.get("choices") or [{}])[0]
-    text = ((choice.get("message") or {}).get("content") or "").strip()
+    body = _nvidia_body(prompt, max_tokens, model, temperature, json_mode, False)
+    attempt = 0
+    while True:
+        data = _nvidia_post(body).json()
+        choice = (data.get("choices") or [{}])[0]
+        text = ((choice.get("message") or {}).get("content") or "").strip()
+        # A finish reason means the model did answer (possibly with nothing,
+        # at the token cap): asking again would get the same thing.
+        if text or choice.get("finish_reason") or not _empty_again(body, attempt):
+            break
+        attempt += 1
     if strict:
         _strict_finish("nvidia", choice.get("finish_reason"), text)
     return text
 
 
 def _stream_nvidia(prompt, max_tokens, model, temperature):
-    with _nvidia_post(
-        _nvidia_body(prompt, max_tokens, model, temperature, False, True), stream=True
-    ) as resp:
-        finish = None
-        for raw in resp.iter_lines():
-            if not raw:
-                continue
-            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload or payload == "[DONE]":
-                continue
-            try:
-                data = json.loads(payload)
-            except Exception:  # noqa: BLE001
-                continue
-            try:
-                choice = data["choices"][0]
-                delta = (choice.get("delta") or {}).get("content")
-                finish = choice.get("finish_reason") or finish
-            except (KeyError, IndexError, AttributeError):
-                delta = None
-            if delta:
-                yield delta
+    body = _nvidia_body(prompt, max_tokens, model, temperature, False, True)
+    attempt = 0
+    while True:
+        finish, sent = None, False
+        with _nvidia_post(body, stream=True) as resp:
+            for raw in resp.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(payload)
+                except Exception:  # noqa: BLE001
+                    continue
+                try:
+                    choice = data["choices"][0]
+                    delta = (choice.get("delta") or {}).get("content")
+                    finish = choice.get("finish_reason") or finish
+                except (KeyError, IndexError, AttributeError):
+                    delta = None
+                if delta:
+                    sent = True
+                    yield delta
+        # Only a reply with no text AND no finish reason is asked for again:
+        # text has already gone to the reader, and a finish reason is an answer.
+        if sent or finish or not _empty_again(body, attempt):
+            break
+        attempt += 1
     _check_finish("nvidia", finish)
 
 
