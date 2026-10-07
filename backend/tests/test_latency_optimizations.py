@@ -588,6 +588,84 @@ def test_long_document_timing_log_still_adds_up(fake, timing_log, monkeypatch):
     assert sum(r["model_calls"] for r in rows if r["stage"] != "total") == len(fake.calls)
 
 
+# ---------------------------------------------------------------------------
+# 7. Long documents: critique alongside the claim check, and no whole rewrite
+# ---------------------------------------------------------------------------
+# Measured on a 55-page document: the critique took 36-62 s and the claim
+# check 47 s, one after the other, though neither reads the other's result.
+# And one critique reply that asked for a revision cost a 267-second rewrite
+# of all 3,000 words, which came back 268 words and 15 citations shorter.
+
+LOW_CRITIQUE = ('{"score":3,"needs_revision":true,"unsupported_claims":[],'
+                '"missing_topics":[],"issues":["weak"],"strengths":[]}')
+
+
+def _statuses(events):
+    return [e["content"] for e in events if e["type"] == "status"]
+
+
+def test_long_document_claims_are_checked_while_the_critique_runs(fake):
+    gate = fake.gate("critique")
+    events, _text, thread = _pump(_long_gen())
+    assert gate.entered.wait(5), "the critic was never called"
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not any(
+            "Checking every claim" in s for s in _statuses(events)):
+        time.sleep(0.02)
+    started = any("Checking every claim" in s for s in _statuses(events))
+    gate.release.set()
+    thread.join(10)
+    assert started, "the claim check waited for the critique to finish"
+    types = [e["type"] for e in events]
+    assert types[-1] == "done" and types.count("critique_done") == 1
+
+
+def _critic_says(fake, monkeypatch, reply):
+    real = fake.dispatch
+
+    def dispatch(prov, prompt, max_tokens, model, temperature, json_mode, **kw):
+        if "CRITIQUE agent" in prompt:
+            fake.calls.append("critique")
+            return reply
+        return real(prov, prompt, max_tokens, model, temperature, json_mode, **kw)
+
+    monkeypatch.setattr(models, "_dispatch", dispatch)
+
+
+def test_long_document_is_never_rewritten_whole(fake, monkeypatch):
+    _critic_says(fake, monkeypatch, LOW_CRITIQUE)
+    events = list(_long_gen())
+    types = [e["type"] for e in events]
+    assert types[-1] == "done"
+    assert "revise_start" not in types and fake.calls.count("revise") == 0
+    verdict = next(e for e in events if e["type"] == "critique_done")
+    assert verdict["data"]["score"] == 3 and verdict["data"]["needs_revision"] is True, (
+        "the critic's verdict is still reported as it was given")
+    assert "revising" not in verdict["content"].lower(), "it says a rewrite is under way"
+    assert any(e["step"] == "revise" and "no revision" in e["content"].lower()
+               for e in events if e["type"] == "status"), "the revise step is left hanging"
+
+
+def test_short_document_is_still_revised_on_a_low_score(fake, monkeypatch):
+    _critic_says(fake, monkeypatch, LOW_CRITIQUE)
+    types = [e["type"] for e in _run()]
+    assert "revise_start" in types and types[-1] == "done"
+
+
+def test_the_critic_is_asked_for_a_reply_that_fits_its_budget(monkeypatch):
+    """On a real 23,000-character draft the reply listed so many items that it
+    was cut at the token cap, and half a JSON object is no verdict at all."""
+    seen = {}
+
+    def model(prompt, **kw):
+        seen["prompt"] = prompt
+        return '{"score":9,"needs_revision":false}'
+
+    monkeypatch.setattr(agent, "call_model", model)
+    agent.critique_notes("A claim [1].", {"checklist": []}, "exam", source="[1] some text")
+    assert "at most 5" in seen["prompt"]
+
+
 def test_cancelled_run_logs_a_cancelled_total(fake, timing_log):
     gate = fake.gate("plan")
     cancel = threading.Event()

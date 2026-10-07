@@ -101,6 +101,19 @@ def _carry_scopes(fn):
     return run
 
 
+def _alongside(fn, name):
+    """Start fn() on a thread of its own and return its Future.
+
+    For a step that nothing waits on yet (a long document's plan, its
+    critique). The caller carries the cancel flag and call accounting into fn
+    itself, and joins with .result() where the answer is first needed.
+    """
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+    future = pool.submit(fn)
+    pool.shutdown(wait=False)  # no more work; the thread ends with its one job
+    return future
+
+
 def _run_bounded(fn, items, limit, name):
     """Return [(result, exc)] for fn(item) over `items`, in INPUT order.
 
@@ -1538,6 +1551,9 @@ Respond with ONLY a JSON object of this exact shape:
   "strengths": ["what was done well", "..."]
 }}
 
+Keep the reply short enough to finish: at most 5 items in each list, the most
+important first, one line each.
+
 Scoring: deduct heavily for any unsupported_claims (faithfulness matters most).
 A score of {REVISE_THRESHOLD} or above with NO unsupported claims means no
 revision is needed.
@@ -2779,9 +2795,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                 return made
 
             yield _emit("status", "plan", "Planning outline...")
-            plan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plan")
-            plan_future = plan_pool.submit(_plan_alongside)
-            plan_pool.shutdown(wait=False)  # no more work; the thread ends with its one job
+            plan_future = _alongside(_plan_alongside, "plan")
             plan = None
             active_fmt = fmt or "bullet"
 
@@ -3159,34 +3173,58 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             uns = len(c.get("unsupported_claims", []))
             if c.get("needs_revision"):
                 extra = f", {uns} unsupported claim(s)" if uns else ""
+                if sectioned:
+                    return f"Quality {sc}/10{extra} — every claim checked, not rewritten"
                 return f"Quality {sc}/10{extra} — revising ✍"
             return f"Quality {sc}/10 — faithful, no revision needed ✓"
 
-        def _judge(round_no):
-            """Critique the notes as they stand. A check that cannot run leaves
-            them "not judged"; it must never end a run whose notes are already
-            written. Measured: a provider outage during the re-check threw away
-            17 minutes of finished work."""
-            timings.begin("critique", round=round_no)
+        def _critic(draft):
+            """(verdict, timing outcome) for `draft`. A check that cannot run
+            leaves the notes "not judged"; it must never end a run whose notes
+            are already written. Measured: a provider outage during the
+            re-check threw away 17 minutes of finished work."""
             try:
-                verdict = critique_notes(
-                    notes, plan, mode, source=context, model=model, doc_sample=doc_sample,
+                return critique_notes(
+                    draft, plan, mode, source=context, model=model, doc_sample=doc_sample,
                     chunk_map=chunk_map,
-                )
+                ), "ok"
             except Exception as exc:  # noqa: BLE001 - cancellation is a BaseException
                 # Provider text can carry a URL; it goes to the log, not the user.
                 log_unexpected_error("critique", exc)
-                timings.end(outcome="failed_open")
                 return _unjudged_critique(
-                    "The quality check could not run, so this draft was not scored.")
-            timings.end()
+                    "The quality check could not run, so this draft was not scored."), "failed_open"
+
+        def _judge(round_no):
+            timings.begin("critique", round=round_no)
+            verdict, outcome = _critic(notes)
+            timings.end(outcome=outcome)
             return verdict
 
         # 5-6. Critique (grounded against the writer's CONTEXT for faithfulness,
         # plus a breadth sample for coverage)
         yield _emit("status", "critique", "Checking faithfulness & coverage...")
-        critique = _judge(0)
-        yield _emit("critique_done", "critique", _crit_msg(critique), critique)
+        judging = None
+        if sectioned:
+            # Long notes are never rewritten whole. A rewrite of 3,000 words was
+            # measured at 267 s and came back 268 words and 15 citations
+            # shorter; what it was meant to fix, the claim check below fixes one
+            # line at a time. So on this path the critique changes nothing that
+            # follows it, and it runs on its own thread while the claims are
+            # checked (36-62 s and 47 s, measured one after the other).
+            crit_stage = timings.background("critique", round=0)
+            draft = notes
+
+            def _judge_alongside():
+                with cancel_scope(cancel), call_stats_scope(crit_stage):
+                    verdict, outcome = _critic(draft)
+                crit_stage.end(outcome=outcome)
+                return verdict
+
+            judging = _alongside(_judge_alongside, "critique")
+            critique = {"needs_revision": False}  # until `judging` is joined below
+        else:
+            critique = _judge(0)
+            yield _emit("critique_done", "critique", _crit_msg(critique), critique)
 
         best_notes = notes
         best_critique = critique
@@ -3285,7 +3323,7 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
             if (critique.get("score") or 0) > (best_critique.get("score") or 0):
                 best_notes, best_critique = notes, critique
 
-        if rounds == 0:
+        if rounds == 0 and not judging:
             yield _emit("status", "revise", "No revision needed ✓")
 
         # A later revision can score lower — fall back to the best version seen.
@@ -3329,6 +3367,14 @@ def _run_agent_events(text, mode, tone, length, fmt, model=None, instructions=""
                     f"{gstats['removed']} unsupported claim(s) removed.",
                 )
                 yield _emit("notes_revised", "revise", notes)
+
+        if judging:
+            critique = judging.result()
+            yield _emit("critique_done", "critique", _crit_msg(critique), critique)
+            yield _emit("status", "revise", "No revision needed ✓" if not critique.get(
+                "needs_revision") else
+                "No revision pass: these notes are too long for a safe full revision, "
+                "so every claim was checked against its source instead ✓")
 
         # Deterministic tidy, after every step that edits the notes: a revise
         # round can bring back a line about the passages (or, on a long
