@@ -29,6 +29,7 @@ import useHistory from './hooks/useHistory'
 import { supabase, supabaseEnabled } from './lib/supabase'
 import { apiFetch } from './lib/api'
 import { recordRun, estimateTotalSeconds, formatClock, formatRemaining } from './lib/timings'
+import { resolveModel } from './lib/models'
 import {
   INPUT_KEY,
   SETTINGS_KEY,
@@ -109,6 +110,7 @@ export default function App() {
   const [pageSpans, setPageSpans] = useState([])
 
   const [models, setModels] = useState([])
+  const [defaultModel, setDefaultModel] = useState('')
   // The server's MAX_TEXT_CHARS. Until /api/health answers, assume the
   // documented default; InputPanel holds the source to whatever lands here.
   const [maxChars, setMaxChars] = useState(300000)
@@ -284,10 +286,19 @@ export default function App() {
       .then((r) => r.json())
       .then((d) => {
         setModels(d.models || [])
-        setSettings((s) => (s.model ? s : { ...s, model: d.default || '' }))
+        setDefaultModel(d.default || '')
       })
       .catch(() => setModels([]))
   }, [])
+
+  // Never hold a model the server does not offer. This runs whenever the model
+  // or the list changes, not just when the list first arrives: a signed-in
+  // user's saved settings are loaded AFTER it (the session resolves later), and
+  // a check made only at load never saw the id they brought back.
+  useEffect(() => {
+    const next = resolveModel(model, models, defaultModel)
+    if (next !== model) setSettings((s) => ({ ...s, model: next }))
+  }, [model, models, defaultModel])
 
   // One timer at a time: a second toast used to be cut short by the first
   // one's pending timeout.
