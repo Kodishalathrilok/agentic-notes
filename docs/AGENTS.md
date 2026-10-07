@@ -22,12 +22,13 @@ Source text
    |
    v
 1. Planner  -->  outline + checklist + difficulty + format
-   |
+   |              over 12,000 chars: the scan and the plan run on the helper model
+   |              WHILE the windows are written - nothing waits for them
    v
 2. Writer  -->  first draft of the notes (streamed live to the screen)
    |              up to 12,000 chars: one pass over a length-scaled retrieval
    |              over 12,000 chars:  coverage windows that partition the source,
-   |                                  written two at a time, streamed in order
+   |                                  written four at a time, streamed in order
    v
 3. Critique  -->  score /10 + list of unsupported claims + missing topics
    |
@@ -35,6 +36,8 @@ Source text
    |
    +-- needs work? --> corrective re-retrieval --> 4. Revise --> back to Critique
    |                   (max 2 rounds; a revision is kept only if it scores strictly higher)
+   |                   over 12,000 chars: no rewrite. The critique runs alongside step 6,
+   |                   which fixes unsupported claims one line at a time
    v
 5. Citation validation  -->  drop any [n] that doesn't resolve (deterministic, no model call)
    |
@@ -147,7 +150,7 @@ Critically, **the outline size scales with document size.** A short document get
 
 - The digest adds one helper-model call per 25,000 characters (up to 12 for a maximum-size upload), which adds some seconds of latency and spends helper-quota tokens before writing even starts — the price of genuine full coverage. Segments are scanned up to 3 at a time (`DIGEST_CONCURRENCY`), so the wait is closer to a third of what the call count suggests.
 - The inventory's quality depends on the helper model's summarization: it reads everything, but if it describes a topic too vaguely, the planner may group it away rather than giving it a proper section. The inventory is also cut to 8,000 characters in the planner prompt.
-- On the long-document path the outline does not structure the notes. Coverage windows are defined by position in the document, each window writes its own topical headings, and each is handed only the first 6 checklist items (the same 6 for every window, with the instruction to cover one only where its own passages discuss it). The plan's main downstream effect there is on the critique's coverage checklist.
+- On the long-document path the outline does not structure the notes. Coverage windows are defined by position in the document and each writes its own topical headings from its own passages; a window is not shown the plan at all. (It used to get the first 6 checklist items, the same 6 for every window. Measured on a 55-page run: three windows wrote those points up instead of their own pages, and pages 46–51 got no notes.) So on that path the plan is made on the helper model while the windows are written, its only reader is the critique's coverage checklist, and if the planner call fails the critique gets a default checklist instead of the run ending.
 - The plan is made once and never revisited. If the Critique step later finds a big gap, the fix happens through targeted revision, not by re-running the planner with new information.
 
 ---
@@ -166,8 +169,8 @@ Critically, **the outline size scales with document size.** A short document get
 
 - `_document_windows()` splits the chunks into contiguous, document-ordered windows. Every chunk is in exactly one window, and every window is written, so covering the document is arithmetic rather than a retrieval outcome.
 - The number of windows is bounded (`COVERAGE_MAX_WINDOWS` = 12 by default), so a bigger document gets *bigger* windows rather than more calls. Each window targets the larger of 6,000 characters (`COVERAGE_WINDOW_CHARS`) and one-twelfth of the document, and is hard-capped so its own passages plus supplements fit the writer's 40,000-character context (`WRITER_CONTEXT_CHARS`). If that cap is hit, more windows are created — nothing is sliced off the prompt.
-- `_window_context()` adds up to 3 retrieved passages from elsewhere in the document (`COVERAGE_SUPPLEMENT_K`) — a definition introduced earlier, say. Supplements never displace the window's own passages, and if retrieval fails the window still has its own chunks.
-- Windows are written concurrently (`SECTION_CONCURRENCY` = 2) but streamed to the screen strictly in order, with a status like *"Writing section 3/8: Pages 12–17…"*. The writer is told to give each part its own topical headings and never to mention page numbers or narrate its process. It is also told which of its passages are background from other parts (cite them, no heading of their own), which headings earlier windows already wrote (the most recent that fit in 180 characters, from windows that had finished when it started), to leave out silently whatever its passages do not cover, and to stop when the material is covered rather than treat the length as a minimum.
+- `_window_context()` adds up to 3 retrieved passages from elsewhere in the document (`COVERAGE_SUPPLEMENT_K`) — a definition introduced earlier, say. Supplements never displace the window's own passages, and if retrieval fails the window still has its own chunks. A window's length of passages either side of it is not eligible: that is the neighbouring windows' own material, and because consecutive passages overlap it always looks related (measured: for 9 of 12 windows the one supplement was the previous window's last passage, which the window then wrote up a second time).
+- Windows are written concurrently (`SECTION_CONCURRENCY` = 4) but streamed to the screen strictly in order, with a status like *"Writing section 3/8: Pages 12–17…"*. The writer is told to give each part its own topical headings and never to mention page numbers or narrate its process. It is also told which of its passages are background from other parts (cite them, no heading of their own), which headings earlier windows already wrote (the most recent that fit in 180 characters, from windows that had finished when it started), to leave out silently whatever its passages do not cover, and to stop when the material is covered rather than treat the length as a minimum.
 - A window that produces nothing is retried once. A window that is **cut off** — the provider reports the token cap after output, or the stream ends on a visibly unfinished last line (`notes_tidy.trailing_fragment()`) — is discarded: a `notes_reset` event replaces what the client has shown, and the window's own passages are split in two and written as two halves (one level only, so three calls at worst). A half cut off again keeps its whole lines, loses the fragment, and is recorded as failed with its own pages. A window whose connection drops after streaming some text is not written again; its whole lines stay and a recognisably unfinished last line is dropped.
 - After the last window, `notes_tidy.tidy()` merges the draft with no model call: sections whose headings match (ignoring case, markup, numbering and word order) become one, a bullet that repeats an earlier one almost word for word is dropped and its citations move to the one kept, sections are ordered by the first passage they cite, and empty headings and lines about "the passages" are removed. It runs again after grounding. The single-pass path gets the clean-up only.
 
@@ -186,7 +189,7 @@ Either way, both modes get the same core rules: follow the plan, hit the target 
 **Limitations:**
 
 - Each window is written without seeing the others' text. It is given a short list of headings from windows that had already finished, and the merge pass removes a bullet repeated almost word for word, but the same point reworded in two windows is kept. Windows that chose different heading levels are nested, not merged.
-- The length target is per window on the long path (e.g. 220–320 words per window for "medium"), so total length grows with the number of windows rather than matching the single-pass targets. Long notes that end up over 30,000 characters then skip the revise loop entirely (see Revise).
+- The length target is per window on the long path (e.g. 220–320 words per window for "medium"), so total length grows with the number of windows rather than matching the single-pass targets. Notes written this way are never rewritten whole (see Revise).
 - Citations are written by the model; checking them is the job of the two steps after the revise loop (citation validation and the grounding check).
 
 ---
@@ -207,11 +210,15 @@ The notes are passed as an even sample across their whole length (up to 20,000 c
 
 **On long sources the critique sees what the notes cite.** When the writer's context is over 12,000 characters and the notes cite passages, the critique is no longer shown the head of that context (on the long-document path that hid every later page, so true claims about them were flagged as unsupported). It is shown the whole passages cited in the notes excerpt it reads, never cut mid-passage, up to 40,000 characters (`CRITIQUE_CONTEXT_CHARS`), and the prompt names any cited ids left out for budget. Code then enforces what the prompt asks: a flag on a claim whose cited passages were all withheld is dropped, and a flag on an *uncited* claim is not acted on here but listed as `deferred_to_grounding`, because its evidence could be anywhere in the document and the grounding step checks it against passages retrieved for it. The result also carries `evidence_shown` / `evidence_cited`, so a partial view is visible instead of silent. If the notes cite nothing, the first 12,000 characters are still what it sees.
 
-**When revision is triggered:** the model's own `needs_revision` flag, a score below 8, or *any* unsupported claim. Missing topics alone do **not** force a revision — an LLM critic almost always lists something — they feed corrective re-retrieval when a revision happens anyway.
+**When revision is triggered (short documents):** the model's own `needs_revision` flag, a score below 8, or *any* unsupported claim. Missing topics alone do **not** force a revision — an LLM critic almost always lists something — they feed corrective re-retrieval when a revision happens anyway.
+
+**On long documents the critique does not trigger a rewrite.** It runs on its own thread while the grounding check works through the claims, and its verdict is reported when both are done. A whole rewrite of 3,000 words was measured at 267 seconds and came back 268 words and 15 citations shorter; the unsupported claims it was meant to fix are handled line by line by grounding.
+
+**A critique that cannot be read, or cannot run, is "not judged".** The result has no score and no order to revise, and the run carries on to citation validation and grounding. It used to default to score 5 / `needs_revision: true`, which made a reply that merely failed to parse look like a bad draft: on a real run one unparseable reply triggered that 267-second rewrite, and a provider outage during the re-check then ended the run with finished notes on screen. The critic is also asked for at most five items per list, because on a long draft its JSON was being cut at the token cap.
 
 **Strengths:**
 
-- The fallback behavior is deliberately paranoid: if the critique's JSON can't be parsed for any reason, the code doesn't assume the notes are fine — it defaults to `needs_revision: true`. Silence is treated as "not verified," never as "verified."
+- A missing verdict is reported as missing, never as a pass and never as a fail.
 - Judging faithfulness against the writer's own context means a claim is only flagged when the evidence the writer had doesn't support it.
 - Separating "faithfulness" from "coverage" from "quality" gives the revision agent a precise target instead of a vague "make it better."
 
@@ -391,12 +398,14 @@ The app runs on **free-tier API keys**, and free tiers have **daily token limits
 
 The fix: split work across **two separate quotas**.
 
-- **The strong model the user picked** (e.g., a Nemotron on NVIDIA) handles the steps where output quality is decided: **Plan, Write, Critique, Revise.**
+- **The strong model the user picked** (e.g., a Nemotron on NVIDIA) handles the steps where output quality is decided: **Plan, Write, Critique, Revise.** (On long documents the plan moves to the helper model: it runs alongside the windows and only the critique reads it.)
 - **A cheap helper model** (a small Nemotron via `HELPER_NVIDIA_MODEL`, or Gemini Flash-Lite via `HELPER_GEMINI_MODEL` if the user picked a Gemini model) — which has its **own, separate** daily token budget — handles the mechanical steps inside `run_agent()`: **Gatekeeper, Digest scan, Grounding check, Title**, and the in-pipeline Quiz, Quiz verifier and Flashcards when those are enabled.
 
 Because free-tier daily limits are tracked *per model*, this isn't just a cost optimization — it substantially raises how many documents the app can process per day before hitting a wall. (The NVIDIA split only kicks in once `HELPER_NVIDIA_MODEL` names a small catalog id; unset, the helper steps fall back to the main model. An Ollama model is its own helper.)
 
 Everything *outside* `run_agent()` uses the model the UI sends — the user's pick. That includes the on-demand quiz, its answer-key check and flashcards (`/api/quiz`, `/api/flashcards`), chat, rewrite and inline edit, so today those draw on the main model's quota, not the helper's.
+
+**Thinking is off by default (`NVIDIA_THINKING=off`).** Measured on Nemotron 3 with single calls on one real window: with thinking on, Ultra took 91 s and wrote its first word after 78 s; with it off, 17–20 s and 1.7 s, citing more passages. The helper model, the critique and the grounding check returned nothing readable with thinking on, because the whole token budget went on reasoning. The old switch, a "detailed thinking off" system message, was ignored by these models; the request now carries `reasoning_effort: "none"` and `chat_template_kwargs.enable_thinking: false`, and a model that rejects them is asked again without. An empty 200 from NVIDIA (6 of 13 calls to Ultra, each inside a second) is asked for again up to twice before failing over, and Gemini is skipped for 60 s once it has used up its retries on a 429 / 503.
 
 **Strengths:** Free, effective, and doesn't compromise quality where it matters — the tasks on the helper model genuinely don't need a large model to do well.
 
@@ -408,7 +417,7 @@ Everything *outside* `run_agent()` uses the model the UI sends — the user's pi
 
 **What it's genuinely good at:**
 
-- Never silently failing — every agent has a sensible fallback (permissive gatekeeper, safe default plan, "assume revision needed" critique, fail-open grounding), and a stream that is cut off is recorded as incomplete rather than passed off as a finished answer. That is one bug class — a partial view or partial output treated as complete — and the same rule now covers the judges and the editors: the critique, reviser and grounding check are shown the evidence for what they judge (cited or retrieved passages, not the head of a long context) and refuse to act on views known to be partial, and rewrite and inline edit never return partial notes.
+- Never silently failing — every agent has a sensible fallback (permissive gatekeeper, safe default plan, a critique that reports "not judged" rather than guessing, fail-open grounding), and a stream that is cut off is recorded as incomplete rather than passed off as a finished answer. That is one bug class — a partial view or partial output treated as complete — and the same rule now covers the judges and the editors: the critique, reviser and grounding check are shown the evidence for what they judge (cited or retrieved passages, not the head of a long context) and refuse to act on views known to be partial, and rewrite and inline edit never return partial notes.
 - Actually checking its own work — the critique/revise loop, then deterministic citation validation, then a per-claim grounding check that removes or tightens lines their evidence doesn't support.
 - Covering entire long documents — coverage windows partition the source so every passage is written about, and a durable coverage record plus an "Incomplete coverage" banner says so when a part could not be generated.
 - Being honest about faithfulness — the scoring is deliberately strict about penalizing fabricated claims over almost everything else.
@@ -417,7 +426,7 @@ Everything *outside* `run_agent()` uses the model the UI sends — the user's pi
 **What's still genuinely unverified or missing today:**
 
 - **Grounding is an LLM judgment, not a proof.** It runs on the smaller helper model, works line by line (a paragraph is one line), fails open (unjudged claims ship as written, and the user isn't told how many), and on large sources judges an uncited claim against the passages retrieved for it, so a retrieval miss can still remove a true claim.
-- **Checks on long documents are coarser than the writing.** The critique and reviser see cited passages up to 40,000 characters, and anything cited beyond that is named and skipped, not judged; notes over 30,000 characters skip revision entirely. A critic's raw `needs_revision` flag or score can still trigger a wasted revision round.
+- **Checks on long documents are coarser than the writing.** The critique and reviser see cited passages up to 40,000 characters, and anything cited beyond that is named and skipped, not judged. Notes on a long document are never revised as a whole: unsupported claims are removed or tightened one line at a time by grounding, and a topic the critic says is missing is not added. On short documents a critic's raw `needs_revision` flag or score can still trigger a wasted revision round.
 - **No cross-encoder reranking** after the hybrid search — the retrieval quality is capped at what BM25 + embeddings + RRF can do; the code has a clean seam (`_process_candidates()`) for this to be added later, but it isn't built yet.
 - **The quiz answer-key check is evidence-gated, not proven.** A correction needs a quote found in the notes, but that shows the quote exists, not that it supports the new letter; the key is checked against the notes, not the source; and quizzes from history show no status. There's also no distractor-quality check and no flashcard verification.
 - **Daily free-tier quotas are a real ceiling**, not just a hypothetical — this has already caused a real outage in production, and the two-model routing fix reduces but does not eliminate the risk.

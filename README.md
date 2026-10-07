@@ -36,7 +36,7 @@ Generating notes needs an account, but shared notes open for anyone — no sign-
 
 ### In more detail
 
-- **The pipeline checks its own work.** A critique agent judges the draft against the passages the writer was given, flags unsupported claims and missing topics, triggers corrective re-retrieval for the missing topics, and revises (up to 2 rounds) — a revision replaces the kept version only if it scores strictly higher.
+- **The pipeline checks its own work.** A critique agent judges the draft against the passages the writer was given and flags unsupported claims and missing topics. On short documents it triggers corrective re-retrieval and a revision (up to 2 rounds) — a revision replaces the kept version only if it scores strictly higher. Long documents are not rewritten whole: the critique runs alongside the per-claim grounding check, which removes or tightens unsupported lines one at a time. A critique that cannot be read or cannot run is reported as "not judged" and never costs the notes.
 - **Claims are checked against their sources.** Notes cite retrieved passages inline (`[3]`). A deterministic check drops any citation that doesn't point at a passage the model was shown (or, for PDFs, at a passage with a valid page), and a per-claim grounding pass then asks a helper model whether each claim line is actually supported by the passage it cites. A line is removed only when the verdict quotes that claim's own evidence and the quote is really there; otherwise it is kept and counted as unverified. An over-reaching line is tightened only if the rewrite passes a second check, may keep only citations it already had, and citations are validated again afterwards.
 - **Long documents are covered end to end.** Sources over 12,000 characters are split into coverage windows that partition the document — every chunk belongs to exactly one window and every window is written — and sources over 60,000 characters also get a full-document digest scan before planning. The windows are then merged without a model call: one heading per topic, a bullet that repeats an earlier one dropped, sections in page order, and no empty heading or line about "the passages". If a window fails, the notes say so with an "Incomplete coverage" banner naming the pages nothing in the notes cites, instead of passing as complete.
 - **The engineering around it:** 600+ backend tests plus frontend unit tests, CI that deploys only when the tests and the build pass, SSRF-guarded URL fetching, share links that can't be used to list other users' notes, request size limits, and per-user rate limiting. The claim-level eval can compare a run against a stored baseline (`--gate`), but no baseline has been recorded with model-graded numbers yet, so today that comparison has nothing to compare against.
@@ -204,7 +204,7 @@ Every number in this table comes from a run that needs **no model and no API key
 
 How to read it:
 
-- **590 and 656 are each commit's own test suite**, not today's tests run against the old code. The suite grew by 66 tests (43 for the eval harness, 23 for the grounding fixes) and every one passes. The 644 on Windows is the same suite with 7 more tests added and the PostgreSQL file skipped. The long-document quality pass after it added 86 (730 on Windows).
+- **590 and 656 are each commit's own test suite**, not today's tests run against the old code. The suite grew by 66 tests (43 for the eval harness, 23 for the grounding fixes) and every one passes. The 644 on Windows is the same suite with 7 more tests added and the PostgreSQL file skipped. The long-document quality and speed passes after it added 162 (806 on Windows).
 - **The retrieval rows do not mean retrieval got worse.** Retrieval code is unchanged. The old 1.000 came from a 3-chunk document on which ranking could not fail: every query returned every chunk. On the new dataset BM25 finds no relevant chunk in the top 10 for 4 of the 12 paraphrased queries (recall 0.625 in that category, 1.000 in the other five).
 - **Hybrid retrieval is not measured here.** With no embeddings key, the semantic and hybrid columns of the benchmark fall back to BM25, so all three print the same numbers.
 
@@ -215,12 +215,33 @@ Two caveats about the eval that hold even after its first full run:
 
 An older run of the short-fixture eval scored faithfulness 9.5, with the writer and the judge being the same model. It is recorded in `evals/baselines/329a031.json` as "self-judged by the writer, not comparable" and is not quoted as a result.
 
+### Generation time on one long document, measured
+
+One 55-page PDF (59,127 characters), Exam / Academic / Medium / Bullets, Nemotron 3 Ultra with Nemotron 3 Super as helper, on free-tier keys. One run each; the seconds are the app's own `[timing]` log. Not model-graded.
+
+| | Before | After |
+| --- | --- | --- |
+| First words on screen | 117 s | 6.7 s |
+| Whole run | 1,064 s, **ended in an error** | 172 s, complete |
+| Planning | 78.5 s, before any writing | 16.4 s, alongside the writing |
+| Writing 12 windows | 625 s, 4 parts lost | 88 s, none lost |
+| Critique | 62 s, reply unreadable | 24 s, score 9, alongside the claim check |
+| Whole rewrite | 267 s (triggered by the unreadable reply) | not run on long documents |
+| Claim check (grounding) | never reached | 77 s, 236 lines checked: 1 claim removed, 2 tightened. It also deleted 5 headings as if they were claims, which is fixed since and not re-measured |
+| Pages cited in the final notes | not available (no final notes) | 52 of 55 |
+
+What made the difference, by measurement rather than by guess: the model was spending most of every call reasoning before it answered (a window took 91 s with thinking on and 17–20 s with it off, and the critique and claim check returned nothing readable with it on), the planner blocked the start although long-document windows never read the plan, and one unreadable critique reply triggered a full rewrite.
+
+What this does not show: it is one document and one run per column, on a provider whose latency varies from minute to minute (6 of 13 probe calls to the main model came back empty). It says nothing about other models, or about several users generating at once.
+
 ## Known limitations
 
 - **No model-graded result exists yet.** The claim-level eval is built and unit-tested; it has not had a full run.
 - **Edited text is not re-grounded.** A rewrite or inline edit cannot add a citation the notes did not have, and is marked "not re-verified", but the edited claim itself is not checked against the source.
 - **Grounding fails open.** A claim the judge could not rule on, or ruled on without quoting evidence, is kept as written.
-- **The long-document merge is not measured on a real run.** It is tested on faked model output only. It removes a bullet that repeats an earlier one almost word for word; the same point reworded is kept. Windows that used different heading levels are nested rather than merged. A lone unpunctuated line left by a dropped connection cannot be told from a whole one and stays.
+- **Long-document notes still repeat themselves a little, and can skip a page.** On the one real 55-page run checked after these changes: no heading appeared twice and sections were in page order, but 3 pairs of bullets said the same thing in different words, and 2 pages (8 and 47) were cited nowhere although their windows were written. All three repeats came from the one "related" passage a window is still given from far away; `COVERAGE_SUPPLEMENT_K=0` turns that off. The merge only removes a bullet that repeats another almost word for word. Pages nothing cites are recorded (`uncited_pages`) but raise no banner. Windows that used different heading levels are nested rather than merged, and a lone unpunctuated line left by a dropped connection stays.
+- **Long documents are not revised as a whole.** Unsupported claims are removed or tightened one line at a time by the grounding check; a topic the critic says is missing is not added.
+- **Thinking is off by default** (`NVIDIA_THINKING=off`). That was measured to be 4–5 times faster on Nemotron 3 and to make the critique and grounding check work at all, but the effect of reasoning on the quality of the notes themselves was judged only by reading two windows, not by an eval.
 - **Rate limits live in process memory** (`backend/auth.py`), so a restart resets the daily caps. On a host that sleeps and restarts, "daily" is not really daily.
 - **One server process.** A single uvicorn worker, and at most 4 generations at once; the next request gets a 503.
 - **Free-tier model quotas.** Providers answer bursts with 429 and 503. The router retries and fails over, but a run can still be slow or fail.
